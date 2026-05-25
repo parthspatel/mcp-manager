@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TUI client tooling research — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">nimble-raven-toolkit</a> / research · TUI</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Research — Rust TUI tooling for the MCP Manager TUI</h1>
+
+<p class="lede">
+A TUI like <code>lazydocker</code> or <code>k9s</code> is the natural "between" surface — running in a terminal, but interactive and continuously redrawn. The Rust ecosystem effectively has two viable framework choices (<code>ratatui</code> and <code>cursive</code>), one component-model add-on (<code>tui-realm</code>), and three terminal backends (<code>crossterm</code>, <code>termion</code>, <code>termwiz</code>).
+</p>
+
+<nav class="toc">
+<h4>Contents</h4>
+<ul>
+<li><a href="#frameworks">Framework choices</a></li>
+<li><a href="#backends">Terminal backends</a></li>
+<li><a href="#data-flow">Data-flow patterns</a></li>
+<li><a href="#state">State management</a></li>
+<li><a href="#mouse">Mouse &amp; input</a></li>
+<li><a href="#prior-art">Production apps</a></li>
+</ul>
+</nav>
+
+<section class="section" id="frameworks">
+<h2>Framework choices</h2>
+
+<p><code>ratatui</code> is the active fork of <code>tui-rs</code> after the original was archived, and is described on its homepage as a "lightweight Rust crate for building complex terminal user interfaces with widgets, utilities, and immediate rendering capabilities" <cite data-ref="ratatui-home"></cite>. It is the default choice for new Rust TUIs and powers the largest production apps in the space <cite data-ref="ratatui-github"></cite><cite data-ref="awesome-ratatui"></cite>.</p>
+
+<p><code>cursive</code> is the higher-level alternative: a declarative, retained-mode TUI library where you compose <em>views</em> and the framework manages the event loop, focus, and dialog stacking <cite data-ref="cursive-crate"></cite>. It supports multiple backends (ncurses, termion, crossterm).</p>
+
+<p><code>tui-realm</code> is not a competitor to <code>ratatui</code> but an add-on on top of it that introduces a React/Elm-style component model: components own state, receive events, and communicate via messages through a global update routine <cite data-ref="tui-realm"></cite>.</p>
+
+<div data-tabs>
+  <div class="tab-list" role="tablist">
+    <button class="tab-btn" aria-selected="true">ratatui (raw)</button>
+    <button class="tab-btn">tui-realm</button>
+    <button class="tab-btn">cursive</button>
+  </div>
+
+  <div class="tab-panel" aria-hidden="false">
+<pre><code>// ratatui — immediate-mode draw loop with intermediate buffers.
+use crossterm::event::{self, Event, KeyCode};
+use ratatui::{prelude::*, widgets::*};
+
+fn main() -&gt; std::io::Result&lt;()&gt; {
+    let mut terminal = ratatui::init();
+    let mut counter = 0u32;
+    loop {
+        terminal.draw(|f| {
+            let block = Block::default().title("MCP servers").borders(Borders::ALL);
+            let p = Paragraph::new(format!("counter: {counter}")).block(block);
+            f.render_widget(p, f.size());
+        })?;
+        if let Event::Key(k) = event::read()? {
+            match k.code { KeyCode::Char('q') =&gt; break,
+                           KeyCode::Char('+') =&gt; counter += 1, _ =&gt; {} }
+        }
+    }
+    ratatui::restore();
+    Ok(())
+}</code></pre>
+    <p>You rebuild the widget tree every frame; ratatui diffs into an intermediate <code>Buffer</code> and only writes deltas to the terminal <cite data-ref="starlog-ratatui"></cite>. No state is retained between draws — state lives in your <code>App</code> struct.</p>
+  </div>
+
+  <div class="tab-panel" aria-hidden="true">
+<pre><code>// tui-realm — components + messages.
+// Components own props/state, emit Cmd, the View routes events.
+use tuirealm::{Component, MockComponent, NoUserEvent, Event, Update};
+
+#[derive(MockComponent)]
+struct ServerList { component: SomeListWidget }
+
+impl Component&lt;Msg, NoUserEvent&gt; for ServerList {
+    fn on(&amp;mut self, ev: Event&lt;NoUserEvent&gt;) -&gt; Option&lt;Msg&gt; {
+        match ev { /* ... */ Event::Keyboard(_) =&gt; Some(Msg::SelectionChanged) }
+    }
+}</code></pre>
+    <p>tui-realm trades flexibility for structure — its component lifecycle, focus stack, and message routing are opinionated, and it adds dependencies on top of <code>ratatui</code> <cite data-ref="tui-realm"></cite>. Good fit when the TUI has many independent panes that need their own state machines.</p>
+  </div>
+
+  <div class="tab-panel" aria-hidden="true">
+<pre><code>// cursive — declarative retained-mode views.
+use cursive::views::{Dialog, TextView};
+
+fn main() {
+    let mut siv = cursive::default();
+    siv.add_layer(Dialog::around(TextView::new("Hello MCP")).button("Quit", |s| s.quit()));
+    siv.run();
+}</code></pre>
+    <p>Cursive owns the event loop; you mostly describe the view hierarchy and attach callbacks. Easier for simple UIs and dialogs; less ergonomic for custom rendering and continuous data refresh than ratatui's per-frame draw model <cite data-ref="cursive-crate"></cite>.</p>
+  </div>
+</div>
+</section>
+
+<section class="section" id="backends">
+<h2>Terminal backends</h2>
+
+<p>Ratatui defines a <code>Backend</code> trait implemented for three crates, and the documentation explicitly recommends <strong>Crossterm for most tasks</strong> <cite data-ref="ratatui-backends-comparison"></cite>:</p>
+
+<table class="compare">
+<thead><tr><th>Backend</th><th>Platforms</th><th>Mouse</th><th>Async</th><th>When to pick</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>crossterm</code></td>
+  <td>Windows + macOS + Linux + WSL</td>
+  <td>Yes</td>
+  <td>Yes — <code>EventStream</code> with the <code>event-stream</code> feature</td>
+  <td>Default. Pure Rust, widely supported, active maintenance <cite data-ref="crossterm-crate"></cite><cite data-ref="ratatui-backends-comparison"></cite>.</td>
+</tr>
+<tr>
+  <td><code>termion</code></td>
+  <td>Unix only (no Windows)</td>
+  <td>Yes</td>
+  <td>No native async</td>
+  <td>Only if you're locked into a Unix-only environment and want minimal deps <cite data-ref="termion-crate"></cite>.</td>
+</tr>
+<tr>
+  <td><code>termwiz</code></td>
+  <td>Win+macOS+Linux (extracted from Wezterm)</td>
+  <td>Rich (kitty-protocol, ImageProtocol, etc.)</td>
+  <td>Yes</td>
+  <td>If you specifically need Wezterm-native features (sixel, kitty graphics, full undercurl) <cite data-ref="termwiz-crate"></cite><cite data-ref="ratatui-backends-comparison"></cite>.</td>
+</tr>
+</tbody>
+</table>
+
+<p>Underline colors and some advanced styling are only supported by Crossterm and Termwiz, not Termion <cite data-ref="ratatui-backends-comparison"></cite>. The MCP Manager TUI needs to run on developer machines across all three desktop OSes, which immediately rules out termion.</p>
+</section>
+
+<section class="section" id="data-flow">
+<h2>Data-flow patterns</h2>
+
+<p>Three patterns dominate Rust TUI app architecture, all on top of ratatui:</p>
+
+<div class="card-grid">
+  <div class="card">
+    <h3>1. Bare immediate-mode loop</h3>
+    <p>One <code>App</code> struct + a <code>draw(frame, app)</code> function + a <code>handle_event(app, evt)</code> dispatcher. The pattern used by <code>bottom</code>, simple admin tools, and the official ratatui templates <cite data-ref="ratatui-immediate-mode"></cite>.</p>
+  </div>
+  <div class="card">
+    <h3>2. Component pattern</h3>
+    <p>Each pane (server list, log tail, detail panel) is a struct implementing <code>Component { fn draw(...); fn handle_event(...); fn update(...); }</code>. The official "ratatui components template" formalizes this <cite data-ref="ratatui-home"></cite>.</p>
+  </div>
+  <div class="card">
+    <h3>3. Elm/Redux pattern (tui-realm)</h3>
+    <p><code>Msg</code> enum + central <code>update(state, msg)</code> + side-effects via commands. <code>tui-realm</code> is the framework-shaped version; many ratatui apps adopt the same pattern by hand <cite data-ref="tui-realm"></cite>.</p>
+  </div>
+</div>
+</section>
+
+<section class="section" id="state">
+<h2>State management</h2>
+
+<p>Ratatui itself is stateless across frames; widgets are constructed fresh each draw <cite data-ref="starlog-ratatui"></cite>. Long-lived state lives in the app: server list, selection indices, scroll positions, in-flight async tasks. The interesting question is how state changes from background tasks reach the UI thread.</p>
+
+<p>The two patterns the ecosystem has converged on:</p>
+<ul>
+  <li><strong>Channel-based</strong>: background tasks (polling the MCP Manager daemon, tailing logs) push into a <code>tokio::sync::mpsc</code>; the main loop multiplexes <code>crossterm::event::EventStream</code> + the channel using <code>tokio::select!</code> <cite data-ref="crossterm-crate"></cite>.</li>
+  <li><strong>Shared state</strong>: an <code>Arc&lt;Mutex&lt;AppState&gt;&gt;</code> or <code>Arc&lt;RwLock&lt;...&gt;&gt;</code> written by background tasks and read on each draw. Simpler but couples the data model to the UI redraw cadence.</li>
+</ul>
+
+<p>The ratatui FAQ explicitly discusses async patterns and points at <code>tokio</code> as the standard runtime for TUI apps that need concurrent I/O <cite data-ref="ratatui-faq-async"></cite>.</p>
+</section>
+
+<section class="section" id="mouse">
+<h2>Mouse &amp; advanced input</h2>
+
+<p>All three ratatui backends expose mouse events when enabled; crossterm and termwiz also support bracketed paste, focus events, and the Kitty Keyboard Protocol for distinguishing modifier-only releases <cite data-ref="ratatui-backends-comparison"></cite>. The ratatui components template includes a canonical pattern for routing mouse hover/click events to focused components <cite data-ref="ratatui-home"></cite>.</p>
+
+<pre><code>// crossterm: opt-in mouse capture.
+use crossterm::execute;
+use crossterm::event::{EnableMouseCapture, DisableMouseCapture};
+
+execute!(std::io::stdout(), EnableMouseCapture)?;
+// ... event loop with Event::Mouse(MouseEvent { kind, column, row, ... }) ...
+execute!(std::io::stdout(), DisableMouseCapture)?;</code></pre>
+</section>
+
+<section class="section" id="prior-art">
+<h2>Production apps in the same niche</h2>
+
+<p>The <code>awesome-ratatui</code> registry catalogs hundreds of TUIs; the ones that overlap with what the MCP Manager TUI needs to do are <cite data-ref="awesome-ratatui"></cite>:</p>
+
+<table class="compare">
+<thead><tr><th>App</th><th>Domain</th><th>Why it matters here</th></tr></thead>
+<tbody>
+<tr><td><strong>bottom</strong> (ClementTsang/bottom)</td><td>Cross-platform process / resource monitor</td><td>Closest analog to the live "running servers" pane the MCP TUI needs. Multi-pane layout, mouse support, throttled redraws.</td></tr>
+<tr><td><strong>gitui</strong> (extrawurst/gitui)</td><td>Terminal Git client</td><td>Component-pattern TUI with modal dialogs, log tailing, async work — directly applicable patterns.</td></tr>
+<tr><td><strong>yazi</strong></td><td>Async terminal file manager</td><td>Demonstrates async-first ratatui at scale; >5k stars <cite data-ref="awesome-ratatui"></cite>.</td></tr>
+<tr><td><strong>atuin</strong></td><td>Shell history TUI</td><td>Search-as-you-type interaction, fuzzy filtering — relevant for the server picker.</td></tr>
+<tr><td><strong>trippy</strong></td><td>Network diagnostic tool</td><td>Live data refresh + tab-style navigation.</td></tr>
+<tr><td><strong>diskonaut</strong></td><td>Disk space visualizer</td><td>Treemap-style custom widgets; proves you can render non-trivial layouts in ratatui.</td></tr>
+</tbody>
+</table>
+
+<p>Although <code>lazydocker</code> (Go) and <code>k9s</code> (Go) sit in the same niche and inform the <em>UX</em> the MCP Manager wants, they don't constrain the Rust framework choice — they only show that the niche has shipped successful TUIs before.</p>
+
+<p>The two production apps that are most directly architecturally informative — <strong>bottom</strong> and <strong>gitui</strong> — both run on <code>ratatui + crossterm</code>, which is the default stack the documentation also recommends <cite data-ref="ratatui-backends-comparison"></cite>.</p>
+</section>
+</main>
+</body>
+</html>

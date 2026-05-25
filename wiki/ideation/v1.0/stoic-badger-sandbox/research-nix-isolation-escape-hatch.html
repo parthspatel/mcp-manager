@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Escape hatch: Docker, Podman, raw runners — stoic-badger-sandbox · MCP Manager v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">stoic-badger-sandbox</a> / escape hatch</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Escape hatch for non-Nix users</h1>
+  <p class="lede">
+    Not every user wants Nix on their machine. This page surveys what the MCP Manager can offer instead: containers (Docker, Podman), language-native isolated runners (uvx, pipx, npx), and OS package managers — and what each option costs in reproducibility, install friction, and isolation strength.
+  </p>
+
+  <h2>Container runtimes</h2>
+
+  <h3>Docker MCP Toolkit</h3>
+  <p>
+    Docker ships a first-party MCP integration: a managed toolkit + a catalog of 300+ vetted MCP servers as signed container images. Each tool runs in its own container with a default 1-CPU and 2 GB-of-RAM cap, no host filesystem unless the user explicitly mounts a path, and an interception layer that blocks tool I/O containing secrets.<cite data-ref="docker-mcp-toolkit"></cite><cite data-ref="docker-mcp-blog"></cite>
+  </p>
+<pre><code># conceptual: run an MCP server image with the manager
+mcp-manager add docker://mcp/server-filesystem@sha256:abc...
+mcp-manager run server-filesystem --mount /home/me/projects/foo:/work:ro
+</code></pre>
+  <p>
+    Strengths: zero authoring for end users — the image already exists. Provenance is built into the catalog with image signing.<cite data-ref="docker-mcp-blog"></cite> Weaknesses: requires Docker Desktop (licensing constraint for some orgs), and cold-start cost is &gt;1 s per container — non-trivial when many short-lived MCP servers are spawned.<cite data-ref="podman-rootless"></cite>
+  </p>
+
+  <h3>Podman (rootless)</h3>
+  <p>
+    Podman is daemonless and rootless by default. Each container is a child of the user session, not a privileged daemon, and Linux user namespaces map the in-container root UID to an unprivileged host UID. Containers receive 11 capabilities by default (vs Docker's 14) and store images under <code>$HOME</code> rather than <code>/var/lib/docker</code>.<cite data-ref="podman-rootless"></cite>
+  </p>
+  <p>
+    For an MCP server lifecycle that mostly stays inside one user account, Podman's no-daemon model is a closer fit than Docker. Trade-off: per-container start-up is comparable to Docker (slow relative to native exec), and rootless restrictions on privileged ports rarely matter for MCP because servers communicate over stdio or localhost.<cite data-ref="podman-rootless"></cite>
+  </p>
+
+  <h3>Container parity table</h3>
+  <table class="compare">
+    <thead><tr><th>Dimension</th><th>Docker</th><th>Podman (rootless)</th></tr></thead>
+    <tbody>
+      <tr><td>Daemon required</td><td>Yes (privileged)</td><td>No<cite data-ref="podman-rootless"></cite></td></tr>
+      <tr><td>Default user namespace</td><td>Opt-in</td><td>Always on<cite data-ref="podman-rootless"></cite></td></tr>
+      <tr><td>MCP catalog</td><td>Official (Docker MCP)<cite data-ref="docker-mcp-toolkit"></cite></td><td>Reuses OCI images</td></tr>
+      <tr><td>Filesystem default</td><td>No host FS<cite data-ref="docker-mcp-toolkit"></cite></td><td>No host FS</td></tr>
+      <tr><td>Signed image story</td><td>Built-in for catalog<cite data-ref="docker-mcp-blog"></cite></td><td>cosign / sigstore add-on</td></tr>
+      <tr><td>Per-tool resource caps</td><td>Toolkit defaults: 1 CPU, 2 GB<cite data-ref="docker-mcp-toolkit"></cite></td><td>Manual <code>--cpus</code>/<code>--memory</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Language-native isolated runners</h2>
+
+  <h3>uvx (Python)</h3>
+  <p>
+    <code>uvx</code> is uv's ephemeral runner: it materialises a fresh, isolated venv, installs the requested package, and execs it. The venv is cached, so cold runs take ~1 s and warm runs tens of milliseconds. It supports <code>--python 3.11</code> and downloads the interpreter automatically if not present.<cite data-ref="uvx-docs"></cite>
+  </p>
+<pre><code># versioned, isolated execution
+uvx --python 3.11 mcp-server-fetch@1.2.3 --help
+</code></pre>
+  <p>uvx isolates by <em>venv</em>, not by OS sandbox — the running process still has full filesystem and network access.<cite data-ref="uvx-docs"></cite></p>
+
+  <h3>pipx (Python)</h3>
+  <p>
+    pipx pioneered the isolated-venv-per-CLI-tool pattern. It is pure Python (slower than uv), has unique features uv lacks (<code>pipx inject</code>, manual pages, <code>--global</code>), and is widely pre-installed by distros.<cite data-ref="pipx-comparisons"></cite>
+  </p>
+
+  <h3>npx / bunx (Node ecosystem)</h3>
+  <p>
+    <code>npx pkg@ver</code> fetches and executes a package. Unlike uvx, npx by default fetches latest if no version is pinned. Most JS MCP servers are launched this way today — and the security community has documented this as a "curl | bash"-class supply-chain vector. <em>Pinning versions is mandatory</em>: <code>npx -y @modelcontextprotocol/server-filesystem@2025.11.18</code>, not <code>npx -y @modelcontextprotocol/server-filesystem</code>.<cite data-ref="mcp-supply-chain-docker"></cite><cite data-ref="mcp-toolradar"></cite> CVE-2025-6514 (CVSS 9.6) is the canonical recent example of full RCE against an MCP client via a hijacked Node MCP server.<cite data-ref="mcp-supply-chain-docker"></cite></p>
+
+  <h3>Native installs (brew / apt / choco)</h3>
+  <p>OS package managers give the lowest install friction once a user already has the relevant tooling. Reproducibility is OS-dependent (Homebrew bottles vs apt pinning vs Chocolatey), and isolation is effectively zero — the binary runs with the user's full permissions. This is the &ldquo;just got something working&rdquo; tier of the escape hatch and the manager should treat it as opt-in.<cite data-ref="mcp-toolradar"></cite></p>
+
+  <h2>Trade-off comparison</h2>
+  <table class="compare">
+    <thead>
+      <tr>
+        <th>Strategy</th>
+        <th>Reproducibility</th>
+        <th>Cold-start</th>
+        <th>Install friction</th>
+        <th>Isolation</th>
+        <th>Cross-platform</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Docker MCP Toolkit</td>
+        <td>High (signed image)<cite data-ref="docker-mcp-blog"></cite></td>
+        <td>Slow (~1 s+)<cite data-ref="podman-rootless"></cite></td>
+        <td>Docker Desktop install<cite data-ref="docker-mcp-blog"></cite></td>
+        <td>Strong<cite data-ref="docker-mcp-toolkit"></cite></td>
+        <td>Excellent</td>
+      </tr>
+      <tr>
+        <td>Podman rootless</td>
+        <td>High</td>
+        <td>Slow</td>
+        <td>Linux-friendly, mac via VM<cite data-ref="podman-rootless"></cite></td>
+        <td>Strong<cite data-ref="podman-rootless"></cite></td>
+        <td>Good (worse on macOS)</td>
+      </tr>
+      <tr>
+        <td>uvx (pinned)</td>
+        <td>Moderate (lockfile)<cite data-ref="uvx-docs"></cite></td>
+        <td>~1 s cold, ms warm<cite data-ref="uvx-docs"></cite></td>
+        <td>One binary install</td>
+        <td>Weak (venv only)<cite data-ref="uvx-docs"></cite></td>
+        <td>Excellent</td>
+      </tr>
+      <tr>
+        <td>npx (pinned)</td>
+        <td>Moderate (lockfile)</td>
+        <td>~1 s cold</td>
+        <td>None (bundled with Node)</td>
+        <td>Weak<cite data-ref="mcp-supply-chain-docker"></cite></td>
+        <td>Excellent</td>
+      </tr>
+      <tr>
+        <td>npx (latest)</td>
+        <td>Poor — anti-pattern<cite data-ref="mcp-supply-chain-docker"></cite></td>
+        <td>~1 s cold</td>
+        <td>None</td>
+        <td>None<cite data-ref="mcp-toolradar"></cite></td>
+        <td>Excellent</td>
+      </tr>
+      <tr>
+        <td>OS native (brew/apt)</td>
+        <td>OS-dep, weak</td>
+        <td>Native exec</td>
+        <td>Per-OS</td>
+        <td>None<cite data-ref="mcp-toolradar"></cite></td>
+        <td>Per-OS</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Pairing escape-hatch runners with an OS sandbox</h2>
+  <p>
+    A manager that wants &ldquo;decent isolation without requiring Nix&rdquo; can compose:
+  </p>
+  <ul>
+    <li>Linux: <code>bwrap … -- uvx pkg@ver</code><cite data-ref="bubblewrap-repo"></cite><cite data-ref="uvx-docs"></cite></li>
+    <li>macOS: <code>sandbox-exec -f profile.sb uvx pkg@ver</code><cite data-ref="sandbox-exec-jmmv"></cite></li>
+    <li>Windows: launch the runner inside an AppContainer with <code>internetClient</code> and minimal capabilities<cite data-ref="appcontainer-isolation"></cite></li>
+  </ul>
+  <p>
+    This recovers some of the runtime-isolation story devenv-plus-sandbox provides, at the cost of giving up build-time reproducibility (the venv contents still depend on what PyPI / npm serve at fetch time).<cite data-ref="mcp-supply-chain-docker"></cite>
+  </p>
+
+  <h2>Summary of the escape-hatch ladder</h2>
+  <ol>
+    <li><strong>Best fallback</strong>: Docker MCP Toolkit catalog images (when the user has Docker).<cite data-ref="docker-mcp-toolkit"></cite></li>
+    <li><strong>Linux-native fallback</strong>: Podman rootless containers.<cite data-ref="podman-rootless"></cite></li>
+    <li><strong>Lightweight fallback</strong>: <code>uvx</code>/<code>npx</code> with explicit version pins and lockfiles.<cite data-ref="uvx-docs"></cite><cite data-ref="mcp-toolradar"></cite></li>
+    <li><strong>Last resort</strong>: OS package manager. Track installed version for upgrade nags; no isolation.<cite data-ref="mcp-toolradar"></cite></li>
+  </ol>
+</main>
+</body>
+</html>

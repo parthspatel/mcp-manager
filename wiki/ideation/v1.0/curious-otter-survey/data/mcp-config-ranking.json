@@ -1,0 +1,207 @@
+{
+  "title": "Host applications scored on MCP management capabilities",
+  "description": "Scores 0–5 (higher is better). Drag weight sliders to re-rank. Evidence links jump to citations on this stream's pages.",
+  "options": [
+    "Claude Desktop",
+    "Claude Code (CLI)",
+    "Cursor",
+    "Cline",
+    "Continue",
+    "Zed",
+    "Windsurf",
+    "VS Code (Copilot MCP)",
+    "Goose"
+  ],
+  "criteria": [
+    { "key": "config_ux", "label": "Config UX (discoverability, editing, validation)", "weight": 0.16 },
+    { "key": "transports", "label": "Transport coverage (stdio / streamable-HTTP / SSE)", "weight": 0.14 },
+    { "key": "secrets", "label": "Secrets handling (keychain, prompts, no-plaintext)", "weight": 0.18 },
+    { "key": "lifecycle", "label": "Lifecycle management (start/stop/restart/health)", "weight": 0.14 },
+    { "key": "error_visibility", "label": "Error visibility (logs, status UI, failure surfacing)", "weight": 0.12 },
+    { "key": "isolation", "label": "Isolation (sandbox, scoped capabilities)", "weight": 0.10 },
+    { "key": "multi_scaling", "label": "Multi-server scaling (10+ servers without slowdown)", "weight": 0.08 },
+    { "key": "portability", "label": "Portability of config across hosts", "weight": 0.08 }
+  ],
+  "scores": {
+    "Claude Desktop": {
+      "config_ux": 2,
+      "transports": 2,
+      "secrets": 1,
+      "lifecycle": 2,
+      "error_visibility": 2,
+      "isolation": 1,
+      "multi_scaling": 1,
+      "portability": 4,
+      "_evidence": {
+        "config_ux": ["#cite-claude-desktop-local", "#cite-win-msix-bug-26073"],
+        "transports": ["#cite-claude-desktop-local", "#cite-anthropic-dxt"],
+        "secrets": ["#cite-keychain-feature-15961", "#cite-keychain-workaround", "#cite-anthropic-dxt"],
+        "lifecycle": ["#cite-claude-crash-28211", "#cite-claude-quit-slow-30267"],
+        "error_visibility": ["#cite-mcp-debugging", "#cite-win-msix-bug-26073"],
+        "isolation": ["#cite-plaintext-keys-blog"],
+        "multi_scaling": ["#cite-claude-crash-28211", "#cite-claude-quit-slow-30267"],
+        "portability": ["#cite-mcp-config-guide"]
+      }
+    },
+    "Claude Code (CLI)": {
+      "config_ux": 4,
+      "transports": 5,
+      "secrets": 3,
+      "lifecycle": 4,
+      "error_visibility": 3,
+      "isolation": 2,
+      "multi_scaling": 4,
+      "portability": 4,
+      "_evidence": {
+        "config_ux": ["#cite-claude-code-mcp"],
+        "transports": ["#cite-claude-code-mcp"],
+        "secrets": ["#cite-claude-code-mcp"],
+        "lifecycle": ["#cite-claude-code-mcp"],
+        "error_visibility": ["#cite-claude-code-mcp"],
+        "isolation": ["#cite-claude-code-mcp"],
+        "multi_scaling": ["#cite-claude-code-mcp"],
+        "portability": ["#cite-claude-code-mcp", "#cite-mcp-config-guide"]
+      }
+    },
+    "Cursor": {
+      "config_ux": 4,
+      "transports": 4,
+      "secrets": 2,
+      "lifecycle": 3,
+      "error_visibility": 3,
+      "isolation": 1,
+      "multi_scaling": 3,
+      "portability": 4,
+      "_evidence": {
+        "config_ux": ["#cite-cursor-mcp"],
+        "transports": ["#cite-cursor-mcp"],
+        "secrets": ["#cite-cursor-mcp", "#cite-plaintext-keys-blog"],
+        "lifecycle": ["#cite-cursor-mcp"],
+        "error_visibility": ["#cite-cursor-mcp"],
+        "isolation": ["#cite-cursor-mcp"],
+        "multi_scaling": ["#cite-cursor-mcp"],
+        "portability": ["#cite-cursor-mcp", "#cite-mcp-config-guide"]
+      }
+    },
+    "Cline": {
+      "config_ux": 3,
+      "transports": 3,
+      "secrets": 2,
+      "lifecycle": 3,
+      "error_visibility": 3,
+      "isolation": 2,
+      "multi_scaling": 3,
+      "portability": 3,
+      "_evidence": {
+        "config_ux": ["#cite-cline-mcp"],
+        "transports": ["#cite-cline-mcp"],
+        "secrets": ["#cite-cline-mcp", "#cite-plaintext-keys-blog"],
+        "lifecycle": ["#cite-cline-mcp"],
+        "error_visibility": ["#cite-cline-mcp"],
+        "isolation": ["#cite-cline-mcp"],
+        "multi_scaling": ["#cite-cline-mcp"],
+        "portability": ["#cite-mcp-config-guide"]
+      }
+    },
+    "Continue": {
+      "config_ux": 3,
+      "transports": 4,
+      "secrets": 3,
+      "lifecycle": 3,
+      "error_visibility": 2,
+      "isolation": 2,
+      "multi_scaling": 3,
+      "portability": 2,
+      "_evidence": {
+        "config_ux": ["#cite-continue-mcp"],
+        "transports": ["#cite-continue-mcp"],
+        "secrets": ["#cite-continue-mcp"],
+        "lifecycle": ["#cite-continue-mcp"],
+        "error_visibility": ["#cite-continue-mcp"],
+        "isolation": ["#cite-continue-mcp"],
+        "multi_scaling": ["#cite-continue-mcp"],
+        "portability": ["#cite-continue-mcp", "#cite-mcp-config-guide"]
+      }
+    },
+    "Zed": {
+      "config_ux": 4,
+      "transports": 4,
+      "secrets": 3,
+      "lifecycle": 3,
+      "error_visibility": 3,
+      "isolation": 2,
+      "multi_scaling": 3,
+      "portability": 1,
+      "_evidence": {
+        "config_ux": ["#cite-zed-mcp"],
+        "transports": ["#cite-zed-mcp"],
+        "secrets": ["#cite-zed-mcp"],
+        "lifecycle": ["#cite-zed-mcp"],
+        "error_visibility": ["#cite-zed-mcp"],
+        "isolation": ["#cite-zed-mcp"],
+        "multi_scaling": ["#cite-zed-mcp"],
+        "portability": ["#cite-zed-mcp"]
+      }
+    },
+    "Windsurf": {
+      "config_ux": 3,
+      "transports": 4,
+      "secrets": 3,
+      "lifecycle": 3,
+      "error_visibility": 2,
+      "isolation": 2,
+      "multi_scaling": 2,
+      "portability": 3,
+      "_evidence": {
+        "config_ux": ["#cite-windsurf-mcp"],
+        "transports": ["#cite-windsurf-mcp"],
+        "secrets": ["#cite-windsurf-mcp"],
+        "lifecycle": ["#cite-windsurf-mcp"],
+        "error_visibility": ["#cite-windsurf-mcp"],
+        "isolation": ["#cite-windsurf-mcp"],
+        "multi_scaling": ["#cite-windsurf-mcp"],
+        "portability": ["#cite-windsurf-mcp"]
+      }
+    },
+    "VS Code (Copilot MCP)": {
+      "config_ux": 4,
+      "transports": 4,
+      "secrets": 4,
+      "lifecycle": 4,
+      "error_visibility": 4,
+      "isolation": 3,
+      "multi_scaling": 4,
+      "portability": 2,
+      "_evidence": {
+        "config_ux": ["#cite-vscode-mcp", "#cite-vscode-mcp-reference"],
+        "transports": ["#cite-vscode-mcp"],
+        "secrets": ["#cite-vscode-mcp", "#cite-vscode-mcp-reference"],
+        "lifecycle": ["#cite-vscode-mcp"],
+        "error_visibility": ["#cite-vscode-mcp"],
+        "isolation": ["#cite-vscode-mcp"],
+        "multi_scaling": ["#cite-vscode-mcp"],
+        "portability": ["#cite-vscode-mcp"]
+      }
+    },
+    "Goose": {
+      "config_ux": 3,
+      "transports": 3,
+      "secrets": 3,
+      "lifecycle": 3,
+      "error_visibility": 3,
+      "isolation": 2,
+      "multi_scaling": 3,
+      "portability": 1,
+      "_evidence": {
+        "config_ux": ["#cite-goose-extensions"],
+        "transports": ["#cite-goose-extensions"],
+        "secrets": ["#cite-goose-extensions"],
+        "lifecycle": ["#cite-goose-extensions"],
+        "error_visibility": ["#cite-goose-extensions"],
+        "isolation": ["#cite-goose-extensions"],
+        "multi_scaling": ["#cite-goose-extensions"],
+        "portability": ["#cite-goose-extensions"]
+      }
+    }
+  }
+}

@@ -1,0 +1,249 @@
+{
+  "entries": [
+    {
+      "id": "mcp-spec-transports",
+      "title": "Model Context Protocol — Transports (2025-06-18)",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports",
+      "accessed": "2026-05-24",
+      "note": "Defines stdio and Streamable HTTP as the two standard MCP transports; clients SHOULD support stdio whenever possible."
+    },
+    {
+      "id": "mcp-spec-ping",
+      "title": "Model Context Protocol — Ping utility",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/ping",
+      "accessed": "2026-05-24",
+      "note": "Optional bidirectional JSON-RPC ping for liveness; either party MAY initiate; receiver MUST respond promptly with empty result."
+    },
+    {
+      "id": "rmcp-rust-sdk",
+      "title": "modelcontextprotocol/rust-sdk (rmcp) on GitHub",
+      "url": "https://github.com/modelcontextprotocol/rust-sdk",
+      "accessed": "2026-05-24",
+      "note": "Official Rust MCP SDK built on tokio; provides server/client crate features and transports including stdio, child process, SSE, and Streamable HTTP."
+    },
+    {
+      "id": "mcp-inspector",
+      "title": "modelcontextprotocol/inspector on GitHub",
+      "url": "https://github.com/modelcontextprotocol/inspector",
+      "accessed": "2026-05-24",
+      "note": "Two-component (React UI + Node proxy) tool that bridges browser UI to MCP servers via stdio, SSE, or Streamable HTTP."
+    },
+    {
+      "id": "tokio-process-command",
+      "title": "tokio::process::Command — Tokio docs",
+      "url": "https://docs.rs/tokio/latest/tokio/process/struct.Command.html",
+      "accessed": "2026-05-24",
+      "note": "Async child process API; kill_on_drop is false by default; explicit wait()/kill() recommended for predictable cleanup."
+    },
+    {
+      "id": "tokio-spawn",
+      "title": "Spawning — Tokio tutorial",
+      "url": "https://tokio.rs/tokio/tutorial/spawning",
+      "accessed": "2026-05-24",
+      "note": "Tasks are 'green threads' ~64 bytes each; require 'static + Send."
+    },
+    {
+      "id": "tokio-mpsc",
+      "title": "tokio::sync::mpsc — Tokio docs",
+      "url": "https://docs.rs/tokio/latest/tokio/sync/mpsc/index.html",
+      "accessed": "2026-05-24",
+      "note": "Bounded MPSC channel for backpressure between async tasks; broadcast and watch are sibling primitives."
+    },
+    {
+      "id": "tokio-channels-guide",
+      "title": "Channels — Tokio tutorial",
+      "url": "https://tokio.rs/tokio/tutorial/channels",
+      "accessed": "2026-05-24",
+      "note": "Convention: mpsc for queues, watch for state, broadcast for events."
+    },
+    {
+      "id": "nix-crate-docs",
+      "title": "nix crate — Rust friendly bindings to *nix syscalls",
+      "url": "https://docs.rs/nix/latest/nix/",
+      "accessed": "2026-05-24",
+      "note": "Modules sys::wait (waitpid), sys::signal (SIGCHLD, sigaction), unistd (fork, exec, setsid); Unix-only."
+    },
+    {
+      "id": "win32job-crate",
+      "title": "win32job crate on crates.io",
+      "url": "https://crates.io/crates/win32job",
+      "accessed": "2026-05-24",
+      "note": "Rust wrapper around Windows Job Objects; supports KILL_ON_JOB_CLOSE so child processes die with parent."
+    },
+    {
+      "id": "process-wrap-crate",
+      "title": "process-wrap crate on crates.io",
+      "url": "https://crates.io/crates/process-wrap",
+      "accessed": "2026-05-24",
+      "note": "Cross-platform child supervision; wraps Tokio Command with Unix process groups and Windows job objects."
+    },
+    {
+      "id": "interprocess-crate",
+      "title": "interprocess crate — local_socket module",
+      "url": "https://docs.rs/interprocess/latest/interprocess/local_socket/index.html",
+      "accessed": "2026-05-24",
+      "note": "Cross-platform abstraction: Unix domain sockets on *nix, named pipes on Windows; tokio submodule for async."
+    },
+    {
+      "id": "keyring-crate",
+      "title": "keyring crate — Rust cross-platform secrets",
+      "url": "https://docs.rs/keyring/",
+      "accessed": "2026-05-24",
+      "note": "Platform stores: macOS Keychain, Windows Credential Manager, Linux Secret Service / keyutils, Android shared prefs."
+    },
+    {
+      "id": "rusqlite-docs",
+      "title": "rusqlite crate docs",
+      "url": "https://docs.rs/rusqlite/latest/rusqlite/",
+      "accessed": "2026-05-24",
+      "note": "Synchronous SQLite wrapper; supports bundled SQLite, prepared statements, transactions, blob I/O, hooks; no async, no migrations built-in."
+    },
+    {
+      "id": "sqlx-rust-orms-2026",
+      "title": "Rust ORMs in 2026: Diesel vs SQLx vs SeaORM vs Rusqlite",
+      "url": "https://aarambhdevhub.medium.com/rust-orms-in-2026-diesel-vs-sqlx-vs-seaorm-vs-rusqlite-which-one-should-you-actually-use-706d0fe912f3",
+      "accessed": "2026-05-24",
+      "note": "Comparison: SQLx is async multi-backend toolkit; rusqlite is lightweight sync wrapper; sled is non-SQL embedded KV."
+    },
+    {
+      "id": "tracing-crate-docs",
+      "title": "tracing crate — Rust structured diagnostics",
+      "url": "https://docs.rs/tracing/latest/tracing/",
+      "accessed": "2026-05-24",
+      "note": "Spans + events + Subscriber model; #[instrument] attribute; async-aware; bridges to log and OpenTelemetry."
+    },
+    {
+      "id": "tracing-opentelemetry",
+      "title": "tracing-opentelemetry crate",
+      "url": "https://crates.io/crates/tracing-opentelemetry",
+      "accessed": "2026-05-24",
+      "note": "Layer that converts tracing spans into OpenTelemetry spans for export via OTLP."
+    },
+    {
+      "id": "matklad-large-workspaces",
+      "title": "Large Rust Workspaces — matklad",
+      "url": "https://matklad.github.io/2021/08/22/large-rust-workspaces.html",
+      "accessed": "2026-05-24",
+      "note": "Recommends flat crates/ directory, virtual root manifest, crate folder name == crate name."
+    },
+    {
+      "id": "cargo-workspaces-book",
+      "title": "Cargo Workspaces — The Rust Book",
+      "url": "https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html",
+      "accessed": "2026-05-24",
+      "note": "Canonical reference: shared Cargo.lock, shared target/, workspace.dependencies for version pinning."
+    },
+    {
+      "id": "docker-overview",
+      "title": "Docker overview — official docs",
+      "url": "https://docs.docker.com/get-started/docker-overview/",
+      "accessed": "2026-05-24",
+      "note": "Docker uses a client-server architecture; client talks to dockerd daemon over REST API (Unix socket or TCP)."
+    },
+    {
+      "id": "conmon-readme",
+      "title": "containers/conmon on GitHub",
+      "url": "https://github.com/containers/conmon",
+      "accessed": "2026-05-24",
+      "note": "Per-container monitor used by Podman and CRI-O; holds stdio open, captures exit status, writes logs to journal."
+    },
+    {
+      "id": "podman-overview",
+      "title": "podman(1) — Podman command reference",
+      "url": "https://docs.podman.io/en/latest/markdown/podman.1.html",
+      "accessed": "2026-05-24",
+      "note": "Daemonless container engine; `alias docker=podman` works for most usage."
+    },
+    {
+      "id": "containerd-shim-blog",
+      "title": "Deep dive into containers — William Durand",
+      "url": "https://williamdurand.fr/2022/06/21/deep-dive-into-containers/",
+      "accessed": "2026-05-24",
+      "note": "Explains containerd + containerd-shim: shim becomes subreaper, keeps stdio open, lets runc exit while container keeps running."
+    },
+    {
+      "id": "systemd-wikipedia",
+      "title": "systemd — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Systemd",
+      "accessed": "2026-05-24",
+      "note": "PID 1 init + service supervisor on Linux; uses cgroups to track services; journald for structured logs."
+    },
+    {
+      "id": "systemd-cgroup-delegation",
+      "title": "Control Group APIs and Delegation — systemd.io",
+      "url": "https://systemd.io/CGROUP_DELEGATION/",
+      "accessed": "2026-05-24",
+      "note": "Official guide to how systemd manages cgroups and delegates subtrees to services."
+    },
+    {
+      "id": "launchd-info",
+      "title": "A launchd Tutorial — launchd.info",
+      "url": "https://launchd.info/",
+      "accessed": "2026-05-24",
+      "note": "Reference on launchd: PID 1 on macOS; LaunchAgents (per-user) vs LaunchDaemons (system); plist configuration."
+    },
+    {
+      "id": "launchd-wikipedia",
+      "title": "launchd — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Launchd",
+      "accessed": "2026-05-24",
+      "note": "Apple init/service manager; on-demand activation by listening on sockets/ports."
+    },
+    {
+      "id": "nix-multi-user",
+      "title": "Multi-User Mode — Nix Reference Manual",
+      "url": "https://nix.dev/manual/nix/2.25/installation/multi-user",
+      "accessed": "2026-05-24",
+      "note": "Privileged nix-daemon owns the store; unprivileged clients connect via NIX_REMOTE=daemon; builds run as nixbld* users."
+    },
+    {
+      "id": "corrode-async-runtimes",
+      "title": "The State of Async Rust: Runtimes — corrode.dev",
+      "url": "https://corrode.dev/blog/async/",
+      "accessed": "2026-05-24",
+      "note": "Ecosystem has consolidated around tokio; async-std discontinued in early 2025; smol survives as small unopinionated runtime."
+    },
+    {
+      "id": "lima-architecture",
+      "title": "Lima architecture — DeepWiki",
+      "url": "https://deepwiki.com/lima-vm/lima",
+      "accessed": "2026-05-24",
+      "note": "Four layers: UI CLI, YAML config, host agent (VM orchestration), guest agent + runtimes."
+    },
+    {
+      "id": "uvx-handbook",
+      "title": "uvx: Run Python CLI Tools in Isolated Environments — pydevtools",
+      "url": "https://pydevtools.com/handbook/reference/uvx/",
+      "accessed": "2026-05-24",
+      "note": "uvx resolves package, creates short-lived environment, executes entry point; cached envs reused until pruned."
+    },
+    {
+      "id": "pipx-overview",
+      "title": "pipx: Install Python CLI Tools in Isolation — pydevtools",
+      "url": "https://pydevtools.com/handbook/reference/pipx/",
+      "accessed": "2026-05-24",
+      "note": "Each tool installed into its own venv under PIPX_HOME/venvs; uses pip internally."
+    },
+    {
+      "id": "serde-evolve",
+      "title": "danieleades/serde-evolve on GitHub",
+      "url": "https://github.com/danieleades/serde-evolve",
+      "accessed": "2026-05-24",
+      "note": "Versioned serde representation/domain split using From/TryInto; compile-time migration completeness."
+    },
+    {
+      "id": "tokio-process-tools",
+      "title": "tokio-process-tools crate",
+      "url": "https://docs.rs/tokio-process-tools/",
+      "accessed": "2026-05-24",
+      "note": "Higher-level Tokio process wrapper with backpressure modes (drop-latest vs block-until-space)."
+    },
+    {
+      "id": "mcp-spec-lifecycle",
+      "title": "Model Context Protocol — Lifecycle (2025-06-18)",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle",
+      "accessed": "2026-05-24",
+      "note": "Initialize / initialized / shutdown phases and version negotiation."
+    }
+  ]
+}

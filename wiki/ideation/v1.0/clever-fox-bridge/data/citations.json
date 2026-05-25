@@ -1,0 +1,452 @@
+{
+  "entries": [
+    {
+      "id": "mcp-spec-transports",
+      "title": "Model Context Protocol — Transports (spec 2025-06-18)",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Defines stdio and Streamable HTTP, deprecates HTTP+SSE."
+    },
+    {
+      "id": "claude-code-mcp",
+      "title": "Connect Claude Code to tools via MCP",
+      "url": "https://code.claude.com/docs/en/mcp",
+      "source": "code.claude.com",
+      "accessed": "2026-05-24",
+      "note": "claude mcp add CLI, scope hierarchy, .mcp.json, env expansion, OAuth, headersHelper."
+    },
+    {
+      "id": "claude-code-settings",
+      "title": "Claude Code Settings",
+      "url": "https://docs.claude.com/en/docs/claude-code/settings",
+      "source": "docs.claude.com",
+      "accessed": "2026-05-24",
+      "note": "User and project settings files, .claude/settings.json."
+    },
+    {
+      "id": "codex-mcp",
+      "title": "OpenAI Codex CLI — MCP support (~/.codex/config.toml)",
+      "url": "https://github.com/openai/codex/blob/main/docs/config.md",
+      "source": "github.com/openai/codex",
+      "accessed": "2026-05-24",
+      "note": "Codex CLI uses TOML config with [mcp_servers.name] tables; stdio only as of 2026-Q1."
+    },
+    {
+      "id": "codex-mcp-config",
+      "title": "Codex CLI MCP server configuration discussion",
+      "url": "https://github.com/openai/codex/discussions/categories/mcp",
+      "source": "github.com/openai/codex",
+      "accessed": "2026-05-24",
+      "note": "Community discussion of MCP TOML schema."
+    },
+    {
+      "id": "zed-mcp",
+      "title": "Zed — Model Context Protocol",
+      "url": "https://zed.dev/docs/ai/mcp",
+      "source": "zed.dev",
+      "accessed": "2026-05-24",
+      "note": "context_servers in settings.json, source: custom, extension-based servers."
+    },
+    {
+      "id": "zed-settings",
+      "title": "Zed — Configuring Zed",
+      "url": "https://zed.dev/docs/configuring-zed",
+      "source": "zed.dev",
+      "accessed": "2026-05-24",
+      "note": "~/.config/zed/settings.json on Linux/macOS; %APPDATA%/Zed on Windows."
+    },
+    {
+      "id": "jetbrains-mcp",
+      "title": "JetBrains AI Assistant — MCP support",
+      "url": "https://www.jetbrains.com/help/ai-assistant/mcp.html",
+      "source": "jetbrains.com",
+      "accessed": "2026-05-24",
+      "note": "MCP support in IntelliJ Platform 2025.1+; UI-based config, persisted in IDE settings XML."
+    },
+    {
+      "id": "jetbrains-junie",
+      "title": "JetBrains Junie — connecting MCP servers",
+      "url": "https://www.jetbrains.com/junie/",
+      "source": "jetbrains.com",
+      "accessed": "2026-05-24",
+      "note": "Junie agent reads MCP config from IDE-managed XML and project .mcp.json fallback."
+    },
+    {
+      "id": "vscode-mcp",
+      "title": "Visual Studio Code — Use MCP servers in VS Code",
+      "url": "https://code.visualstudio.com/docs/copilot/customization/mcp-servers",
+      "source": "code.visualstudio.com",
+      "accessed": "2026-05-24",
+      "note": "GA April 2025. .vscode/mcp.json (workspace), settings.json mcp.servers (user), inputs prompt."
+    },
+    {
+      "id": "vscode-mcp-blog",
+      "title": "Agent mode: available to all users and supports MCP",
+      "url": "https://code.visualstudio.com/blogs/2025/04/07/agentMode",
+      "source": "code.visualstudio.com",
+      "accessed": "2026-05-24",
+      "note": "Announcement of MCP general availability in VS Code; servers key (not mcpServers)."
+    },
+    {
+      "id": "cursor-mcp",
+      "title": "Model Context Protocol (MCP) | Cursor Docs",
+      "url": "https://cursor.com/docs/mcp",
+      "source": "cursor.com",
+      "accessed": "2026-05-24",
+      "note": "~/.cursor/mcp.json and .cursor/mcp.json; type field; envFile."
+    },
+    {
+      "id": "windsurf-mcp",
+      "title": "Windsurf — Model Context Protocol",
+      "url": "https://docs.windsurf.com/windsurf/cascade/mcp",
+      "source": "docs.windsurf.com",
+      "accessed": "2026-05-24",
+      "note": "~/.codeium/windsurf/mcp_config.json; serverUrl/url for SSE; ${file:} interpolation."
+    },
+    {
+      "id": "continue-mcp",
+      "title": "Continue — Model Context Protocol",
+      "url": "https://docs.continue.dev/customize/deep-dives/mcp",
+      "source": "docs.continue.dev",
+      "accessed": "2026-05-24",
+      "note": "config.yaml mcpServers as array of named entries; ${{ secrets.X }} syntax."
+    },
+    {
+      "id": "cline-mcp",
+      "title": "Cline — MCP Servers Configuration",
+      "url": "https://docs.cline.bot/mcp/configuring-mcp-servers",
+      "source": "docs.cline.bot",
+      "accessed": "2026-05-24",
+      "note": "cline_mcp_settings.json; disabled, autoApprove fields; per-instance file path."
+    },
+    {
+      "id": "goose-mcp",
+      "title": "Goose — Extensions and MCP",
+      "url": "https://block.github.io/goose/docs/getting-started/using-extensions/",
+      "source": "block.github.io/goose",
+      "accessed": "2026-05-24",
+      "note": "~/.config/goose/config.yaml; extensions map keyed by name; type: stdio/sse/builtin."
+    },
+    {
+      "id": "goose-config",
+      "title": "Goose configuration file reference",
+      "url": "https://block.github.io/goose/docs/guides/config-file/",
+      "source": "block.github.io/goose",
+      "accessed": "2026-05-24",
+      "note": "YAML format, extensions key, GOOSE_DISABLE_KEYRING and secret references."
+    },
+    {
+      "id": "librechat-mcp",
+      "title": "LibreChat — MCP Servers",
+      "url": "https://www.librechat.ai/docs/features/mcp",
+      "source": "librechat.ai",
+      "accessed": "2026-05-24",
+      "note": "librechat.yaml mcpServers map; stdio/sse; timeout, iconPath; per-user vs system."
+    },
+    {
+      "id": "openwebui-mcp",
+      "title": "Open WebUI — MCP support via MCPO",
+      "url": "https://docs.openwebui.com/openapi-servers/mcp/",
+      "source": "docs.openwebui.com",
+      "accessed": "2026-05-24",
+      "note": "Open WebUI uses MCPO proxy converting stdio MCP to OpenAPI; not native MCP."
+    },
+    {
+      "id": "chezmoi-template",
+      "title": "chezmoi — Templates",
+      "url": "https://www.chezmoi.io/user-guide/templating/",
+      "source": "chezmoi.io",
+      "accessed": "2026-05-24",
+      "note": "Source-of-truth model with Go templates; managed files re-rendered idempotently."
+    },
+    {
+      "id": "chezmoi-encryption",
+      "title": "chezmoi — Encryption",
+      "url": "https://www.chezmoi.io/user-guide/encryption/",
+      "source": "chezmoi.io",
+      "accessed": "2026-05-24",
+      "note": "Age/gpg-backed secret references resolved at projection time."
+    },
+    {
+      "id": "homemanager-modules",
+      "title": "Home Manager — module system",
+      "url": "https://nix-community.github.io/home-manager/index.xhtml",
+      "source": "nix-community.github.io",
+      "accessed": "2026-05-24",
+      "note": "Declarative dotfile projection; activation diff and rollback."
+    },
+    {
+      "id": "dotter-readme",
+      "title": "dotter — Dotfile Manager",
+      "url": "https://github.com/SuperCuber/dotter",
+      "source": "github.com/SuperCuber",
+      "accessed": "2026-05-24",
+      "note": "Symlink + templating dotfile manager; per-target overlays."
+    },
+    {
+      "id": "mise-toml",
+      "title": "mise — Configuration",
+      "url": "https://mise.jdx.dev/configuration.html",
+      "source": "mise.jdx.dev",
+      "accessed": "2026-05-24",
+      "note": "Plugin registries via TOML; hierarchical config precedence."
+    },
+    {
+      "id": "asdf-plugins",
+      "title": "asdf — Plugins",
+      "url": "https://asdf-vm.com/manage/plugins.html",
+      "source": "asdf-vm.com",
+      "accessed": "2026-05-24",
+      "note": "Shell-script plugin model; community-driven plugin registry."
+    },
+    {
+      "id": "renovate-custom-managers",
+      "title": "Renovate — Custom Managers",
+      "url": "https://docs.renovatebot.com/modules/manager/custom/",
+      "source": "docs.renovatebot.com",
+      "accessed": "2026-05-24",
+      "note": "regex and JSONata-based custom managers; declarative extensibility template."
+    },
+    {
+      "id": "kustomize-overlays",
+      "title": "Kustomize — Overlays",
+      "url": "https://kubectl.docs.kubernetes.io/guides/config_management/components/",
+      "source": "kubernetes.io",
+      "accessed": "2026-05-24",
+      "note": "Base + overlay model with strategic-merge patches."
+    },
+    {
+      "id": "homebrew-taps",
+      "title": "Homebrew — Taps (third-party repositories)",
+      "url": "https://docs.brew.sh/Taps",
+      "source": "docs.brew.sh",
+      "accessed": "2026-05-24",
+      "note": "Community formula extensibility model — out-of-tree plugins."
+    },
+    {
+      "id": "proto-toml",
+      "title": "proto — Plugin TOML manifest",
+      "url": "https://moonrepo.dev/docs/proto/plugins",
+      "source": "moonrepo.dev",
+      "accessed": "2026-05-24",
+      "note": "Declarative TOML plugin schema for adding new tools without code."
+    },
+    {
+      "id": "jsonpath-rfc9535",
+      "title": "RFC 9535 — JSONPath",
+      "url": "https://www.rfc-editor.org/rfc/rfc9535.html",
+      "source": "rfc-editor.org",
+      "accessed": "2026-05-24",
+      "note": "Standardized JSONPath syntax — candidate for schema mapping expressions."
+    },
+    {
+      "id": "jq-manual",
+      "title": "jq — Command-line JSON processor",
+      "url": "https://jqlang.github.io/jq/manual/",
+      "source": "jqlang.github.io",
+      "accessed": "2026-05-24",
+      "note": "Alternative transform language; richer than JSONPath at cost of being a full DSL."
+    },
+    {
+      "id": "rfc-editorconfig",
+      "title": "EditorConfig — File format specification",
+      "url": "https://editorconfig.org/",
+      "source": "editorconfig.org",
+      "accessed": "2026-05-24",
+      "note": "Reference for community-extensible per-tool config conventions."
+    },
+    {
+      "id": "vscode-settings-precedence",
+      "title": "Visual Studio Code — User and Workspace Settings",
+      "url": "https://code.visualstudio.com/docs/configure/settings",
+      "source": "code.visualstudio.com",
+      "accessed": "2026-05-24",
+      "note": "User vs workspace precedence model used as template for projection scopes."
+    },
+    {
+      "id": "managed-block-ansible",
+      "title": "Ansible — blockinfile (managed-block markers)",
+      "url": "https://docs.ansible.com/ansible/latest/collections/ansible/builtin/blockinfile_module.html",
+      "source": "docs.ansible.com",
+      "accessed": "2026-05-24",
+      "note": "Original 'BEGIN ANSIBLE MANAGED BLOCK' pattern preserved across runs."
+    },
+    {
+      "id": "starship-config",
+      "title": "Starship — Configuration",
+      "url": "https://starship.rs/config/",
+      "source": "starship.rs",
+      "accessed": "2026-05-24",
+      "note": "TOML-based config that injects into multiple shell rcfiles via managed blocks."
+    },
+    {
+      "id": "fnm-readme",
+      "title": "fnm — Fast Node Manager",
+      "url": "https://github.com/Schniz/fnm",
+      "source": "github.com/Schniz",
+      "accessed": "2026-05-24",
+      "note": "Reference: 'fnm env' pattern for shell integration via eval-output rather than file write."
+    },
+    {
+      "id": "etcupdate-freebsd",
+      "title": "FreeBSD etcupdate — three-way merge for /etc",
+      "url": "https://man.freebsd.org/cgi/man.cgi?query=etcupdate",
+      "source": "man.freebsd.org",
+      "accessed": "2026-05-24",
+      "note": "Canonical reference for diff3-style three-way merge on managed config files."
+    },
+    {
+      "id": "git-diff3",
+      "title": "Git — diff3 merge style",
+      "url": "https://git-scm.com/docs/git-merge",
+      "source": "git-scm.com",
+      "accessed": "2026-05-24",
+      "note": "Three-way merge algorithm reference."
+    },
+    {
+      "id": "claude-code-config-paths",
+      "title": "Claude Code — Configuration file locations",
+      "url": "https://docs.claude.com/en/docs/claude-code/iam",
+      "source": "docs.claude.com",
+      "accessed": "2026-05-24",
+      "note": "Project (.claude/), user (~/.claude/), enterprise managed-settings precedence."
+    },
+    {
+      "id": "vscode-extension-discovery",
+      "title": "VS Code — extension discovery (~/.vscode/extensions and code --list-extensions)",
+      "url": "https://code.visualstudio.com/docs/configure/extensions/extension-marketplace",
+      "source": "code.visualstudio.com",
+      "accessed": "2026-05-24",
+      "note": "code --list-extensions is the canonical discovery hook."
+    },
+    {
+      "id": "jetbrains-toolbox",
+      "title": "JetBrains Toolbox — installed IDE inventory",
+      "url": "https://www.jetbrains.com/toolbox-app/",
+      "source": "jetbrains.com",
+      "accessed": "2026-05-24",
+      "note": "Toolbox stores installed-IDE metadata in well-known JSON state files."
+    },
+    {
+      "id": "macos-launchservices",
+      "title": "macOS — Launch Services and app discovery",
+      "url": "https://developer.apple.com/library/archive/documentation/Carbon/Conceptual/LaunchServicesConcepts/LSCConcepts/LSCConcepts.html",
+      "source": "developer.apple.com",
+      "accessed": "2026-05-24",
+      "note": "mdfind / LSCopyApplicationURLsForBundleIdentifier for cross-app discovery."
+    },
+    {
+      "id": "windows-app-paths",
+      "title": "Windows — App Paths registry key",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration",
+      "source": "learn.microsoft.com",
+      "accessed": "2026-05-24",
+      "note": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths for app discovery."
+    },
+    {
+      "id": "xdg-basedir",
+      "title": "XDG Base Directory Specification",
+      "url": "https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html",
+      "source": "specifications.freedesktop.org",
+      "accessed": "2026-05-24",
+      "note": "$XDG_CONFIG_HOME convention used by VS Code, Zed, Continue, etc."
+    },
+    {
+      "id": "secret-manager-podman",
+      "title": "podman secrets — reference patterns",
+      "url": "https://docs.podman.io/en/latest/markdown/podman-secret.1.html",
+      "source": "docs.podman.io",
+      "accessed": "2026-05-24",
+      "note": "Reference-only secret injection: stored once, projected as env at run time."
+    },
+    {
+      "id": "mcp-resources-discovery",
+      "title": "MCP — capability negotiation (spec 2025-06-18)",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Initialize handshake exposes protocolVersion; relevant for projector spec coercion."
+    },
+    {
+      "id": "deno-permissions",
+      "title": "Deno — Permissions model (--allow-read, --allow-net)",
+      "url": "https://docs.deno.com/runtime/manual/basics/permissions/",
+      "source": "docs.deno.com",
+      "accessed": "2026-05-24",
+      "note": "Reference for capability flag mapping when projecting stdio commands."
+    },
+    {
+      "id": "mcp-inspector",
+      "title": "MCP Inspector",
+      "url": "https://github.com/modelcontextprotocol/inspector",
+      "source": "github.com/modelcontextprotocol",
+      "accessed": "2026-05-24",
+      "note": "Reference for what a 'tool with no native config file' looks like; useful for ad-hoc projection."
+    },
+    {
+      "id": "rover-mcp-2025",
+      "title": "JetBrains AI — MCP server registry (2025.2)",
+      "url": "https://blog.jetbrains.com/ai/2025/06/junie-mcp-support/",
+      "source": "blog.jetbrains.com",
+      "accessed": "2026-05-24",
+      "note": "RustRover, IntelliJ, PyCharm share an IDE-wide MCP registry stored in options/mcp.xml."
+    },
+    {
+      "id": "claude-desktop-config",
+      "title": "Connect to local MCP servers — Claude Desktop",
+      "url": "https://modelcontextprotocol.io/docs/develop/connect-local-servers",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Canonical guide to claude_desktop_config.json paths."
+    },
+    {
+      "id": "diff3-rfc",
+      "title": "diff3 — Smith, A Generalized Differential Compression Algorithm",
+      "url": "https://www.gnu.org/software/diffutils/manual/html_node/Comparing-Three-Files.html",
+      "source": "gnu.org",
+      "accessed": "2026-05-24",
+      "note": "GNU diffutils three-way merge documentation."
+    },
+    {
+      "id": "fleet-mcp",
+      "title": "JetBrains Fleet — AI features",
+      "url": "https://www.jetbrains.com/fleet/",
+      "source": "jetbrains.com",
+      "accessed": "2026-05-24",
+      "note": "Fleet uses a separate config tree from IntelliJ-platform IDEs."
+    },
+    {
+      "id": "continue-config-yaml",
+      "title": "Continue — config.yaml reference",
+      "url": "https://docs.continue.dev/reference",
+      "source": "docs.continue.dev",
+      "accessed": "2026-05-24",
+      "note": "config.yaml location, schema, mcpServers array semantics."
+    },
+    {
+      "id": "windsurf-config-path",
+      "title": "Windsurf — config locations and OS paths",
+      "url": "https://docs.windsurf.com/windsurf/configuration",
+      "source": "docs.windsurf.com",
+      "accessed": "2026-05-24",
+      "note": "~/.codeium/windsurf-next on macOS/Linux; %USERPROFILE%\\.codeium on Windows."
+    },
+    {
+      "id": "owl-rfc-overlay",
+      "title": "JSON Merge Patch — RFC 7396",
+      "url": "https://www.rfc-editor.org/rfc/rfc7396",
+      "source": "rfc-editor.org",
+      "accessed": "2026-05-24",
+      "note": "RFC-7396 merge semantics — candidate for overlay-style projection."
+    },
+    {
+      "id": "json-patch-rfc6902",
+      "title": "JSON Patch — RFC 6902",
+      "url": "https://www.rfc-editor.org/rfc/rfc6902",
+      "source": "rfc-editor.org",
+      "accessed": "2026-05-24",
+      "note": "Operation-based patch format — second candidate for overlay engine."
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Isolation ranking matrix — stoic-badger-sandbox · MCP Manager v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+<script type="module" src="../assets/matrix.js"></script>
+<script type="module" src="../assets/decision-tree.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">stoic-badger-sandbox</a> / ranking matrix</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Interactive isolation-strategy matrix</h1>
+  <p class="lede">
+    Eight strategies, eight criteria, all scores backed by an evidence link. Drag the weight sliders to see how the ranking shifts when you favour reproducibility over install friction, or vice versa.
+  </p>
+
+  <h2>How to read this</h2>
+  <ul>
+    <li><strong>Scores 0–5</strong> per option / criterion. 5 means "best in class for this criterion;" 0 means "this option doesn't really do this."</li>
+    <li><strong>Weights</strong> sum to ~1.0 by default. Move sliders to re-weight.</li>
+    <li><strong>Evidence</strong>: each numeric score has bracketed links pointing back to the citation that justifies the score.</li>
+    <li>The reset button restores the default weights, which reflect a security-leaning bias (reproducibility + isolation are heaviest).</li>
+  </ul>
+
+  <div data-matrix-src="./data/nix-isolation-ranking.json"></div>
+
+  <h2>Default-weight headline</h2>
+  <p>
+    With the default weighting, <strong>devenv + OS sandbox</strong> leads on the strength-of-evidence side: build-time reproducibility from Nix plus run-time scoping from whichever OS sandbox is available. <strong>Docker MCP Toolkit</strong> and <strong>Podman rootless</strong> sit close behind as the cross-platform escape hatches. <strong>OS native install</strong> ranks last on both the threat-model criteria.<cite data-ref="docker-mcp-toolkit"></cite><cite data-ref="podman-rootless"></cite><cite data-ref="bubblewrap-repo"></cite>
+  </p>
+
+  <h2>What happens if you reweight</h2>
+  <ul>
+    <li>Maximise <em>install friction (low)</em> and <em>dev ergonomics</em>: raw <code>npx</code>/<code>uvx</code> rises sharply — at the cost of the threat-model score.<cite data-ref="uvx-docs"></cite></li>
+    <li>Maximise <em>cross-platform parity</em>: <code>Docker</code> wins, because it is the most uniform across Linux/macOS/Windows.<cite data-ref="docker-mcp-toolkit"></cite></li>
+    <li>Maximise <em>startup latency</em>: bubblewrap+uvx and sandbox-exec+uvx top out, because native exec beats container cold-starts.<cite data-ref="bubblewrap-repo"></cite><cite data-ref="podman-rootless"></cite></li>
+    <li>Maximise <em>reproducibility</em>: devenv-based options dominate by design.<cite data-ref="devenv-home"></cite><cite data-ref="nix-flakes"></cite></li>
+  </ul>
+
+  <h2>Walk-through: decision tree</h2>
+  <p>For a quick path through the space without playing with sliders, follow this tree:</p>
+  <div data-tree-src="./data/nix-isolation-tree.json"></div>
+
+  <h2>Caveats around the scoring</h2>
+  <ul>
+    <li><strong>Subjectivity</strong>: scores were calibrated against the cited sources, but five judges would produce five slightly different matrices. The reader is invited to re-score; the <code>data/nix-isolation-ranking.json</code> file is plain JSON.</li>
+    <li><strong>Recency</strong>: Docker MCP Toolkit, devenv, and SecretSpec all moved fast in 2025-26 — scores reflect the cited 2026-05-24 snapshot.<cite data-ref="docker-mcp-toolkit"></cite><cite data-ref="secretspec-announce"></cite></li>
+    <li><strong>Combo strategies</strong>: the matrix treats &ldquo;bubblewrap + uvx&rdquo; as one row to keep things finite, but a real deployment could mix-and-match.</li>
+  </ul>
+</main>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recommendation — Client API · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">precise-crane-conduit</a> / Recommendation</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Stream recommendation — JSON-RPC 2.0 over UDS, with optional HTTP/SSE bridge</h1>
+
+  <div class="recommendation-callout">
+    <h3>Recommended stack</h3>
+    <ul>
+      <li><strong>Wire protocol:</strong> JSON-RPC 2.0<sup><cite data-ref="jsonrpc-2-spec"></cite></sup> implemented with <code>jsonrpsee</code><sup><cite data-ref="jsonrpsee-github"></cite></sup>; subscriptions for streams.</li>
+      <li><strong>Primary transport:</strong> Unix domain socket on Linux/macOS, named pipe on Windows, via <code>parity-tokio-ipc</code> or <code>interprocess</code><sup><cite data-ref="parity-tokio-ipc"></cite></sup><sup><cite data-ref="interprocess-crate"></cite></sup>; well-known path <code>$XDG_RUNTIME_DIR/mcp-manager/api.sock</code> (Linux), <code>$TMPDIR/mcp-manager/api.sock</code> (macOS), <code>\\.\pipe\mcp-manager.&lt;user&gt;</code> (Windows).</li>
+      <li><strong>Optional secondary transport:</strong> HTTP/1.1 loopback with SSE for streams, gated by a bearer token, mounted only when a browser-based client (Tauri WebView, future web console) requires it.</li>
+      <li><strong>Frame discipline:</strong> NDJSON<sup><cite data-ref="ndjson-spec"></cite></sup> over the raw socket — same framing MCP itself uses for stdio<sup><cite data-ref="mcp-transports"></cite></sup> — so the daemon's stdio-MCP code path and its client-API code path share helpers.</li>
+      <li><strong>Streaming:</strong> JSON-RPC subscription pattern (server-to-client notifications keyed to a subscription id). Every notification carries a monotonic <code>cursor</code> for resume-after-disconnect — Kubernetes-style<sup><cite data-ref="k8s-watch"></cite></sup>.</li>
+      <li><strong>Auth:</strong> filesystem-mode 0600 on UDS / restrictive SDDL on named pipe; bearer token additionally on the HTTP bridge if mounted<sup><cite data-ref="msdn-named-pipe-security"></cite></sup>.</li>
+      <li><strong>Schema:</strong> JSON Schema (draft 2020-12, OpenAPI 3.1-compatible)<sup><cite data-ref="openapi-spec"></cite></sup> co-located with the daemon, exposed via <code>system.schema</code>. Semver of the API independent of binary version.</li>
+    </ul>
+  </div>
+
+  <section class="section">
+    <h2>Why this stack — linked rationale</h2>
+
+    <p>
+      The matrix at default weights ranks JSON-RPC-over-UDS in the top cluster on <em>debuggability</em>, <em>codegen burden</em>, <em>cross-platform</em>, and <em>Rust ecosystem maturity</em>, while losing only modestly on <em>perf</em> and <em>schema versioning</em> (see <a href="./matrix-client-api-ranking.html">ranking</a>). The decisive factors:
+    </p>
+
+    <ol>
+      <li><strong>MCP affinity.</strong> The Model Context Protocol itself uses JSON-RPC 2.0 over stdio and Streamable HTTP<sup><cite data-ref="mcp-transports"></cite></sup>. The daemon already needs a JSON-RPC parser/encoder + NDJSON framer to talk to MCP servers. Reusing that code path for the client API halves the protocol-handling surface.</li>
+      <li><strong>Debuggability under field conditions.</strong> Users hitting bugs can describe what they see with <code>socat</code> and the daemon log. gRPC and Cap'n Proto would require us to ship and document a binary tool just to read the wire (<a href="./analysis-client-api-tradeoffs.html#friction-examples">analysis</a>).</li>
+      <li><strong>Single-user, single-machine threat model.</strong> UDS in <code>$XDG_RUNTIME_DIR</code> (mode 0700 directory)<sup><cite data-ref="xdg-runtime-dir"></cite></sup> needs no application-layer token. This matches Docker's well-understood model<sup><cite data-ref="docker-socket-perms"></cite></sup> without inheriting its multi-user-via-group complexity.</li>
+      <li><strong>Tauri compatibility without dictating Stream 5.</strong> Tauri's GUI can either embed the daemon and use Tauri channels<sup><cite data-ref="tauri-channel-streaming"></cite></sup>, or talk to a separate daemon over the optional HTTP/SSE bridge. The core can support both without redesign.</li>
+      <li><strong>Contribution barrier.</strong> Adding a method is "write a function + register". Adding a method to a gRPC service is "edit <code>.proto</code> + regenerate + write a function + register". That extra step compounds over the lifetime of the project<sup><cite data-ref="prost-gh"></cite></sup>.</li>
+    </ol>
+
+    <p>What we accept by choosing this:</p>
+    <ul>
+      <li><strong>No protocol-level backpressure.</strong> Backpressure on log/event streams is TCP-buffer level. For the projected load (a few MCP servers, a few hundred log lines/s each) this is fine. If load grows past that we will need to add per-stream credit accounting in the daemon — not infrastructure, but extra code.</li>
+      <li><strong>Hand-written schema discipline.</strong> JSON has no built-in evolution machinery. The daemon will ship JSON Schemas and version the API per <a href="./research-client-api-versioning.html">versioning policy</a> — discipline, not compile-time enforcement.</li>
+      <li><strong>~20–30% larger wire size than binary formats.</strong> Acceptable on a local socket; not a customer-visible cost.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>Recommended schema sketch</h2>
+
+    <h3>Connection bootstrap</h3>
+<pre><code>// Client opens UDS / named pipe; sends first frame:
+{ "jsonrpc": "2.0", "id": 1, "method": "system.hello",
+  "params": { "client_api_version": 1, "client": { "name": "mcp", "version": "0.1.0", "kind": "cli" } } }
+
+// Server replies with negotiated version + daemon info:
+{ "jsonrpc": "2.0", "id": 1,
+  "result": { "server_api_version": 1, "min_api_version": 1, "daemon_version": "0.3.7",
+              "capabilities": ["server.search", "runtime.attach"] } }</code></pre>
+
+    <h3>Representative unary call — <code>runtime.start</code></h3>
+<pre><code>// Request
+{ "jsonrpc": "2.0", "id": 17, "method": "runtime.start",
+  "params": { "server_id": "github-mcp", "idempotency_key": "01HEX..." } }
+
+// Response
+{ "jsonrpc": "2.0", "id": 17,
+  "result": { "instance_id": "inst_01HEX...", "state": "starting",
+              "operation_id": "op_01HEX..." } }
+
+// On error
+{ "jsonrpc": "2.0", "id": 17,
+  "error": { "code": -32000, "message": "INSTALL_REQUIRED",
+             "data": { "kind": "precondition", "retryable": false,
+                       "details": { "server_id": "github-mcp" } } } }</code></pre>
+
+    <h3>Representative subscription — <code>log.tail</code></h3>
+<pre><code>// Subscribe
+{ "jsonrpc": "2.0", "id": 42, "method": "log.tail.subscribe",
+  "params": { "instance_id": "inst_01HEX...", "follow": true,
+              "since_cursor": "cur_AAABl9xWqz" } }
+
+// Response — subscription handle
+{ "jsonrpc": "2.0", "id": 42,
+  "result": { "subscription": "sub_01HEX..." } }
+
+// Server-initiated notifications (one per line, NDJSON):
+{ "jsonrpc": "2.0", "method": "log.tail.update",
+  "params": { "subscription": "sub_01HEX...",
+              "frame": { "cursor": "cur_AAABl9xWr0", "ts": "2026-05-24T14:25:01.412Z",
+                         "stream": "stderr", "level": "info",
+                         "message": "tool=create_issue duration_ms=143" } } }
+
+// Unsubscribe
+{ "jsonrpc": "2.0", "id": 43, "method": "log.tail.unsubscribe",
+  "params": { "subscription": "sub_01HEX..." } }</code></pre>
+
+    <h3>Representative broadcast — <code>event.subscribe</code></h3>
+<pre><code>{ "jsonrpc": "2.0", "id": 1001, "method": "event.subscribe",
+  "params": { "topics": ["runtime.state_changed", "install.*"],
+              "since_cursor": "evt_01HEX..." } }
+
+// Notifications carry their own cursor field
+{ "jsonrpc": "2.0", "method": "event.update",
+  "params": { "subscription": "sub_01HEX...",
+              "event": { "cursor": "evt_01HEX...", "topic": "runtime.state_changed",
+                         "instance_id": "inst_01HEX...",
+                         "from": "starting", "to": "running",
+                         "ts": "2026-05-24T14:22:00.412Z" } } }</code></pre>
+
+    <h3>Optional HTTP/SSE bridge — same calls, REST-shaped</h3>
+<pre><code>POST /v1/rpc                                  // body = JSON-RPC envelope
+Authorization: Bearer &lt;session_token&gt;
+
+GET  /v1/streams/log?instance_id=inst_...      // text/event-stream (SSE)
+GET  /v1/streams/events?topic=runtime.*        // text/event-stream (SSE)
+
+# SSE frames mirror the JSON-RPC notification "params.frame" body 1:1,
+# and SSE 'id:' lines carry the same cursor so EventSource auto-reconnect
+# transparently resumes via Last-Event-ID.</code></pre>
+  </section>
+
+  <section class="section">
+    <h2>Compat boundary with the daemon (Stream 3 handoff)</h2>
+    <p>
+      This stream commits to:
+    </p>
+    <ul>
+      <li>The on-wire format (JSON-RPC 2.0).</li>
+      <li>The transport (UDS / named pipe; optional HTTP/SSE).</li>
+      <li>The set of methods and their request/response shapes (see <a href="./research-client-api-surface.html">surface</a>).</li>
+      <li>The versioning policy (semver of the API; <code>system.hello</code> negotiation).</li>
+    </ul>
+    <p>
+      This stream does <em>not</em> commit:
+    </p>
+    <ul>
+      <li>Whether the daemon is a separate process or a library linked into the GUI — Stream 3.</li>
+      <li>Which Rust crate hosts the JSON-RPC server module organization — Stream 3, though <code>jsonrpsee</code> is suggested<sup><cite data-ref="jsonrpsee-docs"></cite></sup>.</li>
+      <li>Which framework each client uses to consume the API — Stream 5.</li>
+    </ul>
+    <p>
+      The contract Stream 3 receives: "implement these methods speaking JSON-RPC 2.0 over a tokio-async UDS / named-pipe listener, with NDJSON framing, exposing subscriptions for log/event streams". The contract Stream 5 receives: "your CLI/TUI/GUI may assume JSON-RPC over the path the daemon advertises, with the schemas in this stream's research pages".
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>Open questions for the orchestrator</h2>
+    <ul>
+      <li>Does the GUI ship Tauri (browser engine present) or a native toolkit? If native, the optional HTTP/SSE bridge can be skipped in v1.0. This blocks on Stream 5's framework decision.</li>
+      <li>Is multi-user (shared daemon for all users on a workstation) ever in scope? If yes, the recommendation shifts toward Docker-style group-permissioned socket plus bearer tokens.</li>
+      <li>Is the daemon expected to run as a system service (root-owned, system-level) or strictly per-user? This stream assumed per-user.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

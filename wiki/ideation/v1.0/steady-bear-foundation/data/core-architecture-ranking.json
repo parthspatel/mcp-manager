@@ -1,0 +1,122 @@
+{
+  "title": "Core architecture archetypes — scored 0-5 against eight criteria. Drag sliders to re-weight.",
+  "options": [
+    "Daemon required (docker-style)",
+    "Daemonless w/ optional daemon (podman-style)",
+    "Library + CLI only (cargo-style)",
+    "Single binary w/ embedded daemon",
+    "Microkernel w/ plugin runtimes"
+  ],
+  "criteria": [
+    { "key": "startup_latency", "label": "Startup latency", "weight": 0.12 },
+    { "key": "complexity", "label": "Impl. complexity", "weight": 0.14 },
+    { "key": "multi_user_support", "label": "Multi-user support", "weight": 0.10 },
+    { "key": "security_boundary", "label": "Security boundary", "weight": 0.14 },
+    { "key": "os_support", "label": "Cross-OS support", "weight": 0.12 },
+    { "key": "crash_recovery", "label": "Crash recovery", "weight": 0.12 },
+    { "key": "telemetry", "label": "Telemetry/observability", "weight": 0.10 },
+    { "key": "dev_velocity", "label": "Dev velocity (v1)", "weight": 0.16 }
+  ],
+  "scores": {
+    "Daemon required (docker-style)": {
+      "startup_latency": 2,
+      "complexity": 2,
+      "multi_user_support": 5,
+      "security_boundary": 4,
+      "os_support": 3,
+      "crash_recovery": 5,
+      "telemetry": 5,
+      "dev_velocity": 2,
+      "_evidence": {
+        "startup_latency": ["#cite-docker-overview"],
+        "complexity": ["#cite-docker-overview", "#cite-containerd-shim-blog"],
+        "security_boundary": ["#cite-docker-overview"],
+        "multi_user_support": ["#cite-docker-overview"],
+        "crash_recovery": ["#cite-conmon-readme", "#cite-containerd-shim-blog"],
+        "telemetry": ["#cite-systemd-wikipedia"],
+        "os_support": ["#cite-launchd-info"],
+        "dev_velocity": ["#cite-docker-overview"]
+      }
+    },
+    "Daemonless w/ optional daemon (podman-style)": {
+      "startup_latency": 4,
+      "complexity": 3,
+      "multi_user_support": 4,
+      "security_boundary": 4,
+      "os_support": 4,
+      "crash_recovery": 4,
+      "telemetry": 4,
+      "dev_velocity": 4,
+      "_evidence": {
+        "startup_latency": ["#cite-podman-overview"],
+        "complexity": ["#cite-podman-overview", "#cite-conmon-readme"],
+        "security_boundary": ["#cite-podman-overview"],
+        "multi_user_support": ["#cite-nix-multi-user"],
+        "crash_recovery": ["#cite-conmon-readme"],
+        "telemetry": ["#cite-systemd-cgroup-delegation"],
+        "os_support": ["#cite-launchd-info", "#cite-podman-overview"],
+        "dev_velocity": ["#cite-podman-overview"]
+      }
+    },
+    "Library + CLI only (cargo-style)": {
+      "startup_latency": 5,
+      "complexity": 5,
+      "multi_user_support": 2,
+      "security_boundary": 2,
+      "os_support": 5,
+      "crash_recovery": 2,
+      "telemetry": 3,
+      "dev_velocity": 5,
+      "_evidence": {
+        "startup_latency": ["#cite-cargo-workspaces-book"],
+        "complexity": ["#cite-cargo-workspaces-book", "#cite-uvx-handbook"],
+        "security_boundary": ["#cite-uvx-handbook"],
+        "multi_user_support": ["#cite-cargo-workspaces-book"],
+        "crash_recovery": ["#cite-uvx-handbook"],
+        "telemetry": ["#cite-tracing-crate-docs"],
+        "os_support": ["#cite-cargo-workspaces-book"],
+        "dev_velocity": ["#cite-matklad-large-workspaces"]
+      }
+    },
+    "Single binary w/ embedded daemon": {
+      "startup_latency": 4,
+      "complexity": 3,
+      "multi_user_support": 3,
+      "security_boundary": 3,
+      "os_support": 4,
+      "crash_recovery": 4,
+      "telemetry": 4,
+      "dev_velocity": 4,
+      "_evidence": {
+        "startup_latency": ["#cite-tokio-spawn"],
+        "complexity": ["#cite-tokio-process-command", "#cite-process-wrap-crate"],
+        "security_boundary": ["#cite-interprocess-crate"],
+        "multi_user_support": ["#cite-launchd-info"],
+        "crash_recovery": ["#cite-process-wrap-crate", "#cite-win32job-crate"],
+        "telemetry": ["#cite-tracing-crate-docs"],
+        "os_support": ["#cite-interprocess-crate", "#cite-keyring-crate"],
+        "dev_velocity": ["#cite-rmcp-rust-sdk"]
+      }
+    },
+    "Microkernel w/ plugin runtimes": {
+      "startup_latency": 3,
+      "complexity": 1,
+      "multi_user_support": 4,
+      "security_boundary": 5,
+      "os_support": 2,
+      "crash_recovery": 4,
+      "telemetry": 5,
+      "dev_velocity": 1,
+      "_evidence": {
+        "startup_latency": ["#cite-containerd-shim-blog"],
+        "complexity": ["#cite-containerd-shim-blog", "#cite-lima-architecture"],
+        "security_boundary": ["#cite-conmon-readme"],
+        "multi_user_support": ["#cite-systemd-cgroup-delegation"],
+        "crash_recovery": ["#cite-containerd-shim-blog"],
+        "telemetry": ["#cite-systemd-wikipedia"],
+        "os_support": ["#cite-lima-architecture"],
+        "dev_velocity": ["#cite-lima-architecture"]
+      }
+    }
+  }
+}

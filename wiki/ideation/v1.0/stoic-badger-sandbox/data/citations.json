@@ -1,0 +1,235 @@
+{
+  "entries": [
+    {
+      "id": "mcp-spec",
+      "title": "Model Context Protocol — Specification (2025-06-18)",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18",
+      "accessed": "2026-05-24",
+      "note": "Defines JSON-RPC 2.0 wire format, hosts/clients/servers, and security/trust principles. Notes that 'MCP itself cannot enforce these security principles at the protocol level' — isolation is the host's responsibility."
+    },
+    {
+      "id": "nix-manual-intro",
+      "title": "Nix Reference Manual — Introduction",
+      "url": "https://nix.dev/manual/nix/stable/introduction",
+      "accessed": "2026-05-24",
+      "note": "Functional package manager; immutable /nix/store with hash-addressed paths; deterministic derivations."
+    },
+    {
+      "id": "nix-flakes",
+      "title": "Nix Flakes — nix.dev",
+      "url": "https://nix.dev/concepts/flakes",
+      "accessed": "2026-05-24",
+      "note": "Inputs/outputs model, flake.lock pinning, still flagged experimental."
+    },
+    {
+      "id": "devenv-home",
+      "title": "devenv.sh — Fast, Declarative, Reproducible, and Composable Developer Environments",
+      "url": "https://devenv.sh/",
+      "accessed": "2026-05-24",
+      "note": "Higher-level wrapper around Nix; ~100ms activation; 50+ language modules; processes/services; SecretSpec integration."
+    },
+    {
+      "id": "devenv-languages",
+      "title": "devenv.sh — Languages",
+      "url": "https://devenv.sh/languages/",
+      "accessed": "2026-05-24",
+      "note": "60+ language toggles including languages.python, languages.javascript, languages.rust with channel/version selectors."
+    },
+    {
+      "id": "devenv-secretspec-integration",
+      "title": "devenv.sh — SecretSpec integration",
+      "url": "https://devenv.sh/integrations/secretspec/",
+      "accessed": "2026-05-24",
+      "note": "Recommends loading secrets at runtime (secretspec run --), not into the shell env."
+    },
+    {
+      "id": "secretspec-home",
+      "title": "SecretSpec — Declarative secrets, every environment, any provider",
+      "url": "https://secretspec.dev/",
+      "accessed": "2026-05-24",
+      "note": "Separates declaration from storage; providers include keyring, dotenv, env, pass, 1Password, LastPass, Bitwarden, AWS/GCP Secrets Manager, Vault/OpenBao."
+    },
+    {
+      "id": "secretspec-github",
+      "title": "cachix/secretspec — GitHub",
+      "url": "https://github.com/cachix/secretspec",
+      "accessed": "2026-05-24",
+      "note": "Reference TOML schema and CLI invocation patterns."
+    },
+    {
+      "id": "sops-nix",
+      "title": "Mic92/sops-nix — Atomic secret provisioning for NixOS based on sops",
+      "url": "https://github.com/Mic92/sops-nix",
+      "accessed": "2026-05-24",
+      "note": "Decrypts at activation, supports age/GPG/AWS/GCP/Azure/Vault."
+    },
+    {
+      "id": "agenix",
+      "title": "ryantm/agenix — age-encrypted secrets for NixOS",
+      "url": "https://github.com/ryantm/agenix",
+      "accessed": "2026-05-24",
+      "note": "Uses SSH public keys for encryption, mounts decrypted secrets at /run/agenix/."
+    },
+    {
+      "id": "pass-home",
+      "title": "Pass — The Standard Unix Password Manager",
+      "url": "https://www.passwordstore.org/",
+      "accessed": "2026-05-24",
+      "note": "GPG-encrypted password files in ~/.password-store; Git history; extensions; libsecret bridge exists."
+    },
+    {
+      "id": "bubblewrap-repo",
+      "title": "containers/bubblewrap — Unprivileged sandboxing tool",
+      "url": "https://github.com/containers/bubblewrap",
+      "accessed": "2026-05-24",
+      "note": "Uses Linux user namespaces; --ro-bind, --unshare-pid, --unshare-net, seccomp filter support."
+    },
+    {
+      "id": "firejail-home",
+      "title": "Firejail — Linux namespaces sandbox",
+      "url": "https://firejail.wordpress.com/",
+      "accessed": "2026-05-24",
+      "note": "SUID helper, namespaces + seccomp-bpf, profiles shipped for 1,000+ desktop apps."
+    },
+    {
+      "id": "nsjail-repo",
+      "title": "google/nsjail — Lightweight process isolation tool",
+      "url": "https://github.com/google/nsjail",
+      "accessed": "2026-05-24",
+      "note": "Namespaces + cgroups + rlimits + seccomp-bpf via Kafel; TCP-listener and one-shot modes."
+    },
+    {
+      "id": "sandbox-exec-jmmv",
+      "title": "A quick glance at macOS' sandbox-exec — Julio Merino",
+      "url": "https://jmmv.dev/2019/11/macos-sandbox-exec.html",
+      "accessed": "2026-05-24",
+      "note": "Walk-through of SBPL syntax via real Bazel profile; documents stability quirks across macOS versions."
+    },
+    {
+      "id": "sandbox-exec-deprecation",
+      "title": "Clarify sandbox-exec deprecation timeline (apple/containerization #737)",
+      "url": "https://github.com/apple/containerization/issues/737",
+      "accessed": "2026-05-24",
+      "note": "Confirms sandbox-exec is deprecated but still functional, with no published replacement for headless/CLI sandboxing."
+    },
+    {
+      "id": "appcontainer-isolation",
+      "title": "AppContainer isolation — Win32 apps (Microsoft Learn)",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation",
+      "accessed": "2026-05-24",
+      "note": "Isolation domains: credential, device, file/registry, network, process, window. Capabilities-based access."
+    },
+    {
+      "id": "win32-app-isolation",
+      "title": "Public Preview: Improve Win32 app security via app isolation — Windows Developer Blog",
+      "url": "https://blogs.windows.com/windowsdeveloper/2023/06/14/public-preview-improve-win32-app-security-via-app-isolation/",
+      "accessed": "2026-05-24",
+      "note": "Two-step model: low-integrity AppContainer launch + capability checks."
+    },
+    {
+      "id": "docker-mcp-toolkit",
+      "title": "Docker MCP Toolkit — Docker Docs",
+      "url": "https://docs.docker.com/ai/mcp-catalog-and-toolkit/toolkit/",
+      "accessed": "2026-05-24",
+      "note": "1 CPU and 2 GB cap per server; no host FS access by default; secrets blocked in tool I/O."
+    },
+    {
+      "id": "docker-mcp-blog",
+      "title": "Docker MCP Toolkit: Run MCP Servers Securely — Docker Blog",
+      "url": "https://www.docker.com/blog/mcp-toolkit-mcp-servers-that-just-work/",
+      "accessed": "2026-05-24",
+      "note": "Architecture overview, signed images, profile system."
+    },
+    {
+      "id": "podman-rootless",
+      "title": "Podman vs Docker rootless containers — DDEV",
+      "url": "https://ddev.com/blog/podman-and-docker-rootless/",
+      "accessed": "2026-05-24",
+      "note": "Daemonless model, rootless default, user-namespace UID mapping."
+    },
+    {
+      "id": "uvx-docs",
+      "title": "uvx — Run Python CLI tools in isolated environments (pydevtools)",
+      "url": "https://pydevtools.com/handbook/reference/uvx/",
+      "accessed": "2026-05-24",
+      "note": "Ephemeral isolated venvs; ~1s cold, tens-of-ms warm; written in Rust."
+    },
+    {
+      "id": "pipx-comparisons",
+      "title": "pipx vs alternatives (uv tool) — pipx docs",
+      "url": "https://pipx.pypa.io/stable/explanation/comparisons/",
+      "accessed": "2026-05-24",
+      "note": "Both install console scripts on PATH in isolated venvs; pipx unique flags (inject, --global)."
+    },
+    {
+      "id": "mcp-supply-chain-docker",
+      "title": "MCP Horror Stories: The Supply Chain Attack — Docker Blog",
+      "url": "https://www.docker.com/blog/mcp-horror-stories-the-supply-chain-attack/",
+      "accessed": "2026-05-24",
+      "note": "Documents npx supply-chain risk vector for MCP servers; CVE-2025-6514 (mcp-remote RCE, CVSS 9.6)."
+    },
+    {
+      "id": "mcp-toolradar",
+      "title": "MCP Server Security: Best Practices & Common Mistakes — Toolradar",
+      "url": "https://toolradar.com/blog/mcp-server-security-best-practices",
+      "accessed": "2026-05-24",
+      "note": "Pin versions, prefer Docker/Podman, treat npx as 'curl | bash'."
+    },
+    {
+      "id": "libsecret-arch",
+      "title": "GNOME/Keyring — ArchWiki (libsecret, Secret Service D-Bus API)",
+      "url": "https://wiki.archlinux.org/title/GNOME/Keyring",
+      "accessed": "2026-05-24",
+      "note": "libsecret is the modern client; gnome-keyring and ksecretservice implement the Secret Service D-Bus API."
+    },
+    {
+      "id": "windows-dpapi-crate",
+      "title": "windows-dpapi — crates.io",
+      "url": "https://crates.io/crates/windows-dpapi",
+      "accessed": "2026-05-24",
+      "note": "Safe Rust wrapper over Windows Data Protection API; User vs Machine scope."
+    },
+    {
+      "id": "keyring-rust",
+      "title": "keyring — Rust cross-platform credential store",
+      "url": "https://docs.rs/keyring",
+      "accessed": "2026-05-24",
+      "note": "macOS Keychain, Secret Service (libsecret), Windows Credential Manager backends."
+    },
+    {
+      "id": "vault-agent",
+      "title": "Vault Agent — HashiCorp Developer",
+      "url": "https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent",
+      "accessed": "2026-05-24",
+      "note": "Client daemon, auto-auth, template rendering of secrets to disk/env."
+    },
+    {
+      "id": "nix-pain-rgoulter",
+      "title": "The Three Difficult Things about Nix — Richard Goulter",
+      "url": "https://rgoulter.com/blog/posts/programming/2024-05-09-the-three-difficult-things-about-nix.html",
+      "accessed": "2026-05-24",
+      "note": "Documents Nix's tripartite learning burden: language, Nixpkgs internals, system-under-Nix."
+    },
+    {
+      "id": "nix-discourse-curve",
+      "title": "Documentation Team: Flattening the learning curve — NixOS Discourse",
+      "url": "https://discourse.nixos.org/t/documentation-team-flattening-the-learning-curve/20003",
+      "accessed": "2026-05-24",
+      "note": "Community survey confirming documentation deficits."
+    },
+    {
+      "id": "secretspec-announce",
+      "title": "Announcing SecretSpec: Declarative Secrets Management — devenv blog",
+      "url": "https://devenv.sh/blog/2025/07/21/announcing-secretspec-declarative-secrets-management/",
+      "accessed": "2026-05-24",
+      "note": "Origin and motivation for SecretSpec as a devenv-adjacent project."
+    },
+    {
+      "id": "alcoholless-medium",
+      "title": "Alcoholless: A Lightweight Security Sandbox for macOS Programs — Akihiro Suda (NTT Labs)",
+      "url": "https://medium.com/nttlabs/alcoholless-a-lightweight-security-sandbox-for-macos-programs-homebrew-ai-agents-etc-ccf0d1927301",
+      "accessed": "2026-05-24",
+      "note": "Demonstrates wrapping AI/agent tools with sandbox-exec in 2025-era practice."
+    }
+  ]
+}

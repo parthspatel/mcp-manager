@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Known MCP-consuming clients catalog &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">clever-fox-bridge</a> / known clients</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Catalog of known MCP-consuming clients</h1>
+
+<p class="lede">
+For each tool MCP Manager could project into, this page documents: the exact file path(s) per OS, the schema shape, the env-var expansion syntax, whether the tool understands stdio / HTTP / SSE transports, the per-project vs global precedence model, the MCP-spec version supported, and any known deprecations or migration footguns. Stream 1 (<a href="../curious-otter-survey/research-mcp-config-schemas.html">curious-otter-survey/research-mcp-config-schemas.html</a>) already enumerated the on-disk JSON shapes; this catalog focuses on the <em>projection-relevant facts</em> our writer needs.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#tier1">Tier-1 candidates (catalog of priority targets)</a></li>
+    <li><a href="#tier2">Tier-2 candidates</a></li>
+    <li><a href="#out-of-scope">Out of scope for v1.0</a></li>
+    <li><a href="#summary-table">At-a-glance summary table</a></li>
+  </ul>
+</nav>
+
+<h2 id="tier1">Tier-1 candidates</h2>
+
+<details class="accordion" open>
+  <summary>Claude Code CLI &mdash; <code>~/.claude/settings.json</code> + <code>.mcp.json</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td>
+        User: <code>~/.claude/settings.json</code><br>
+        Project: <code>&lt;repo&gt;/.claude/settings.json</code> and <code>&lt;repo&gt;/.mcp.json</code><br>
+        Enterprise: <code>/Library/Application Support/ClaudeCode/managed-settings.json</code> on macOS, <code>/etc/claude-code/managed-settings.json</code> on Linux<cite data-ref="claude-code-config-paths"></cite>
+      </td></tr>
+      <tr><td><strong>Format</strong></td><td>JSON. Top-level key <code>mcpServers</code> (object).</td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>Optional <code>type</code> field (<code>stdio</code> / <code>http</code> / <code>sse</code>, alias <code>streamable-http</code>). Without it, presence of <code>command</code> vs <code>url</code> determines transport.<cite data-ref="claude-code-mcp"></cite></td></tr>
+      <tr><td><strong>Env expansion</strong></td><td><code>${VAR}</code> and <code>${VAR:-default}</code>. Resolved by Claude Code at server-start time, not config-load time.<cite data-ref="claude-code-mcp"></cite></td></tr>
+      <tr><td><strong>Secrets pattern</strong></td><td>Inline <code>env</code> map values or <code>headersHelper</code> (executable that prints JSON of HTTP headers per invocation).<cite data-ref="claude-code-mcp"></cite></td></tr>
+      <tr><td><strong>Scope precedence</strong></td><td>Enterprise &gt; CLI flags &gt; project local &gt; project shared &gt; user. Project <code>.mcp.json</code> requires explicit approval on first load.<cite data-ref="claude-code-config-paths"></cite></td></tr>
+      <tr><td><strong>MCP spec version</strong></td><td>Tracks current spec; supports Streamable HTTP and stdio.<cite data-ref="mcp-spec-transports"></cite></td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>Strict JSON &mdash; comments are <em>not</em> allowed, so managed-block markers must use sentinel keys (<code>"_mcpManagerManaged"</code>) rather than comment fences. Prefer projecting into a sibling file (<code>.mcp.json</code>) so the user's <code>settings.json</code> is never touched.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion" open>
+  <summary>Codex CLI (OpenAI) &mdash; <code>~/.codex/config.toml</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td><code>~/.codex/config.toml</code> on Unix; <code>%USERPROFILE%\.codex\config.toml</code> on Windows.<cite data-ref="codex-mcp"></cite></td></tr>
+      <tr><td><strong>Format</strong></td><td>TOML. MCP servers declared as <code>[mcp_servers.<em>name</em>]</code> tables.</td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>Implicit: only stdio supported as of 2026-Q1; <code>command</code> + <code>args</code> + <code>env</code> table.<cite data-ref="codex-mcp-config"></cite></td></tr>
+      <tr><td><strong>Env expansion</strong></td><td>None &mdash; TOML strings are literal; user must inline or use shell wrappers.<cite data-ref="codex-mcp"></cite></td></tr>
+      <tr><td><strong>Secrets pattern</strong></td><td>Inline only as of this writing; this is one of the strongest arguments for our secret-reference rewriter.</td></tr>
+      <tr><td><strong>Scope precedence</strong></td><td>Single user-scope file. No project-local override.</td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>TOML supports comments, so a fenced managed block is straightforward. The whole <code>[mcp_servers.*]</code> region is a natural fence boundary.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion" open>
+  <summary>VS Code (native MCP, GA April 2025) &mdash; <code>.vscode/mcp.json</code> and user <code>settings.json</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td>
+        Workspace: <code>&lt;repo&gt;/.vscode/mcp.json</code><br>
+        User (macOS): <code>~/Library/Application Support/Code/User/settings.json</code><br>
+        User (Linux): <code>$XDG_CONFIG_HOME/Code/User/settings.json</code><br>
+        User (Windows): <code>%APPDATA%\Code\User\settings.json</code><cite data-ref="vscode-mcp"></cite>
+      </td></tr>
+      <tr><td><strong>Format</strong></td><td>JSON-with-comments (JSONC). Top-level key in workspace file is <code>servers</code> (NOT <code>mcpServers</code>) and lives under <code>mcp.servers</code> in user settings.<cite data-ref="vscode-mcp-blog"></cite></td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>Explicit <code>type</code> field: <code>stdio</code> or <code>http</code>.<cite data-ref="vscode-mcp"></cite></td></tr>
+      <tr><td><strong>Env expansion</strong></td><td><code>${env:VAR}</code> for environment, <code>${workspaceFolder}</code> for paths, <code>${input:id}</code> for prompted secrets.<cite data-ref="vscode-mcp"></cite></td></tr>
+      <tr><td><strong>Secrets pattern</strong></td><td><code>inputs</code> array at top level &mdash; declares prompt-on-first-use values that VS Code caches in its secret storage. Best-in-class for security.<cite data-ref="vscode-mcp"></cite></td></tr>
+      <tr><td><strong>Scope precedence</strong></td><td>Workspace overrides user.<cite data-ref="vscode-settings-precedence"></cite></td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>JSONC tolerates <code>//</code> comments as managed-block fences. Top-level key disagreement (<code>servers</code> vs <code>mcpServers</code>) is the most common porting footgun &mdash; the projector must rewrite the key, not just the body.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion" open>
+  <summary>Cursor &mdash; <code>~/.cursor/mcp.json</code> and <code>.cursor/mcp.json</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td>User: <code>~/.cursor/mcp.json</code>. Project: <code>&lt;repo&gt;/.cursor/mcp.json</code>.<cite data-ref="cursor-mcp"></cite></td></tr>
+      <tr><td><strong>Format</strong></td><td>JSON. Top-level key <code>mcpServers</code>.</td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>Optional <code>type</code> field (<code>stdio</code> default).<cite data-ref="cursor-mcp"></cite></td></tr>
+      <tr><td><strong>Env expansion</strong></td><td><code>${env:VAR}</code>. Also supports <code>envFile</code> pointing at a <code>.env</code> file.<cite data-ref="cursor-mcp"></cite></td></tr>
+      <tr><td><strong>Scope precedence</strong></td><td>Project overrides user.</td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>Pure JSON. Same comment-restriction as Claude Code; use sentinel-key fencing or full-file ownership.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion" open>
+  <summary>Zed &mdash; <code>~/.config/zed/settings.json</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td>
+        macOS/Linux: <code>~/.config/zed/settings.json</code><br>
+        Windows: <code>%APPDATA%\Zed\settings.json</code><cite data-ref="zed-settings"></cite>
+      </td></tr>
+      <tr><td><strong>Format</strong></td><td>JSON-with-comments. Top-level key <code>context_servers</code>.<cite data-ref="zed-mcp"></cite></td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>Presence of <code>command</code> vs <code>url</code>; explicit <code>source: "custom"</code> distinguishes user-defined servers from extension-provided ones.<cite data-ref="zed-mcp"></cite></td></tr>
+      <tr><td><strong>Env expansion</strong></td><td>Not documented; values are literal. The user is expected to provide already-resolved env in the JSON map.</td></tr>
+      <tr><td><strong>Scope precedence</strong></td><td>Project <code>.zed/settings.json</code> can override user, but Zed canonically scopes MCP at the user level.</td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>JSONC tolerates comments &mdash; managed-block fences work. Key name (<code>context_servers</code>) and the <code>source: "custom"</code> tag are both projection-time concerns.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion" open>
+  <summary>JetBrains family (IntelliJ, PyCharm, RustRover, WebStorm, CLion, GoLand) &mdash; per-IDE <code>options/mcp.xml</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td>
+        Each IDE writes to a versioned config directory: <code>~/Library/Application Support/JetBrains/&lt;Product&gt;&lt;Year.x&gt;/options/mcp.xml</code> on macOS; <code>~/.config/JetBrains/&lt;Product&gt;&lt;Year.x&gt;/options/mcp.xml</code> on Linux; <code>%APPDATA%\JetBrains\&lt;Product&gt;&lt;Year.x&gt;\options\mcp.xml</code> on Windows. The 2025.2 release added MCP support across the platform.<cite data-ref="jetbrains-mcp"></cite><cite data-ref="rover-mcp-2025"></cite></td></tr>
+      <tr><td><strong>Format</strong></td><td>XML &mdash; IntelliJ Platform component-state format. NOT JSON.</td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>XML attribute <code>type</code> on each server element.<cite data-ref="jetbrains-mcp"></cite></td></tr>
+      <tr><td><strong>Env expansion</strong></td><td>IDE-internal macro syntax (<code>$USER_HOME$</code>, <code>$PROJECT_DIR$</code>); env vars only via explicit <code>&lt;env&gt;</code> children.</td></tr>
+      <tr><td><strong>Secrets pattern</strong></td><td>IDE keychain integration via UI; XML stores references not literals.<cite data-ref="jetbrains-junie"></cite></td></tr>
+      <tr><td><strong>Scope precedence</strong></td><td>IDE-wide; no per-project MCP file. Per-project overrides happen via <code>.idea/mcp.xml</code> on some 2025.3+ EAP builds but are not stable.</td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>XML format means we cannot share the JSON-projection code path. The projector needs an XML writer with managed-element fencing (<code>&lt;!-- BEGIN MCP-MANAGER --&gt;</code> XML comments). Toolbox-installed IDEs use distinct directories per major.minor version; the discovery step (see <a href="./research-toolchain-discovery.html">research-toolchain-discovery</a>) must enumerate all installed JetBrains products.<cite data-ref="jetbrains-toolbox"></cite></td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="tier2">Tier-2 candidates</h2>
+
+<details class="accordion">
+  <summary>Windsurf &mdash; <code>~/.codeium/windsurf/mcp_config.json</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td>
+        macOS/Linux: <code>~/.codeium/windsurf/mcp_config.json</code><br>
+        Windows: <code>%USERPROFILE%\.codeium\windsurf\mcp_config.json</code><cite data-ref="windsurf-config-path"></cite>
+      </td></tr>
+      <tr><td><strong>Format</strong></td><td>JSON. <code>mcpServers</code> key.</td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>Presence of <code>command</code> vs <code>serverUrl</code>/<code>url</code>.<cite data-ref="windsurf-mcp"></cite></td></tr>
+      <tr><td><strong>Env expansion</strong></td><td><code>${file:/path/to/file}</code> for file contents; not full env expansion.<cite data-ref="windsurf-mcp"></cite></td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>Pure JSON; same caveats as Claude Code / Cursor.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>Continue.dev &mdash; <code>~/.continue/config.yaml</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td><code>~/.continue/config.yaml</code> (user); <code>&lt;repo&gt;/.continue/config.yaml</code> (workspace).<cite data-ref="continue-config-yaml"></cite></td></tr>
+      <tr><td><strong>Format</strong></td><td>YAML. <code>mcpServers</code> is an <strong>array</strong> (not an object). Each entry requires a <code>name</code> field.<cite data-ref="continue-mcp"></cite></td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>Explicit <code>type</code>: <code>stdio</code> / <code>sse</code> / <code>streamable-http</code>.<cite data-ref="continue-mcp"></cite></td></tr>
+      <tr><td><strong>Env expansion</strong></td><td><code>${{ secrets.X }}</code> Mustache-style syntax for secrets; not generic env.<cite data-ref="continue-mcp"></cite></td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>Array vs object is the key projection difference &mdash; canonical state must be re-shaped at write time. YAML comments support managed-block fences cleanly.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>Cline &mdash; <code>cline_mcp_settings.json</code> (VS Code extension storage)</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td><code>~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json</code> on macOS; analogous globalStorage paths on Linux/Windows.<cite data-ref="cline-mcp"></cite></td></tr>
+      <tr><td><strong>Format</strong></td><td>JSON. <code>mcpServers</code> object.</td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td>Presence of <code>command</code> vs <code>url</code>; <code>disabled</code> boolean, <code>autoApprove</code> array of tool names.<cite data-ref="cline-mcp"></cite></td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>Path lives inside VS Code's extension globalStorage &mdash; coupled to the extension publisher ID; we must detect the extension installation before projecting.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>Goose (Block) &mdash; <code>~/.config/goose/config.yaml</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td><code>~/.config/goose/config.yaml</code> (Linux/macOS).<cite data-ref="goose-config"></cite></td></tr>
+      <tr><td><strong>Format</strong></td><td>YAML. Top-level key <code>extensions</code> (map).</td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td><code>type: stdio | sse | builtin</code>. <code>builtin</code> is in-process and has no equivalent we can project.<cite data-ref="goose-mcp"></cite></td></tr>
+      <tr><td><strong>Secrets pattern</strong></td><td>OS keyring by default; <code>GOOSE_DISABLE_KEYRING</code> falls back to env. Secret references live in the env map.<cite data-ref="goose-config"></cite></td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>Top-level key disagreement (<code>extensions</code> vs <code>mcpServers</code>) is the projection-time rewrite.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>LibreChat &mdash; <code>librechat.yaml</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td>App-root <code>librechat.yaml</code>; deployment-specific.<cite data-ref="librechat-mcp"></cite></td></tr>
+      <tr><td><strong>Format</strong></td><td>YAML. <code>mcpServers</code> map.</td></tr>
+      <tr><td><strong>Transport discriminator</strong></td><td><code>type: stdio | sse</code>; additional <code>iconPath</code>, <code>timeout</code>.<cite data-ref="librechat-mcp"></cite></td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>This is a hosted/multi-tenant deployment artifact; projecting requires being on the same machine as the deployment.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>Claude Desktop &mdash; <code>claude_desktop_config.json</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Paths</strong></td><td>
+        macOS: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code><br>
+        Windows: <code>%APPDATA%\Claude\claude_desktop_config.json</code> (or virtualized MSIX path)<cite data-ref="claude-desktop-config"></cite>
+      </td></tr>
+      <tr><td><strong>Format</strong></td><td>JSON. <code>mcpServers</code> object.</td></tr>
+      <tr><td><strong>Projection notes</strong></td><td>Tier-2 only because (a) it duplicates Claude Code coverage for most users and (b) MSIX virtualization on Windows is a footgun: the file the app reads differs from the file the user sees.<cite data-ref="claude-desktop-config"></cite></td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="out-of-scope">Out of scope for v1.0</h2>
+<ul>
+  <li><strong>Open WebUI</strong> &mdash; uses MCPO (a stdio-to-OpenAPI proxy) rather than native MCP. Projecting into MCPO would require us to model OpenAPI tool definitions, not MCP servers.<cite data-ref="openwebui-mcp"></cite></li>
+  <li><strong>JetBrains Fleet</strong> &mdash; separate from the IntelliJ Platform; its MCP support is in early access and config tree is unstable.<cite data-ref="fleet-mcp"></cite></li>
+  <li><strong>Generic LangChain / LlamaIndex apps</strong> &mdash; these consume MCP programmatically with no canonical config file to project into.</li>
+  <li><strong>MCP Inspector</strong> &mdash; debugging tool, not a long-lived agent host; users invoke ad-hoc.<cite data-ref="mcp-inspector"></cite></li>
+</ul>
+
+<h2 id="summary-table">At-a-glance summary table</h2>
+<table class="compare">
+<thead><tr><th>Tool</th><th>Tier</th><th>Format</th><th>Top-level key</th><th>Per-project?</th><th>Env syntax</th><th>Comments OK?</th></tr></thead>
+<tbody>
+<tr><td>Claude Code CLI</td><td>1</td><td>JSON</td><td><code>mcpServers</code></td><td>yes</td><td><code>${VAR}</code></td><td>no</td></tr>
+<tr><td>Codex CLI</td><td>1</td><td>TOML</td><td><code>[mcp_servers.*]</code></td><td>no</td><td>none</td><td>yes</td></tr>
+<tr><td>VS Code</td><td>1</td><td>JSONC</td><td><code>servers</code> / <code>mcp.servers</code></td><td>yes</td><td><code>${env:VAR}</code> + <code>${input:id}</code></td><td>yes</td></tr>
+<tr><td>Cursor</td><td>1</td><td>JSON</td><td><code>mcpServers</code></td><td>yes</td><td><code>${env:VAR}</code> + <code>envFile</code></td><td>no</td></tr>
+<tr><td>Zed</td><td>1</td><td>JSONC</td><td><code>context_servers</code></td><td>partial</td><td>none documented</td><td>yes</td></tr>
+<tr><td>JetBrains family</td><td>1</td><td>XML</td><td><code>&lt;mcp&gt;</code> component</td><td>partial</td><td>IDE macros</td><td>yes (XML)</td></tr>
+<tr><td>Windsurf</td><td>2</td><td>JSON</td><td><code>mcpServers</code></td><td>no</td><td><code>${file:path}</code></td><td>no</td></tr>
+<tr><td>Continue</td><td>2</td><td>YAML</td><td><code>mcpServers</code> (array)</td><td>yes</td><td><code>${{ secrets.X }}</code></td><td>yes</td></tr>
+<tr><td>Cline</td><td>2</td><td>JSON</td><td><code>mcpServers</code></td><td>no</td><td>none</td><td>no</td></tr>
+<tr><td>Goose</td><td>2</td><td>YAML</td><td><code>extensions</code></td><td>no</td><td>OS keyring refs</td><td>yes</td></tr>
+<tr><td>LibreChat</td><td>2</td><td>YAML</td><td><code>mcpServers</code></td><td>n/a</td><td>env</td><td>yes</td></tr>
+<tr><td>Claude Desktop</td><td>2</td><td>JSON</td><td><code>mcpServers</code></td><td>no</td><td><code>${VAR}</code></td><td>no</td></tr>
+</tbody>
+</table>
+
+<section class="citations">
+  <h2>Citations</h2>
+  <p>All sources for this page are listed in <a href="./data/citations.json">data/citations.json</a> and rendered at the bottom of every page via the shared citations module.</p>
+</section>
+</main>
+</body>
+</html>

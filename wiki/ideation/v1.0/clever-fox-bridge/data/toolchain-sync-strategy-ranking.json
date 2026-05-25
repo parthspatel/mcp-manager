@@ -1,0 +1,139 @@
+{
+  "title": "Sync-strategy ranking for projecting canonical MCP state into third-party tool config files",
+  "criteria": [
+    { "key": "idempotency",    "label": "Idempotency",                "weight": 0.13, "direction": "max" },
+    { "key": "preservation",   "label": "Hand-edit preservation",     "weight": 0.16, "direction": "max" },
+    { "key": "conflict",       "label": "Conflict safety",            "weight": 0.13, "direction": "max" },
+    { "key": "blast",          "label": "Security blast-radius (lower = safer)", "weight": 0.13, "direction": "min" },
+    { "key": "portability",    "label": "Cross-platform portability", "weight": 0.10, "direction": "max" },
+    { "key": "complexity",     "label": "Implementation complexity (lower = better)", "weight": 0.10, "direction": "min" },
+    { "key": "debuggability",  "label": "Debuggability / observability", "weight": 0.09, "direction": "max" },
+    { "key": "escape_hatch",   "label": "Escape-hatch friendliness",  "weight": 0.09, "direction": "max" },
+    { "key": "ux",             "label": "User trust & UX clarity",    "weight": 0.07, "direction": "max" }
+  ],
+  "options": [
+    "Push (overwrite)",
+    "Managed-block (fenced region)",
+    "Pull-only (one-time import)",
+    "Three-way merge (diff3)",
+    "Overlay / kustomize-style",
+    "Watch + reconcile loop",
+    "Symlink/bind mount"
+  ],
+  "scores": {
+    "Push (overwrite)": {
+      "idempotency": 5,
+      "preservation": 1,
+      "conflict": 1,
+      "blast": 5,
+      "portability": 5,
+      "complexity": 5,
+      "debuggability": 4,
+      "escape_hatch": 3,
+      "ux": 2,
+      "_evidence": {
+        "idempotency": ["#cite-chezmoi-template"],
+        "preservation": ["#cite-managed-block-ansible"],
+        "blast": ["#cite-claude-code-mcp"],
+        "complexity": ["#cite-chezmoi-template"]
+      }
+    },
+    "Managed-block (fenced region)": {
+      "idempotency": 5,
+      "preservation": 5,
+      "conflict": 4,
+      "blast": 3,
+      "portability": 4,
+      "complexity": 4,
+      "debuggability": 5,
+      "escape_hatch": 5,
+      "ux": 5,
+      "_evidence": {
+        "idempotency": ["#cite-managed-block-ansible"],
+        "preservation": ["#cite-managed-block-ansible", "#cite-starship-config"],
+        "debuggability": ["#cite-managed-block-ansible"],
+        "ux": ["#cite-managed-block-ansible"]
+      }
+    },
+    "Pull-only (one-time import)": {
+      "idempotency": 2,
+      "preservation": 5,
+      "conflict": 5,
+      "blast": 1,
+      "portability": 5,
+      "complexity": 5,
+      "debuggability": 2,
+      "escape_hatch": 4,
+      "ux": 3,
+      "_evidence": {
+        "preservation": ["#cite-chezmoi-template"],
+        "blast": ["#cite-vscode-mcp"],
+        "complexity": ["#cite-asdf-plugins"]
+      }
+    },
+    "Three-way merge (diff3)": {
+      "idempotency": 4,
+      "preservation": 5,
+      "conflict": 5,
+      "blast": 3,
+      "portability": 3,
+      "complexity": 2,
+      "debuggability": 3,
+      "escape_hatch": 3,
+      "ux": 4,
+      "_evidence": {
+        "conflict": ["#cite-etcupdate-freebsd", "#cite-git-diff3"],
+        "preservation": ["#cite-etcupdate-freebsd"],
+        "complexity": ["#cite-diff3-rfc"]
+      }
+    },
+    "Overlay / kustomize-style": {
+      "idempotency": 4,
+      "preservation": 4,
+      "conflict": 3,
+      "blast": 3,
+      "portability": 4,
+      "complexity": 2,
+      "debuggability": 4,
+      "escape_hatch": 5,
+      "ux": 3,
+      "_evidence": {
+        "idempotency": ["#cite-kustomize-overlays", "#cite-owl-rfc-overlay"],
+        "escape_hatch": ["#cite-kustomize-overlays"],
+        "complexity": ["#cite-json-patch-rfc6902"]
+      }
+    },
+    "Watch + reconcile loop": {
+      "idempotency": 5,
+      "preservation": 3,
+      "conflict": 2,
+      "blast": 5,
+      "portability": 3,
+      "complexity": 2,
+      "debuggability": 3,
+      "escape_hatch": 4,
+      "ux": 2,
+      "_evidence": {
+        "idempotency": ["#cite-homemanager-modules"],
+        "blast": ["#cite-claude-code-mcp"],
+        "portability": ["#cite-windows-app-paths"]
+      }
+    },
+    "Symlink/bind mount": {
+      "idempotency": 5,
+      "preservation": 2,
+      "conflict": 2,
+      "blast": 4,
+      "portability": 1,
+      "complexity": 4,
+      "debuggability": 2,
+      "escape_hatch": 1,
+      "ux": 2,
+      "_evidence": {
+        "portability": ["#cite-windows-app-paths"],
+        "idempotency": ["#cite-dotter-readme"],
+        "complexity": ["#cite-dotter-readme"]
+      }
+    }
+  }
+}

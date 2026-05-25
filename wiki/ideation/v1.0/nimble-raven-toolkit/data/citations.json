@@ -1,0 +1,459 @@
+{
+  "entries": [
+    {
+      "id": "clap-docs",
+      "title": "clap — Rust command-line argument parser (docs.rs)",
+      "url": "https://docs.rs/clap/latest/clap/",
+      "accessed": "2026-05-24",
+      "note": "Official clap reference; both derive and builder APIs."
+    },
+    {
+      "id": "clap-faq-derive-vs-builder",
+      "title": "clap FAQ — When should I use the builder vs derive APIs?",
+      "url": "https://docs.rs/clap/latest/clap/_faq/index.html",
+      "accessed": "2026-05-24",
+      "note": "Maintainers' guidance: derive is generally recommended; builder is faster to compile and exposes provenance/ordering."
+    },
+    {
+      "id": "clap-derive-cookbook",
+      "title": "clap_derive cookbook — git-like CLI",
+      "url": "https://docs.rs/clap/latest/clap/_derive/_cookbook/git_derive/index.html",
+      "accessed": "2026-05-24",
+      "note": "Canonical recipe for hierarchical subcommands via derive."
+    },
+    {
+      "id": "clap-complete",
+      "title": "clap_complete — shell completion generator",
+      "url": "https://docs.rs/clap_complete/latest/clap_complete/",
+      "accessed": "2026-05-24",
+      "note": "Generates Bash/Zsh/Fish/PowerShell/Elvish; companion crates for Nushell/Fig."
+    },
+    {
+      "id": "argparse-rosetta",
+      "title": "argparse-rosetta-rs — comparison of Rust argparse APIs",
+      "url": "https://github.com/rosetta-rs/argparse-rosetta-rs",
+      "accessed": "2026-05-24",
+      "note": "Benchmarks binary-size overhead and build times for clap, argh, bpaf, gumdrop, pico-args, lexopt, xflags."
+    },
+    {
+      "id": "sunshowers-cli-parser",
+      "title": "Rain's Rust CLI recommendations — Picking an argument parser",
+      "url": "https://rust-cli-recommendations.sunshowers.io/cli-parser.html",
+      "accessed": "2026-05-24",
+      "note": "Recommends clap with derive feature for most projects; explains argh/pico-args/gumdrop tradeoffs."
+    },
+    {
+      "id": "sunshowers-colors",
+      "title": "Rain's Rust CLI recommendations — Managing colors",
+      "url": "https://rust-cli-recommendations.sunshowers.io/managing-colors-in-rust.html",
+      "accessed": "2026-05-24",
+      "note": "Endorses owo-colors over colored/nu-ansi-term for new code."
+    },
+    {
+      "id": "bpaf-docs",
+      "title": "bpaf — applicative parser combinators for CLIs",
+      "url": "https://docs.rs/bpaf/latest/bpaf/",
+      "accessed": "2026-05-24",
+      "note": "Applicative (not monadic) parser model; both combinatoric and derive APIs; built-in dynamic shell completion."
+    },
+    {
+      "id": "argh-crate",
+      "title": "argh — Google Fuchsia derive-based argparser",
+      "url": "https://crates.io/crates/argh",
+      "accessed": "2026-05-24",
+      "note": "Fuchsia conventions, low overhead, less Unix-idiomatic."
+    },
+    {
+      "id": "pico-args",
+      "title": "pico-args — zero-dependency Rust argument parser",
+      "url": "https://crates.io/crates/pico-args",
+      "accessed": "2026-05-24",
+      "note": "Smallest binary footprint; no help generation; manual matching."
+    },
+    {
+      "id": "gumdrop-crate",
+      "title": "gumdrop — option parser with custom derive",
+      "url": "https://crates.io/crates/gumdrop",
+      "accessed": "2026-05-24",
+      "note": "Simple derive-based parser; less popular than clap."
+    },
+    {
+      "id": "owo-colors",
+      "title": "owo-colors — zero-allocation, no_std-friendly terminal coloring",
+      "url": "https://docs.rs/owo-colors/latest/owo_colors/",
+      "accessed": "2026-05-24",
+      "note": "Drop-in replacement for `colored`; supports ANSI/Xterm-256/Truecolor."
+    },
+    {
+      "id": "colored-crate",
+      "title": "colored — Coloring terminal output the easy way",
+      "url": "https://crates.io/crates/colored",
+      "accessed": "2026-05-24",
+      "note": "Older, allocating string-style API; widely used historically."
+    },
+    {
+      "id": "nu-ansi-term",
+      "title": "nu-ansi-term — fork of ansi_term used by tracing-subscriber",
+      "url": "https://github.com/nushell/nu-ansi-term",
+      "accessed": "2026-05-24",
+      "note": "Active fork of abandoned ansi_term; primarily kept alive for tracing ecosystem compatibility."
+    },
+    {
+      "id": "indicatif",
+      "title": "indicatif — Rust progress bar library",
+      "url": "https://docs.rs/indicatif/",
+      "accessed": "2026-05-24",
+      "note": "ProgressBar + MultiProgress; >90M downloads; works with rayon and tracing-indicatif."
+    },
+    {
+      "id": "kdam",
+      "title": "kdam — tqdm-inspired progress bar for Rust",
+      "url": "https://github.com/clitic/kdam",
+      "accessed": "2026-05-24",
+      "note": "tqdm-style ergonomics, gradient colors, jupyter support, nested bars."
+    },
+    {
+      "id": "tabled",
+      "title": "tabled — pretty print tables of structs/enums",
+      "url": "https://github.com/zhiburt/tabled",
+      "accessed": "2026-05-24",
+      "note": "Derive macro for printing collections of structs."
+    },
+    {
+      "id": "comfy-table",
+      "title": "comfy-table — minimalistic terminal table library",
+      "url": "https://github.com/Nukesor/comfy-table",
+      "accessed": "2026-05-24",
+      "note": "Dynamic width arrangement, ANSI styling; no unsafe code; well tested."
+    },
+    {
+      "id": "prettytable-rs",
+      "title": "prettytable-rs — Rust table library (unmaintained)",
+      "url": "https://github.com/phsym/prettytable-rs",
+      "accessed": "2026-05-24",
+      "note": "No commits in 3+ years; rustsec advisory has been requested."
+    },
+    {
+      "id": "ratatui-home",
+      "title": "Ratatui — Rust crate for building TUIs",
+      "url": "https://ratatui.rs/",
+      "accessed": "2026-05-24",
+      "note": "Active fork/successor of tui-rs; default crossterm backend."
+    },
+    {
+      "id": "ratatui-github",
+      "title": "ratatui/ratatui on GitHub",
+      "url": "https://github.com/ratatui/ratatui",
+      "accessed": "2026-05-24",
+      "note": "Powering bottom, gitui; supports crossterm, termion, termwiz backends."
+    },
+    {
+      "id": "ratatui-backends-comparison",
+      "title": "Ratatui — Comparison of Backends",
+      "url": "https://ratatui.rs/concepts/backends/comparison/",
+      "accessed": "2026-05-24",
+      "note": "Recommends Crossterm for most tasks; Termwiz only if targeting Wezterm; Termion is Unix-only."
+    },
+    {
+      "id": "awesome-ratatui",
+      "title": "awesome-ratatui — curated list of TUI apps and libraries built with Ratatui",
+      "url": "https://github.com/ratatui/awesome-ratatui",
+      "accessed": "2026-05-24",
+      "note": "Includes yazi, bottom, gitui, atuin, trippy, diskonaut."
+    },
+    {
+      "id": "tui-realm",
+      "title": "tui-realm — React/Elm-inspired framework on top of ratatui",
+      "url": "https://github.com/veeso/tui-realm",
+      "accessed": "2026-05-24",
+      "note": "Component model with reusable widgets and message-based events."
+    },
+    {
+      "id": "cursive-crate",
+      "title": "cursive — high-level TUI library",
+      "url": "https://github.com/gyscos/cursive",
+      "accessed": "2026-05-24",
+      "note": "Declarative views with built-in event loop and theme system; ncurses/termion/crossterm backends."
+    },
+    {
+      "id": "crossterm-crate",
+      "title": "crossterm — cross-platform terminal manipulation library",
+      "url": "https://github.com/crossterm-rs/crossterm",
+      "accessed": "2026-05-24",
+      "note": "Pure Rust, Windows + Unix, async event stream."
+    },
+    {
+      "id": "termion-crate",
+      "title": "termion — minimal Unix terminal library",
+      "url": "https://gitlab.redox-os.org/redox-os/termion",
+      "accessed": "2026-05-24",
+      "note": "Unix-only; no Windows support."
+    },
+    {
+      "id": "termwiz-crate",
+      "title": "termwiz — terminal wizardry by the Wezterm authors",
+      "url": "https://github.com/wezterm/wezterm/tree/main/termwiz",
+      "accessed": "2026-05-24",
+      "note": "Used by Wezterm; richer surface than crossterm; less common in TUI apps."
+    },
+    {
+      "id": "starlog-ratatui",
+      "title": "Ratatui — How Rust's Most Popular TUI Library Renders Interfaces",
+      "url": "https://starlog.is/articles/developer-tools/ratatui-ratatui/",
+      "accessed": "2026-05-24",
+      "note": "Walks through immediate-mode rendering with intermediate buffers; explains backend Trait."
+    },
+    {
+      "id": "tauri-2-stable",
+      "title": "Tauri 2.0 Stable Release",
+      "url": "https://v2.tauri.app/blog/tauri-20/",
+      "accessed": "2026-05-24",
+      "note": "Tauri v2 GA Oct 2, 2024 with iOS/Android mobile support, ACL-based permissions, new IPC."
+    },
+    {
+      "id": "tauri-home",
+      "title": "Tauri — small, fast, secure cross-platform binaries",
+      "url": "https://v2.tauri.app/",
+      "accessed": "2026-05-24",
+      "note": "Uses system WebView2/WKWebView/WebKitGTK; ~600KB-3MB installers possible."
+    },
+    {
+      "id": "tauri-github",
+      "title": "tauri-apps/tauri on GitHub",
+      "url": "https://github.com/tauri-apps/tauri",
+      "accessed": "2026-05-24",
+      "note": "MIT or Apache 2.0; uses tao for windowing, wry for webview."
+    },
+    {
+      "id": "tauri-leptos",
+      "title": "Tauri docs — Using Leptos as the frontend framework",
+      "url": "https://v2.tauri.app/start/frontend/leptos/",
+      "accessed": "2026-05-24",
+      "note": "First-class scaffolding for Rust-WASM frontends via create-tauri-app."
+    },
+    {
+      "id": "tauri-vs-electron",
+      "title": "Tauri vs Electron — bundle size and runtime trade-offs",
+      "url": "https://www.gethopp.app/blog/tauri-vs-electron",
+      "accessed": "2026-05-24",
+      "note": "Tauri installers ~600KB–10MB vs Electron 80–150MB; idle RAM ~30–50MB vs more for Electron."
+    },
+    {
+      "id": "dioxus-0-6",
+      "title": "Dioxus 0.6 release — Fullstack crossplatform app framework",
+      "url": "https://dioxuslabs.com/blog/release-060/",
+      "accessed": "2026-05-24",
+      "note": "Magical hot-reload of rsx!, server functions for native, new CLI."
+    },
+    {
+      "id": "dioxus-home",
+      "title": "Dioxus — Fullstack crossplatform app framework for Rust",
+      "url": "https://dioxuslabs.com/",
+      "accessed": "2026-05-24",
+      "note": "React-like component model; web, desktop (WebView), mobile, server."
+    },
+    {
+      "id": "iced-github",
+      "title": "iced-rs/iced on GitHub",
+      "url": "https://github.com/iced-rs/iced",
+      "accessed": "2026-05-24",
+      "note": "Elm-inspired GUI; wgpu (Vulkan/Metal/DirectX 12) renderer + tiny-skia fallback; MIT."
+    },
+    {
+      "id": "iced-014",
+      "title": "Iced 0.14 — reactive rendering, time travel debugger",
+      "url": "https://byteiota.com/iced-0-14-rust-gui-gets-reactive-rendering-time-travel/",
+      "accessed": "2026-05-24",
+      "note": "December 2025 release; final experimental release before 1.0; Comet debugger."
+    },
+    {
+      "id": "iced-book-architecture",
+      "title": "iced — Elm-style architecture (book)",
+      "url": "https://book.iced.rs/architecture.html",
+      "accessed": "2026-05-24",
+      "note": "Model / Message / View / Update."
+    },
+    {
+      "id": "cosmic-iced",
+      "title": "System76 COSMIC desktop uses iced toolkit",
+      "url": "https://www.phoronix.com/news/COSMIC-Desktop-Iced-Toolkit",
+      "accessed": "2026-05-24",
+      "note": "Rust-based Wayland desktop; production users of iced."
+    },
+    {
+      "id": "egui-github",
+      "title": "emilk/egui on GitHub",
+      "url": "https://github.com/emilk/egui",
+      "accessed": "2026-05-24",
+      "note": "Immediate-mode GUI; AccessKit integration; sponsored by Rerun."
+    },
+    {
+      "id": "egui-home",
+      "title": "egui home page",
+      "url": "https://www.egui.rs/",
+      "accessed": "2026-05-24",
+      "note": "Immediate-mode UI library; works on native and web."
+    },
+    {
+      "id": "rerun-egui",
+      "title": "Rerun viewer extensibility — uses egui/eframe",
+      "url": "https://rerun.io/docs/howto/visualization/extend-ui",
+      "accessed": "2026-05-24",
+      "note": "Major production app built on egui; sponsors egui development."
+    },
+    {
+      "id": "slint-home",
+      "title": "Slint — Declarative GUI for Rust, C++, JavaScript, Python",
+      "url": "https://slint.dev/",
+      "accessed": "2026-05-24",
+      "note": "DSL-based UI; GPL or paid commercial license; embedded support; AccessKit integration."
+    },
+    {
+      "id": "slint-github",
+      "title": "slint-ui/slint on GitHub",
+      "url": "https://github.com/slint-ui/slint",
+      "accessed": "2026-05-24",
+      "note": "GPLv3 + commercial royalty-free license; 300KB-ish runtime; Rust/C++/JS/Python."
+    },
+    {
+      "id": "slint-1-0",
+      "title": "Slint 1.0 announcement",
+      "url": "https://slint.dev/blog/announcing-slint-1.0",
+      "accessed": "2026-05-24",
+      "note": "API stability commitment from 1.0 onward."
+    },
+    {
+      "id": "gpui-home",
+      "title": "GPUI — fast, productive UI framework for Rust",
+      "url": "https://www.gpui.rs/",
+      "accessed": "2026-05-24",
+      "note": "From the makers of Zed; pre-1.0; macOS + Linux primary; Windows is in progress."
+    },
+    {
+      "id": "gpui-readme",
+      "title": "zed-industries/zed — gpui crate README",
+      "url": "https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md",
+      "accessed": "2026-05-24",
+      "note": "Hybrid immediate+retained; GPU-accelerated; Metal on macOS."
+    },
+    {
+      "id": "gpui-crates",
+      "title": "gpui on crates.io",
+      "url": "https://crates.io/crates/gpui",
+      "accessed": "2026-05-24",
+      "note": "Pre-1.0; frequent breaking changes."
+    },
+    {
+      "id": "boringcactus-2025-survey",
+      "title": "boringcactus — A 2025 Survey of Rust GUI Libraries",
+      "url": "https://www.boringcactus.com/2025/04/13/2025-survey-of-rust-gui-libraries.html",
+      "accessed": "2026-05-24",
+      "note": "Evaluated 43 libraries on a common label+input test, with focus on Windows, screen reader, IME."
+    },
+    {
+      "id": "accesskit-home",
+      "title": "AccessKit — accessibility infrastructure for UI toolkits",
+      "url": "https://accesskit.dev/",
+      "accessed": "2026-05-24",
+      "note": "Used by egui, Slint, Freya, Xilem, Bevy."
+    },
+    {
+      "id": "xilem-github",
+      "title": "linebender/xilem on GitHub",
+      "url": "https://github.com/linebender/xilem",
+      "accessed": "2026-05-24",
+      "note": "Experimental Rust-native UI framework; React/SwiftUI/Elm-inspired."
+    },
+    {
+      "id": "freya-home",
+      "title": "Freya — Rust GUI library on top of Dioxus core",
+      "url": "https://freyaui.dev/",
+      "accessed": "2026-05-24",
+      "note": "Native rendering (Skia), not WebView; Dioxus-style component DSL."
+    },
+    {
+      "id": "makepad-hn",
+      "title": "Makepad 1.0 announcement (Hacker News)",
+      "url": "https://news.ycombinator.com/item?id=43971829",
+      "accessed": "2026-05-24",
+      "note": "GPU-driven UI framework; DSL with minimal docs; mostly used by its own team."
+    },
+    {
+      "id": "ratatui-faq-async",
+      "title": "Ratatui FAQ",
+      "url": "https://ratatui.rs/faq/",
+      "accessed": "2026-05-24",
+      "note": "Discusses async, state management, and template guidance."
+    },
+    {
+      "id": "indicatif-multiprogress",
+      "title": "indicatif::MultiProgress",
+      "url": "https://docs.rs/indicatif/latest/indicatif/struct.MultiProgress.html",
+      "accessed": "2026-05-24",
+      "note": "Concurrent progress bar coordination."
+    },
+    {
+      "id": "tracing-indicatif",
+      "title": "tracing-indicatif — bridge tracing spans into progress bars",
+      "url": "https://crates.io/crates/tracing-indicatif",
+      "accessed": "2026-05-24",
+      "note": "Hooks structured tracing spans into indicatif progress."
+    },
+    {
+      "id": "docker-cli-conventions",
+      "title": "Docker CLI design guidelines (Open Container Initiative style)",
+      "url": "https://docs.docker.com/reference/cli/docker/",
+      "accessed": "2026-05-24",
+      "note": "Noun-verb command structure (e.g. `docker container ls`); widely emulated by kubectl, gh."
+    },
+    {
+      "id": "kubectl-conventions",
+      "title": "Kubernetes — kubectl conventions",
+      "url": "https://kubernetes.io/docs/reference/kubectl/conventions/",
+      "accessed": "2026-05-24",
+      "note": "Verb-noun (`kubectl get pods`), -o output formats, -f file selectors."
+    },
+    {
+      "id": "gh-cli-style",
+      "title": "GitHub CLI command line interface guidelines",
+      "url": "https://cli.github.com/manual/",
+      "accessed": "2026-05-24",
+      "note": "Reference for nested subcommands and JSON output via --json."
+    },
+    {
+      "id": "cli-guidelines",
+      "title": "Command Line Interface Guidelines",
+      "url": "https://clig.dev/",
+      "accessed": "2026-05-24",
+      "note": "Industry baseline for modern CLI ergonomics: help, exit codes, color, NO_COLOR."
+    },
+    {
+      "id": "termwiz-readme",
+      "title": "termwiz crate on crates.io",
+      "url": "https://crates.io/crates/termwiz",
+      "accessed": "2026-05-24",
+      "note": "Library extracted from wezterm; provides line editor, surface, capability detection."
+    },
+    {
+      "id": "tauri-2-rcandidate",
+      "title": "Tauri 2 release candidate notes",
+      "url": "https://v2.tauri.app/blog/tauri-2-0-0-release-candidate/",
+      "accessed": "2026-05-24",
+      "note": "Permissions/scopes/capabilities ACL model; new plugin system."
+    },
+    {
+      "id": "ratatui-immediate-mode",
+      "title": "Ratatui — building a TUI (immediate-mode walkthrough)",
+      "url": "https://raysuliteanu.medium.com/creating-a-tui-in-rust-e284d31983b3",
+      "accessed": "2026-05-24",
+      "note": "Practical introduction to ratatui + crossterm event loop."
+    },
+    {
+      "id": "weekly-rust-gui-state",
+      "title": "Rust Bytes — The State of Rust GUI (good and bad)",
+      "url": "https://weeklyrust.substack.com/p/the-state-of-rust-gui-the-good-and",
+      "accessed": "2026-05-24",
+      "note": "Cross-cutting commentary on egui/iced/slint/dioxus production trade-offs."
+    }
+  ]
+}

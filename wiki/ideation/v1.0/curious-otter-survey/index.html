@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>curious-otter-survey — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / curious-otter-survey</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+<main class="container">
+<h1>Stream 1 — How MCP servers are configured today</h1>
+<p class="lede">
+A neutral landscape survey of how AI host applications configure, launch, and supervise Model Context Protocol (MCP) servers in 2026 — the files they read, the schemas they invent, the transports they speak, the secrets they leak, and the rough edges users hit. The recommendation page distills which of these problems an MCP Manager is best-placed to solve.
+</p>
+
+<p>
+  <span class="evidence-badge">28 sources</span>
+  <span class="pill accent">Stream 1 of 5</span>
+  <span class="pill">Topic: mcp-config</span>
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li class="group-label">Research (neutral)</li>
+    <li><a href="./research-mcp-config-landscape.html">Landscape — every host's config path, schema, transports, lifecycle owner</a></li>
+    <li><a href="./research-mcp-config-schema.html">Schema — side-by-side JSON snippets across hosts</a></li>
+    <li><a href="./research-mcp-config-transports.html">Transports — stdio vs Streamable HTTP vs (deprecated) SSE</a></li>
+    <li><a href="./research-mcp-config-secrets.html">Secrets — how API keys travel today and where they leak</a></li>
+    <li><a href="./research-mcp-config-painpoints.html">Pain points — cited issues, threads, and broken seams</a></li>
+    <li class="group-label">Analysis</li>
+    <li><a href="./analysis-mcp-config-tradeoffs.html">Tradeoffs — what an MCP Manager should solve vs leave to hosts</a></li>
+    <li class="group-label">Matrix</li>
+    <li><a href="./matrix-mcp-config-ranking.html">Ranking matrix — interactive scoring of nine hosts</a></li>
+    <li class="group-label">Recommendation</li>
+    <li><a href="./recommendation-mcp-config-summary.html">Summary — primary recommendation + uncertainty</a></li>
+  </ul>
+</nav>
+
+<h2>Stream summary</h2>
+<p>
+  Every major MCP host today owns its own JSON (or YAML) config file in a different location, with a slightly different schema (<code>mcpServers</code> vs <code>servers</code> vs <code>context_servers</code> vs <code>extensions</code>), and an inconsistent transport story: most support stdio universally, Streamable HTTP is becoming standard, and the legacy HTTP+SSE form is being phased out. Secrets are almost always stored as plaintext in those JSON files; OS-keychain support is the exception (Anthropic's DXT bundles, VS Code <code>inputs</code>) rather than the rule. Real-world friction shows up at the seams: PATH inheritance failures, MSIX virtualization writing to the wrong file, sequential server shutdown blocking app quit, no live restart, and zero portability of config across hosts. These are the gaps the MCP Manager will be measured against.
+</p>
+</main>
+</body>
+</html>

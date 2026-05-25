@@ -1,0 +1,167 @@
+{
+  "title": "Client-API wire format + transport combinations for MCP Manager core",
+  "options": [
+    "JSON-RPC 2.0 over Unix socket / named pipe",
+    "gRPC (tonic) over Unix socket / named pipe",
+    "REST + SSE over HTTP loopback",
+    "REST + WebSocket over HTTP loopback",
+    "Cap'n Proto RPC over Unix socket / named pipe",
+    "MessagePack-RPC over Unix socket / named pipe",
+    "NDJSON framed over Unix socket / named pipe",
+    "Tauri-native invoke + Channel (GUI only)"
+  ],
+  "criteria": [
+    { "key": "perf",                   "label": "Perf",                  "weight": 0.10 },
+    { "key": "debuggability",          "label": "Debuggability",         "weight": 0.13 },
+    { "key": "codegen_burden",         "label": "Low codegen burden",    "weight": 0.10 },
+    { "key": "cross_platform",         "label": "Cross-platform",        "weight": 0.12 },
+    { "key": "web_reachability",       "label": "Web-reachability",      "weight": 0.10 },
+    { "key": "streaming_support",      "label": "Streaming support",     "weight": 0.14 },
+    { "key": "schema_versioning",      "label": "Schema versioning",     "weight": 0.11 },
+    { "key": "security_boundary",      "label": "Security boundary",     "weight": 0.10 },
+    { "key": "rust_ecosystem_maturity","label": "Rust ecosystem",        "weight": 0.10 }
+  ],
+  "scores": {
+    "JSON-RPC 2.0 over Unix socket / named pipe": {
+      "perf": 3,
+      "debuggability": 5,
+      "codegen_burden": 5,
+      "cross_platform": 5,
+      "web_reachability": 2,
+      "streaming_support": 3,
+      "schema_versioning": 4,
+      "security_boundary": 4,
+      "rust_ecosystem_maturity": 5,
+      "_evidence": {
+        "debuggability": ["#cite-jsonrpc-2-spec", "#cite-ndjson-spec"],
+        "codegen_burden": ["#cite-jsonrpsee-github"],
+        "cross_platform": ["#cite-parity-tokio-ipc", "#cite-interprocess-crate"],
+        "streaming_support": ["#cite-jsonrpsee-docs"],
+        "rust_ecosystem_maturity": ["#cite-jsonrpsee-github", "#cite-mcp-transports"],
+        "security_boundary": ["#cite-xdg-runtime-dir", "#cite-docker-socket-perms"]
+      }
+    },
+    "gRPC (tonic) over Unix socket / named pipe": {
+      "perf": 5,
+      "debuggability": 3,
+      "codegen_burden": 2,
+      "cross_platform": 4,
+      "web_reachability": 3,
+      "streaming_support": 5,
+      "schema_versioning": 5,
+      "security_boundary": 4,
+      "rust_ecosystem_maturity": 5,
+      "_evidence": {
+        "perf": ["#cite-grpc-flow-control"],
+        "debuggability": ["#cite-grpcurl", "#cite-grpc-reflection"],
+        "codegen_burden": ["#cite-prost-gh", "#cite-tonic-bidi-streaming"],
+        "streaming_support": ["#cite-tonic-bidi-streaming", "#cite-grpc-flow-control"],
+        "schema_versioning": ["#cite-proto3-guide"],
+        "web_reachability": ["#cite-tonic-web-crate"],
+        "cross_platform": ["#cite-tonic-uds-example"]
+      }
+    },
+    "REST + SSE over HTTP loopback": {
+      "perf": 3,
+      "debuggability": 5,
+      "codegen_burden": 4,
+      "cross_platform": 5,
+      "web_reachability": 5,
+      "streaming_support": 3,
+      "schema_versioning": 4,
+      "security_boundary": 2,
+      "rust_ecosystem_maturity": 5,
+      "_evidence": {
+        "debuggability": ["#cite-axum-docs"],
+        "web_reachability": ["#cite-mdn-eventsource", "#cite-html-spec-sse"],
+        "streaming_support": ["#cite-html-spec-sse", "#cite-mcp-transports"],
+        "schema_versioning": ["#cite-openapi-spec"],
+        "security_boundary": ["#cite-docker-socket-perms"],
+        "rust_ecosystem_maturity": ["#cite-axum-docs", "#cite-axum-uds-example"]
+      }
+    },
+    "REST + WebSocket over HTTP loopback": {
+      "perf": 4,
+      "debuggability": 4,
+      "codegen_burden": 4,
+      "cross_platform": 5,
+      "web_reachability": 5,
+      "streaming_support": 4,
+      "schema_versioning": 3,
+      "security_boundary": 2,
+      "rust_ecosystem_maturity": 5,
+      "_evidence": {
+        "streaming_support": ["#cite-rfc6455-websocket"],
+        "web_reachability": ["#cite-rfc6455-websocket"],
+        "rust_ecosystem_maturity": ["#cite-axum-docs"],
+        "security_boundary": ["#cite-docker-socket-perms"]
+      }
+    },
+    "Cap'n Proto RPC over Unix socket / named pipe": {
+      "perf": 5,
+      "debuggability": 1,
+      "codegen_burden": 2,
+      "cross_platform": 4,
+      "web_reachability": 1,
+      "streaming_support": 4,
+      "schema_versioning": 5,
+      "security_boundary": 4,
+      "rust_ecosystem_maturity": 3,
+      "_evidence": {
+        "perf": ["#cite-capnp-rust", "#cite-swatinem-grpc-capnp"],
+        "schema_versioning": ["#cite-capnp-language", "#cite-capnp-roadmap"],
+        "codegen_burden": ["#cite-capnproto-rust-gh"],
+        "rust_ecosystem_maturity": ["#cite-capnproto-rust-gh"]
+      }
+    },
+    "MessagePack-RPC over Unix socket / named pipe": {
+      "perf": 4,
+      "debuggability": 2,
+      "codegen_burden": 4,
+      "cross_platform": 5,
+      "web_reachability": 2,
+      "streaming_support": 3,
+      "schema_versioning": 3,
+      "security_boundary": 4,
+      "rust_ecosystem_maturity": 4,
+      "_evidence": {
+        "perf": ["#cite-rmp-serde-docs"],
+        "codegen_burden": ["#cite-rmp-serde-docs"],
+        "rust_ecosystem_maturity": ["#cite-msgpack-rust-gh"]
+      }
+    },
+    "NDJSON framed over Unix socket / named pipe": {
+      "perf": 3,
+      "debuggability": 5,
+      "codegen_burden": 5,
+      "cross_platform": 5,
+      "web_reachability": 2,
+      "streaming_support": 4,
+      "schema_versioning": 3,
+      "security_boundary": 4,
+      "rust_ecosystem_maturity": 4,
+      "_evidence": {
+        "debuggability": ["#cite-ndjson-spec", "#cite-ndjson-dataprotocols"],
+        "streaming_support": ["#cite-ndjson-spec", "#cite-mcp-transports"],
+        "codegen_burden": ["#cite-ndjson-dataprotocols"]
+      }
+    },
+    "Tauri-native invoke + Channel (GUI only)": {
+      "perf": 3,
+      "debuggability": 3,
+      "codegen_burden": 4,
+      "cross_platform": 4,
+      "web_reachability": 5,
+      "streaming_support": 4,
+      "schema_versioning": 2,
+      "security_boundary": 5,
+      "rust_ecosystem_maturity": 4,
+      "_evidence": {
+        "perf": ["#cite-tauri-ipc-perf-discussion"],
+        "streaming_support": ["#cite-tauri-channel-streaming"],
+        "web_reachability": ["#cite-tauri-calling-rust"],
+        "security_boundary": ["#cite-tauri-ipc"]
+      }
+    }
+  }
+}

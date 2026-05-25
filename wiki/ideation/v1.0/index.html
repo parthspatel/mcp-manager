@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Manager — Ideation v1.0</title>
+<meta name="description" content="Six parallel design explorations for a Rust-based MCP Manager (core + CLI + TUI + GUI + toolchain projection). 266 citations across 52 pages.">
+<link rel="stylesheet" href="./assets/styles.css">
+<script type="module" src="./assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs">Synthesis hub · all 6 streams complete</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Rust MCP Manager — v1.0 Ideation</h1>
+
+  <p class="lede">
+    Six independent, evidence-grounded design explorations for a Rust-based MCP Manager comprising a <strong>core</strong> library/daemon plus <strong>CLI</strong>, <strong>TUI</strong>, and <strong>GUI</strong> clients — conceptually "Docker for MCP servers". Each stream produces neutral research, tradeoff analysis, an interactive ranking matrix, and a recommendation with linked rationale. Streams run in parallel with no shared memory; convergences below emerged independently.
+  </p>
+
+  <p>
+    <span class="evidence-badge">266 citations</span>
+    <span class="evidence-badge">52 HTML pages</span>
+    <span class="evidence-badge">9 ranking matrices</span>
+    <span class="pill success">All 6 streams complete</span>
+  </p>
+
+  <aside class="card" style="border-left:4px solid var(--accent);background:var(--bg-faint);margin-block:1.5rem">
+    <h4 style="margin-top:0">Addendum 2026-05-24 — Stream 6 added by user request</h4>
+    <p style="margin-bottom:0.5rem">After the initial 5 streams completed, the user flagged a gap: the design covered how to <em>read</em> MCP server configs from existing hosts (<a href="./curious-otter-survey/">Stream 1</a>) but not how to <em>project</em> the canonical MCP Manager state back out to the many tools that consume MCP servers. <strong><a href="./clever-fox-bridge/">Stream 6 (<code>clever-fox-bridge</code>)</a></strong> closed that gap: it catalogues 12 MCP-consuming tools, settles on <strong>managed-block</strong> as the default sync mode (Ansible-style fenced regions), picks <strong>TOML</strong> as the custom-toolchain spec format, and surfaces 6 scoping questions for the orchestrator.</p>
+    <p style="margin-bottom:0"><strong>Headline finding:</strong> schema drift means even bundled Tier-1 tool support has to be expressed as data-driven manifests, not hardcoded Rust — every Tier-1 tool ships schema changes every few months.</p>
+  </aside>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#convergent">Convergent v1.0 design</a></li>
+      <li><a href="#sketch">Architecture sketch</a></li>
+      <li><a href="#streams">Stream outputs</a></li>
+      <li><a href="#cross-stream">Cross-stream dependency map</a></li>
+      <li><a href="#open-questions">Open questions for v1.0 scoping</a></li>
+      <li><a href="#how-to-read">How to read each stream</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="convergent">
+    <h2>Convergent v1.0 design</h2>
+    <p>Decisions where two or more streams arrived at compatible conclusions <em>independently</em>, or where one stream had decisive evidence. These should be treated as the working baseline for v1.0.</p>
+
+    <div class="card-grid">
+      <article class="card">
+        <h4>Daemon model</h4>
+        <p>Long-lived background process is required. Recommended pattern: <strong>podman/conmon-style per-server supervisor</strong> rather than a single central daemon (dockerd).</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Converged from <a href="./curious-otter-survey/recommendation-mcp-config-summary.html">S1</a> (lifecycle gap), <a href="./steady-bear-foundation/recommendation-core-architecture-summary.html">S3</a> (library-only unfit), <a href="./precise-crane-conduit/recommendation-client-api-summary.html">S4</a> (assumed long-lived).</p>
+      </article>
+
+      <article class="card">
+        <h4>Async runtime</h4>
+        <p>Locked to <code>tokio</code>. The official <code>rmcp</code> Rust MCP SDK is tokio-native; using anything else would mean re-implementing the SDK or running dual incompatible runtimes.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./steady-bear-foundation/research-core-architecture-runtime.html">S3</a> · Constraint type: upstream dependency.</p>
+      </article>
+
+      <article class="card">
+        <h4>CLI</h4>
+        <p><code>clap</code> with derive macros. Consensus pick across the Rust ecosystem (Cargo, ripgrep, uv).</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>.</p>
+      </article>
+
+      <article class="card">
+        <h4>TUI</h4>
+        <p><code>ratatui</code> + <code>crossterm</code>. Consensus pick (bottom, gitui, yazi, atuin, trippy).</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>.</p>
+      </article>
+
+      <article class="card">
+        <h4>GUI</h4>
+        <p><strong>Tauri 2</strong> with a <strong>Leptos</strong> (Rust-WASM) frontend. Pure-native Rust GUIs largely failed a basic accessibility + IME baseline; Tauri inherits system WebView a11y "for free".</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>. Frontend choice still re-openable — see open question.</p>
+      </article>
+
+      <article class="card">
+        <h4>Client ↔ daemon wire</h4>
+        <p><strong>JSON-RPC 2.0 over Unix domain socket / Windows named pipe</strong>. JSON-RPC affinity is decisive — MCP itself uses JSON-RPC, so the daemon shares its parser/encoder between client-facing and MCP-server-facing code.</p>
+        <p>Auxiliary <strong>HTTP/SSE bridge</strong> is <strong>mandatory in v1.0</strong> because the Tauri GUI's WebView cannot dial UDS.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./precise-crane-conduit/recommendation-client-api-summary.html">S4</a> · Constraint resolved by <a href="./nimble-raven-toolkit/">S5</a>'s Tauri choice.</p>
+      </article>
+
+      <article class="card">
+        <h4>Auth model</h4>
+        <p>Filesystem-mode + peer-credentials check on UDS (<code>SO_PEERCRED</code> / <code>LOCAL_PEERCRED</code>) and restrictive SDDL on named pipes — kernel-enforced single-user auth, zero application-layer token logic for the local IPC path. Bearer token only for the HTTP/SSE bridge.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./precise-crane-conduit/research-client-api-auth.html">S4</a>.</p>
+      </article>
+
+      <article class="card">
+        <h4>Isolation</h4>
+        <p>Two-tier: <strong>devenv (Nix) + OS sandbox</strong> primary (bubblewrap / sandbox-exec / AppContainer); <strong>Docker MCP Toolkit / Podman / pinned uvx-npx</strong> as escape hatch for non-Nix users.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./stoic-badger-sandbox/recommendation-nix-isolation-summary.html">S2</a> · Forced by CVE-2025-6514 + supply-chain evidence.</p>
+      </article>
+
+      <article class="card">
+        <h4>Toolchain sync mode</h4>
+        <p><strong>Managed-block</strong> by default — Ansible-style fenced regions with begin/end markers. Pure-JSON tools degrade to sentinel-key fencing (Cursor) or sibling-file projection. Only strategy that simultaneously preserves hand-edits, stays idempotent, surfaces conflicts honestly, and works across TOML/YAML/JSONC/XML.</p>
+        <p>Behavioral asymmetry: <strong>additive-with-consent, subtractive-automatic</strong>. Adding a server prompts in N places; removing happens silently across N places. This rules out watch+reconcile as a default.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">S6</a>.</p>
+      </article>
+
+      <article class="card">
+        <h4>Custom-toolchain spec</h4>
+        <p>Declarative <strong>TOML</strong> (<code>toolchain.toml</code>) — the escape hatch for tools MCP Manager doesn't ship native support for. Comments are first-class, the Rust ecosystem already uses TOML (Cargo, mise, proto), and mcpd's own config is TOML — single-parser strategy minimises format surface.</p>
+        <p>Bundled tools also ship as TOML manifests, not hardcoded — schema drift in editors makes data-driven manifests the only sustainable option.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">S6</a>.</p>
+      </article>
+
+      <article class="card">
+        <h4>Tool support tiers</h4>
+        <p><strong>Tier 1</strong> (auto-detect + native projection): Claude Code CLI, Codex CLI, VS Code, Cursor, Zed, JetBrains family (IntelliJ / PyCharm / RustRover / WebStorm / CLion / GoLand).</p>
+        <p><strong>Tier 2</strong> (opt-in projection): Windsurf, Continue, Cline, Goose, LibreChat, Claude Desktop.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">S6</a>.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="sketch">
+    <h2>Architecture sketch</h2>
+    <p>Composing the convergent decisions above. Each layer links to the stream that owns it.</p>
+    <pre><code>┌─────────────────────────────────────────────────────────────────────┐
+│ Clients                                            ← Stream 5 owns  │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐    │
+│  │  CLI         │  │  TUI         │  │  GUI                   │    │
+│  │  clap derive │  │  ratatui +   │  │  Tauri 2 + Leptos      │    │
+│  │              │  │  crossterm   │  │  (Rust-WASM frontend)  │    │
+│  └───────┬──────┘  └───────┬──────┘  └───────────┬────────────┘    │
+│          │                 │                     │                  │
+│          └─────────────────┼─────────────────────┘                  │
+│                            │                                        │
+│                ┌───────────▼────────────┐    ← mcp-client crate     │
+│                │  mcp-client (shared)   │      (S5 §shared)         │
+│                │  error model, fmt,     │                           │
+│                │  API client stubs      │                           │
+│                └───────────┬────────────┘                           │
+│                            │                                        │
+│   ┌────────────────────────┼─────────────────────────────────┐      │
+│   │  Wire protocol                                ← Stream 4 │      │
+│   │  JSON-RPC 2.0 over UDS / named pipe                     │      │
+│   │  + HTTP/SSE bridge (for Tauri WebView)                  │      │
+│   │  + SO_PEERCRED / SDDL auth (UDS)                        │      │
+│   │  + bearer token (HTTP)                                  │      │
+│   └────────────────────────┬─────────────────────────────────┘      │
+│                            │                                        │
+│   ┌────────────────────────▼─────────────────────────────────┐      │
+│   │  mcpd (tokio-based daemon)                  ← Stream 3   │      │
+│   │  ┌─────────────┐ ┌──────────────┐ ┌────────────────────┐ │      │
+│   │  │ mcp-core    │ │ mcp-          │ │ mcp-secrets       │ │      │
+│   │  │ (registry,  │ │  supervisor   │ │ (OS keychain,     │ │      │
+│   │  │  config,    │ │  per-server,  │ │  in-memory cache) │ │      │
+│   │  │  journal)   │ │  conmon-like  │ │                   │ │      │
+│   │  └─────────────┘ └──────┬───────┘ └────────────────────┘ │      │
+│   │                                                          │      │
+│   │  ┌──────────────────────────────────────────────────┐    │      │
+│   │  │ mcp-projector  ← Stream 6 (clever-fox-bridge)    │    │      │
+│   │  │ canonical → Claude Code · Codex · Zed ·          │    │      │
+│   │  │ JetBrains · VSCode · Cursor · Windsurf · …       │    │      │
+│   │  │ + custom-toolchain escape hatch                  │    │      │
+│   │  └──────────────────────────────────────────────────┘    │      │
+│   │                         │                                │      │
+│   │                  ┌──────▼───────┐                        │      │
+│   │                  │ mcp-proto    │  (rmcp-based)          │      │
+│   │                  │ stdio + HTTP +│                       │      │
+│   │                  │ streamable-HTTP│                      │      │
+│   │                  │ transports     │                      │      │
+│   │                  └──────┬───────┘                        │      │
+│   └─────────────────────────┼────────────────────────────────┘      │
+│                             │                                       │
+│   ┌─────────────────────────▼────────────────────────────────┐      │
+│   │  Isolation runtime                          ← Stream 2   │      │
+│   │  Primary: devenv (Nix) profile + OS sandbox              │      │
+│   │           (bubblewrap / sandbox-exec / AppContainer)     │      │
+│   │  Escape:  Docker MCP Toolkit / Podman / pinned uvx-npx   │      │
+│   └─────────────────────────┬────────────────────────────────┘      │
+│                             │                                       │
+│                       ┌─────▼──────┐                                │
+│                       │ MCP server │  (Python via uv, Node via      │
+│                       │ processes  │   bun/npm, native binaries…)   │
+│                       └────────────┘                                │
+│                                                                     │
+│   Stream 1 (curious-otter-survey) informs every layer: import/      │
+│   migrate from existing host configs, fill the gaps (secrets,       │
+│   lifecycle, schema portability) the survey identified.             │
+└─────────────────────────────────────────────────────────────────────┘
+</code></pre>
+  </section>
+
+  <section class="section" id="streams">
+    <h2>Stream outputs</h2>
+    <div class="stream-grid">
+      <a class="stream-card" href="./curious-otter-survey/">
+        <div class="codename">curious-otter-survey</div>
+        <h3>How MCP servers are configured today</h3>
+        <p><strong>Headline:</strong> Schema balkanization is real — 6 top-level keys, 10 file locations, 4 expansion syntaxes across hosts. Plaintext secrets is the highest-leverage gap.</p>
+        <div class="meta"><span class="pill accent">Stream 1</span><span class="pill success">Complete</span><span class="evidence-badge">28 citations</span></div>
+      </a>
+
+      <a class="stream-card" href="./stoic-badger-sandbox/">
+        <div class="codename">stoic-badger-sandbox</div>
+        <h3>Nix &amp; Devenv isolation + escape hatch</h3>
+        <p><strong>Headline:</strong> CVE-2025-6514 (mcp-remote RCE, CVSS 9.6) makes the threat model concrete. Two-tier model — devenv+sandbox primary, Docker MCP Toolkit escape hatch — is forced by the data.</p>
+        <div class="meta"><span class="pill accent">Stream 2</span><span class="pill success">Complete</span><span class="evidence-badge">33 citations</span></div>
+      </a>
+
+      <a class="stream-card" href="./steady-bear-foundation/">
+        <div class="codename">steady-bear-foundation</div>
+        <h3>Core system architecture</h3>
+        <p><strong>Headline:</strong> <code>rmcp</code> SDK forecloses async runtime to tokio. Podman/conmon pattern (per-server supervisor) is the strongest prior art. Library-only is structurally unfit.</p>
+        <div class="meta"><span class="pill accent">Stream 3</span><span class="pill success">Complete</span><span class="evidence-badge">35 citations</span></div>
+      </a>
+
+      <a class="stream-card" href="./precise-crane-conduit/">
+        <div class="codename">precise-crane-conduit</div>
+        <h3>Client APIs (CLI / TUI / GUI)</h3>
+        <p><strong>Headline:</strong> JSON-RPC over UDS/named pipe is decisive — shares parser with MCP-server-facing code. HTTP/SSE bridge is mandatory because Tauri WebView can't dial UDS.</p>
+        <div class="meta"><span class="pill accent">Stream 4</span><span class="pill success">Complete</span><span class="evidence-badge">49 citations</span></div>
+      </a>
+
+      <a class="stream-card" href="./nimble-raven-toolkit/">
+        <div class="codename">nimble-raven-toolkit</div>
+        <h3>Client tooling selection</h3>
+        <p><strong>Headline:</strong> CLI (clap) and TUI (ratatui) are solved. Rust GUI ecosystem mostly fails its own accessibility baseline; Tauri 2 + Leptos is the lowest-risk landing pad for v1.0.</p>
+        <div class="meta"><span class="pill accent">Stream 5</span><span class="pill success">Complete</span><span class="evidence-badge">65 citations</span></div>
+      </a>
+
+      <a class="stream-card" href="./clever-fox-bridge/">
+        <div class="codename">clever-fox-bridge</div>
+        <h3>Toolchain configuration projection</h3>
+        <p><strong>Headline:</strong> Managed-block sync wins under every realistic weighting (Ansible's <code>blockinfile</code> has 10+ years of hardening). Schema drift makes data-driven TOML manifests mandatory even for bundled Tier-1 tools.</p>
+        <div class="meta"><span class="pill accent">Stream 6</span><span class="pill success">Complete</span><span class="evidence-badge">56 citations</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="section" id="cross-stream">
+    <h2>Cross-stream dependency map</h2>
+    <p>How streams influenced each other in practice. Arrows read as "stream X's finding constrained stream Y's recommendation." All streams ran without seeing each other's outputs — these dependencies emerged from independent reasoning about the same problem space.</p>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Decision</th><th>Owner</th><th>Constrained by</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>HTTP/SSE bridge in v1.0</td>
+          <td><a href="./precise-crane-conduit/">S4</a></td>
+          <td><a href="./nimble-raven-toolkit/">S5</a> (Tauri GUI)</td>
+          <td>WebView frontends can't dial UDS, so an HTTP loopback path is mandatory rather than optional.</td>
+        </tr>
+        <tr>
+          <td>Daemon required</td>
+          <td><a href="./steady-bear-foundation/">S3</a></td>
+          <td><a href="./curious-otter-survey/">S1</a> (lifecycle gaps), <a href="./precise-crane-conduit/">S4</a> (long-lived assumed)</td>
+          <td>Stream 1 surfaced restart loops &amp; orphaned processes; Stream 4's IPC choice needs a process to dial; Stream 3 confirmed library-only is structurally unfit.</td>
+        </tr>
+        <tr>
+          <td>Async runtime = tokio</td>
+          <td><a href="./steady-bear-foundation/">S3</a></td>
+          <td>Upstream <code>rmcp</code> SDK</td>
+          <td>External constraint, not a stream-internal choice.</td>
+        </tr>
+        <tr>
+          <td>Two-tier isolation</td>
+          <td><a href="./stoic-badger-sandbox/">S2</a></td>
+          <td>Real CVE evidence (CVE-2025-6514) + cross-OS sandbox heterogeneity</td>
+          <td>No single isolation primitive covers all 3 OSes; combining strong-default + escape hatch is forced by the data.</td>
+        </tr>
+        <tr>
+          <td>Gaps to fill</td>
+          <td><a href="./curious-otter-survey/">S1</a></td>
+          <td>—</td>
+          <td>Independent — S1 surveys the existing landscape that motivates the project.</td>
+        </tr>
+        <tr>
+          <td>CLI / TUI framework</td>
+          <td><a href="./nimble-raven-toolkit/">S5</a></td>
+          <td>—</td>
+          <td>Independent — strong ecosystem consensus (clap, ratatui).</td>
+        </tr>
+        <tr>
+          <td>GUI framework</td>
+          <td><a href="./nimble-raven-toolkit/">S5</a></td>
+          <td>Accessibility + a11y data on pure-native Rust GUIs</td>
+          <td>43-library survey showed only Slint/egui/Dioxus/WinSafe pass minimum-viable baseline; Slint's GPL license rules it out; Tauri's system WebView gives a11y for free.</td>
+        </tr>
+        <tr>
+          <td>Toolchain projection layer</td>
+          <td><a href="./clever-fox-bridge/">S6</a></td>
+          <td><a href="./curious-otter-survey/">S1</a> (schemas to project into), <a href="./steady-bear-foundation/">S3</a> (lives inside mcpd), <a href="./precise-crane-conduit/">S4</a> (wire protocol exposes the sync command), <a href="./stoic-badger-sandbox/">S2</a> (security boundary for privileged write)</td>
+          <td>Densest cross-stream dependency in the design — only S5 is independent. S1's schema survey becomes S6's <em>output</em> target catalog; mcpd hosts the projector; the wire RPC <code>toolchain.sync</code> invokes it; the additive-with-consent / subtractive-automatic asymmetry is forced by S2's threat model.</td>
+        </tr>
+        <tr>
+          <td>Managed-block sync default</td>
+          <td><a href="./clever-fox-bridge/">S6</a></td>
+          <td>Ansible <code>blockinfile</code> prior art + cross-format evidence</td>
+          <td>Only strategy that preserves hand-edits, stays idempotent, surfaces conflicts honestly, and works across TOML / YAML / JSONC / XML. Pure-JSON tools (Cursor) degrade to sentinel-key fencing or sibling-file projection.</td>
+        </tr>
+        <tr>
+          <td>Tool support as data, not code</td>
+          <td><a href="./clever-fox-bridge/">S6</a></td>
+          <td>Observed schema-drift cadence in Tier-1 tools</td>
+          <td>VSCode added <code>inputs</code>; Continue moved to array; Claude Code added <code>headersHelper</code> — schema changes ship every few months. Bundled-tool support must be a TOML manifest in the binary, not Rust match arms, so users can patch a manifest without rebuilding mcpd.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section" id="open-questions">
+    <h2>Open questions for v1.0 scoping</h2>
+    <p>Four decisions remain genuinely open. Each is scoped, not blocking — but should be answered before lock-down.</p>
+
+    <details class="accordion" open>
+      <summary>Windows default isolation strategy</summary>
+      <p>S2 tentatively recommends Docker MCP Toolkit on Windows for cross-OS uniformity, but it requires Docker Desktop (license + Hyper-V/WSL2). Alternatives: AppContainer-direct with pinned uvx/npx (native, but per-server capability authoring is heavy and not every MCP server has been tested), or WSL2-with-devenv (most reproducible, but adds a second OS into onboarding).</p>
+      <p>Decision blocks: the Windows installer flow.</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./stoic-badger-sandbox/recommendation-nix-isolation-summary.html">stoic-badger-sandbox</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>Auto-spawn daemon vs hard-fail with install pointer</summary>
+      <p>Should <code>mcp start &lt;server&gt;</code> silently auto-spawn a daemon when none exists (podman-like, friendliest UX), or hard-fail with a friendly pointer to <code>mcp daemon --install-launchd|--install-systemd-user</code> (more transparent about what's appearing on the user's machine)?</p>
+      <p>Decision blocks: first-run UX, OS-permission prompt experience, and CI/headless behavior.</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./steady-bear-foundation/recommendation-core-architecture-summary.html">steady-bear-foundation</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>Tauri frontend: Leptos (Rust-WASM) vs TypeScript</summary>
+      <p>S5 recommends Leptos for a mono-lingual codebase and shared types from <code>mcp-client</code>, but a TS frontend remains viable if the project plans to hire TS/React engineers. Re-decidable at scaffold time, not at design time.</p>
+      <p>Decision blocks: GUI hiring profile, frontend build pipeline.</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">nimble-raven-toolkit</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>Daemon ambition: how much supervision in v1.0?</summary>
+      <p>S1 raised this; S3 + S4 effectively answered "yes, real supervision." But the <em>surface area</em> of supervision in v1.0 is still open: just spawn/stop, or also restart-on-crash, OOM handling, resource limits, audit logs, telemetry export? Each level adds scope.</p>
+      <p>Decision blocks: v1.0 feature scope, beta cut date.</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./curious-otter-survey/recommendation-mcp-config-summary.html">curious-otter-survey</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>Canonical scope: per-user vs per-project as the default <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
+      <p>Editors split on this: VSCode and Cursor encourage per-project <code>.vscode/mcp.json</code> and <code>.cursor/mcp.json</code> respectively; Claude Code, Zed, and JetBrains lean per-user. MCP Manager has to pick one as the canonical default and translate to the other.</p>
+      <p>Decision blocks: the <code>mcpm init</code> flow, the team-onboarding story (committing canonical into a repo vs not), and whether <code>.mcp-manager.lock</code> ships per-project or per-user.</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>Linux sandbox-root enumeration depth (Flatpak / Snap) <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
+      <p>Flatpak-installed VSCode lives at <code>~/.var/app/com.visualstudio.code/config/Code/User/settings.json</code>; Snap puts it elsewhere again. Aggressive enumeration finds more tools but slows <code>mcpm doctor</code> and increases false positives. Conservative enumeration misses installs.</p>
+      <p>Decision blocks: discovery UX on Linux desktops (a sizeable fraction of the target user base).</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/research-toolchain-discovery.html">clever-fox-bridge</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>Wrapper-command secrets fallback when mcpd isn't running <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
+      <p>If a user launches their editor without mcpd running, projected configs that reference live secrets fail. S6 proposes <code>mcpm exec --secrets-from</code> as a wrapper-command shim so the editor spawns the server through a transient mcpd-lite. This trades a small "Where's that <code>mcpm exec</code> command from?" cognitive cost for not requiring users to always have mcpd running. Accept, reject, or alternate design?</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>Curated community toolchain registry (Homebrew-taps style) <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
+      <p>The TOML escape hatch lets anyone teach mcpm about a new tool. Should we host a <em>curated</em> registry of community-contributed manifests (like Homebrew taps or mise plugins) so users can <code>mcpm toolchain add cline-fork</code> and pull a vetted manifest? Adds maintenance burden and a moderation policy; without it, ecosystem-discoverability is poor.</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>Sidecar vs centralised lock file <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
+      <p>To detect drift and conflicts, the projector needs a lock file recording the last-known hash of each managed region. Sidecar (<code>.mcp-manager.lock</code> next to each tool's config) keeps the data local; centralised (<code>~/.config/mcp-manager/projection.lock</code>) is easier to audit but couples per-project work to a per-user file.</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/research-toolchain-sync-modes.html">clever-fox-bridge</a></p>
+    </details>
+
+    <details class="accordion">
+      <summary>JetBrains XML projection in v1.0 or defer? <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
+      <p>JetBrains IDEs store MCP config in XML inside the IDE config dir — fundamentally different parser, fundamentally riskier projection (XML schemas drift via IDE-side merge semantics that the user can't see). S6 puts the JetBrains family in Tier 1 because of user demand, but flags XML projection as the highest-effort tool in the catalog. Ship in v1.0 or defer to v1.1?</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/research-toolchain-known-clients.html">clever-fox-bridge</a></p>
+    </details>
+  </section>
+
+  <section class="section" id="how-to-read">
+    <h2>How to read each stream</h2>
+    <p>Every stream follows the same four-stage flow. You can sample at any depth.</p>
+    <ol>
+      <li><code>research-*.html</code> — raw factual landscape, every claim cited.</li>
+      <li><code>analysis-*-tradeoffs.html</code> — interpretation and tradeoffs, still neutral.</li>
+      <li><code>matrix-*-ranking.html</code> — interactive ranking matrix; <kbd>drag</kbd> weight sliders to re-rank live, click <code>[n]</code> evidence pills to jump to citations.</li>
+      <li><code>recommendation-*-summary.html</code> — the stream's recommendation with rationale linked to evidence pages and citations. The only place opinions appear.</li>
+    </ol>
+    <p>Citations are footnotes at the bottom of each page; hover or focus any <code>[n]</code> to preview the source. Theme toggle in the top-right cycles light/dark/auto.</p>
+  </section>
+</main>
+</body>
+</html>

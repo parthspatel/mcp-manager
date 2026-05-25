@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GUI client tooling research — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">nimble-raven-toolkit</a> / research · GUI</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Research — Rust GUI tooling for the MCP Manager GUI</h1>
+
+<p class="lede">
+The MCP Manager GUI is closest in spirit to <em>Docker Desktop</em>: a single application that exposes server lists, config editors, logs, and resource graphs in a familiar window-and-sidebar layout. The Rust GUI space has two broad families — <strong>WebView hybrids</strong> and <strong>pure-native renderers</strong> — and neither is dominant. The boringcactus 2025 survey of 43 libraries concluded that no single "obvious" choice has emerged <cite data-ref="boringcactus-2025-survey"></cite>.
+</p>
+
+<nav class="toc">
+<h4>Contents</h4>
+<ul>
+<li><a href="#hybrid">WebView-hybrid frameworks</a></li>
+<li><a href="#native">Pure-native frameworks</a></li>
+<li><a href="#a11y">Accessibility status</a></li>
+<li><a href="#binsize">Binary size, theming, mobile</a></li>
+<li><a href="#summary">At-a-glance summary</a></li>
+</ul>
+</nav>
+
+<section class="section" id="hybrid">
+<h2>WebView-hybrid frameworks</h2>
+
+<p>These embed the OS's native WebView (Edge WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux) and let you write UI in whatever web stack you like — TS/React, Rust/WASM (Leptos, Dioxus, Yew), or vanilla HTML.</p>
+
+<div data-tabs>
+  <div class="tab-list" role="tablist">
+    <button class="tab-btn" aria-selected="true">Tauri 2</button>
+    <button class="tab-btn">Dioxus desktop</button>
+  </div>
+
+  <div class="tab-panel" aria-hidden="false">
+    <h3>Tauri 2</h3>
+    <p>
+      Tauri 2.0 reached stable on October 2, 2024, adding first-class mobile (iOS &amp; Android) targets, an ACL-based permissions/scopes/capabilities security model, and a new IPC implementation that uses custom protocols rather than serializing every message through the webview's <code>postMessage</code> interface <cite data-ref="tauri-2-stable"></cite><cite data-ref="tauri-2-rcandidate"></cite>. The new <code>tauri::ipc::Channel</code> API lets Rust stream data (file chunks, log lines) to the frontend with much lower overhead than the v1 IPC <cite data-ref="tauri-2-stable"></cite>.
+    </p>
+    <p>
+      Tauri uses <code>tao</code> for window management and <code>WRY</code> for the WebView abstraction, and ships under MIT or Apache 2.0 <cite data-ref="tauri-github"></cite>. Real-world Tauri apps are typically ~600 KB – 10 MB installers versus 80–150 MB for an equivalent Electron app, with idle RAM in the 30–50 MB range vs. larger Electron footprints <cite data-ref="tauri-vs-electron"></cite>.
+    </p>
+    <p>
+      Frontend choice is open: <code>create-tauri-app</code> ships templates for React, Vue, Svelte, Solid, Angular, Yew, Leptos, Dioxus, and vanilla; the <a href="https://v2.tauri.app/start/frontend/leptos/">Leptos integration guide</a> is a first-party doc <cite data-ref="tauri-leptos"></cite>. This means a Tauri app for MCP Manager can be 100% Rust (Rust backend + Rust-WASM Leptos/Dioxus frontend), or it can let the team start with a TS frontend they already know.
+    </p>
+<pre><code>// Tauri 2: a typed command using the new Channel API to stream events.
+use tauri::ipc::Channel;
+use serde::Serialize;
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "event", content = "data")]
+enum LogEvent&lt;'a&gt; {
+    Line { stream: &amp;'a str, text: &amp;'a str },
+    Closed,
+}
+
+#[tauri::command]
+async fn tail_logs(server: String, on_event: Channel&lt;LogEvent&lt;'_&gt;&gt;) {
+    // ... read from the MCP Manager daemon and stream lines ...
+    on_event.send(LogEvent::Line { stream: "stdout", text: "hello" }).ok();
+    on_event.send(LogEvent::Closed).ok();
+}</code></pre>
+  </div>
+
+  <div class="tab-panel" aria-hidden="true">
+    <h3>Dioxus 0.6 — desktop target</h3>
+    <p>
+      Dioxus targets web, desktop, mobile, and SSR with a single component model that visually resembles React; the desktop target runs on the same system WebView as Tauri <cite data-ref="dioxus-home"></cite>. The 0.6 release in late 2024 brought magical hot-reloading of formatted strings and properties, an interactive CLI rewrite, inline WASM stack traces, and "Server Functions for Native" — inline RPC for desktop/mobile apps <cite data-ref="dioxus-0-6"></cite>.
+    </p>
+<pre><code>// Dioxus desktop — components live entirely in Rust.
+use dioxus::prelude::*;
+
+fn main() { dioxus::LaunchBuilder::desktop().launch(App); }
+
+fn App() -&gt; Element {
+    let mut count = use_signal(|| 0u32);
+    rsx! {
+        h1 { "Servers" }
+        button { onclick: move |_| count += 1, "Refresh ({count})" }
+    }
+}</code></pre>
+    <p>
+      Compared to Tauri, Dioxus desktop avoids the JS&lt;-&gt;Rust IPC boundary entirely — event handlers are normal Rust functions — but it locks the UI into the Dioxus component model, while Tauri lets you bring any frontend stack <cite data-ref="boringcactus-2025-survey"></cite>.
+    </p>
+  </div>
+</div>
+</section>
+
+<section class="section" id="native">
+<h2>Pure-native frameworks</h2>
+
+<p>These render their own UI on the GPU (wgpu / Metal / DirectX / Skia) or a software canvas, and do not use a system WebView.</p>
+
+<div data-tabs>
+  <div class="tab-list" role="tablist">
+    <button class="tab-btn" aria-selected="true">egui</button>
+    <button class="tab-btn">iced</button>
+    <button class="tab-btn">Slint</button>
+    <button class="tab-btn">GPUI</button>
+    <button class="tab-btn">Freya / Xilem / Makepad</button>
+  </div>
+
+  <div class="tab-panel" aria-hidden="false">
+    <h3>egui + eframe</h3>
+    <p>
+      <code>egui</code> is an immediate-mode GUI library inspired by Dear ImGui: the UI is reconstructed each frame, with no retained widget tree <cite data-ref="egui-home"></cite>. It compiles to native Windows/macOS/Linux/Android and to WebAssembly, has no <code>unsafe</code> code, minimal dependencies, and an official framework wrapper called <code>eframe</code> that handles input and rendering <cite data-ref="egui-github"></cite>. Accessibility comes from <code>AccessKit</code>, with platform integrations on Windows and macOS enabled by default in <code>eframe</code> <cite data-ref="accesskit-home"></cite><cite data-ref="egui-github"></cite>.
+    </p>
+    <p>
+      The largest production user is <a href="https://rerun.io/">Rerun</a>, which sponsors egui development and ships a multimodal data visualization viewer built entirely on it <cite data-ref="rerun-egui"></cite>. egui's own README is candid that "if you want a GUI that looks native or something that doesn't break when you upgrade it, egui isn't for you (yet)" <cite data-ref="egui-github"></cite>.
+    </p>
+<pre><code>// egui — immediate-mode app via eframe.
+use eframe::{egui, App, Frame};
+
+struct McpApp { servers: Vec&lt;String&gt; }
+
+impl App for McpApp {
+    fn update(&amp;mut self, ctx: &amp;egui::Context, _: &amp;mut Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            for s in &amp;self.servers { ui.label(s); }
+            if ui.button("Refresh").clicked() { /* ... */ }
+        });
+    }
+}</code></pre>
+  </div>
+
+  <div class="tab-panel" aria-hidden="true">
+    <h3>iced</h3>
+    <p>
+      <code>iced</code> is Elm-inspired and built around four concepts: <em>state</em>, <em>messages</em>, <em>view</em>, and <em>update</em> <cite data-ref="iced-book-architecture"></cite>. It has two renderers — a primary <code>wgpu</code> renderer (Vulkan/Metal/DirectX 12) and a <code>tiny-skia</code> software fallback — plus first-class async/futures integration <cite data-ref="iced-github"></cite>. Version 0.14, released December 2025, added reactive rendering (only redraws changed widgets), the Comet time-travel debugger, and a public Animation API as the final experimental release before 1.0 <cite data-ref="iced-014"></cite>.
+    </p>
+    <p>
+      The flagship production user is <strong>System76's COSMIC desktop</strong>, which launched as Pop!_OS 24.04 LTS in December 2025 — a full Wayland desktop environment built on <code>iced</code> <cite data-ref="cosmic-iced"></cite>. iced is MIT-licensed and has 30k+ GitHub stars <cite data-ref="iced-github"></cite>.
+    </p>
+<pre><code>// iced — Elm-style Application.
+use iced::{Element, Task};
+
+#[derive(Default)] struct State { count: u32 }
+#[derive(Clone, Copy)] enum Msg { Inc }
+
+fn update(s: &amp;mut State, msg: Msg) -&gt; Task&lt;Msg&gt; {
+    match msg { Msg::Inc =&gt; s.count += 1 } Task::none()
+}
+
+fn view(s: &amp;State) -&gt; Element&lt;'_, Msg&gt; {
+    iced::widget::button(iced::widget::text(format!("{}", s.count)))
+        .on_press(Msg::Inc).into()
+}</code></pre>
+  </div>
+
+  <div class="tab-panel" aria-hidden="true">
+    <h3>Slint</h3>
+    <p>
+      Slint defines UI in <code>.slint</code> — a declarative DSL akin to HTML/CSS — and compiles it into native code, with bindings for Rust, C++, JavaScript, and Python <cite data-ref="slint-home"></cite>. The runtime fits in less than 300 KiB of RAM and runs on systems as small as a Raspberry Pi Pico <cite data-ref="slint-home"></cite>. AccessKit is integrated <cite data-ref="accesskit-home"></cite>.
+    </p>
+    <p>
+      Slint reached 1.0 in 2023 and explicitly commits to API stability going forward <cite data-ref="slint-1-0"></cite>. It is dual-licensed: GPLv3 for open-source apps, with a separately purchased royalty-free permissive license for proprietary use <cite data-ref="slint-github"></cite>. The boringcactus 2025 survey rates it as one of the few frameworks with strong accessibility plus IME plus production-ready widgets <cite data-ref="boringcactus-2025-survey"></cite>.
+    </p>
+<pre><code>// Slint — UI in a .slint file, logic in Rust.
+slint::slint! {
+    export component MainWindow inherits Window {
+        VerticalBox {
+            Text { text: "MCP Manager"; }
+            Button { text: "Refresh"; clicked =&gt; { root.refresh-now(); } }
+        }
+        callback refresh-now();
+    }
+}
+
+fn main() {
+    let w = MainWindow::new().unwrap();
+    w.on_refresh_now(|| println!("clicked"));
+    w.run().unwrap();
+}</code></pre>
+  </div>
+
+  <div class="tab-panel" aria-hidden="true">
+    <h3>GPUI</h3>
+    <p>
+      GPUI is the framework that powers the Zed editor — a hybrid immediate/retained mode, GPU-accelerated UI framework that uses Metal on macOS <cite data-ref="gpui-readme"></cite>. The official site states GPUI "is still in active development as we work on the Zed code editor, and is still pre-1.0. There will often be breaking changes between versions" <cite data-ref="gpui-home"></cite>.
+    </p>
+    <p>
+      Platform support is currently <strong>macOS and Linux</strong>; Windows support is being actively built but is not at parity <cite data-ref="gpui-home"></cite>. The crates.io listing reinforces the pre-1.0 caveat <cite data-ref="gpui-crates"></cite>. The boringcactus survey flags that GPUI "lacks basic text input widget; overly complex to use" for general-purpose apps as of 2025 <cite data-ref="boringcactus-2025-survey"></cite>.
+    </p>
+  </div>
+
+  <div class="tab-panel" aria-hidden="true">
+    <h3>Freya, Xilem, Makepad — earlier-stage</h3>
+    <ul>
+      <li><strong>Freya</strong> uses the Dioxus core but renders natively with Skia — RSX components on a non-WebView backend <cite data-ref="freya-home"></cite>. The boringcactus survey rates it as "basically usable now if you don't mind living on the bleeding edge and putting up with some jank" <cite data-ref="boringcactus-2025-survey"></cite>.</li>
+      <li><strong>Xilem</strong> is a Linebender project — a reactive framework inspired by React, SwiftUI, and Elm, built on Masonry. It hasn't had a numbered release in nearly a year as of the 2025 survey and is alpha-quality <cite data-ref="xilem-github"></cite><cite data-ref="boringcactus-2025-survey"></cite>.</li>
+      <li><strong>Makepad</strong> hit 1.0 in 2025 but the survey notes it appears built primarily for its own team, with a macro DSL that has minimal documentation; crates.io versions don't get matching Git tags <cite data-ref="makepad-hn"></cite>.</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<section class="section" id="a11y">
+<h2>Accessibility status</h2>
+
+<p>Accessibility ("can a screen reader use this app?") is the single most differentiating axis among Rust GUI frameworks. <code>AccessKit</code> is the cross-toolkit infrastructure layer that surfaces a UI tree to platform accessibility APIs (UIA on Windows, NSAccessibility on macOS) <cite data-ref="accesskit-home"></cite>. It's integrated by Bevy, <strong>egui, Freya, Slint, and Xilem</strong>.</p>
+
+<table class="compare">
+<thead><tr><th>Framework</th><th>Screen reader (Windows Narrator)</th><th>IME (CJK input)</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Slint</td><td>Yes</td><td>Yes</td><td>Strongest of the pure-native options <cite data-ref="boringcactus-2025-survey"></cite>.</td></tr>
+<tr><td>egui</td><td>Yes</td><td>Partial — IME composition states have known issues</td><td>"If you don't need IME support, egui seems like a reasonable choice for accessibility" <cite data-ref="boringcactus-2025-survey"></cite>.</td></tr>
+<tr><td>Dioxus (WebView)</td><td>Yes</td><td>Yes</td><td>Inherits from the underlying WebView; accessibility is browser-quality <cite data-ref="boringcactus-2025-survey"></cite>.</td></tr>
+<tr><td>Tauri (WebView)</td><td>Yes</td><td>Yes</td><td>Same as above — system WebView provides full a11y.</td></tr>
+<tr><td>iced</td><td>No</td><td>Partial</td><td>Open accessibility issue has been open for 4.5 years <cite data-ref="boringcactus-2025-survey"></cite>.</td></tr>
+<tr><td>GPUI</td><td>Limited</td><td>Limited</td><td>Pre-1.0; not a priority yet <cite data-ref="gpui-home"></cite>.</td></tr>
+<tr><td>Freya / Xilem</td><td>Partial</td><td>Partial</td><td>AccessKit wired up; coverage still maturing <cite data-ref="boringcactus-2025-survey"></cite>.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section class="section" id="binsize">
+<h2>Binary size, theming, mobile, and dev ergonomics</h2>
+
+<table class="compare">
+<thead><tr><th>Framework</th><th>Installer size (typical)</th><th>Mobile?</th><th>Dark mode / theming</th><th>Hot reload</th></tr></thead>
+<tbody>
+<tr><td>Tauri 2</td><td>~600 KB – 10 MB <cite data-ref="tauri-vs-electron"></cite></td><td>iOS + Android (v2) <cite data-ref="tauri-2-stable"></cite></td><td>CSS / any web framework</td><td>Yes (frontend HMR) <cite data-ref="tauri-2-stable"></cite></td></tr>
+<tr><td>Dioxus desktop</td><td>Similar to Tauri (system WebView)</td><td>Yes (mobile target) <cite data-ref="dioxus-home"></cite></td><td>CSS</td><td>Yes — rsx hot-reload <cite data-ref="dioxus-0-6"></cite></td></tr>
+<tr><td>egui</td><td>Small Rust binary; few MB</td><td>Android only (boringcactus notes mobile is limited) <cite data-ref="egui-github"></cite></td><td>Built-in light/dark/custom <code>Visuals</code></td><td>Limited (rebuild)</td></tr>
+<tr><td>iced</td><td>Small Rust binary; few MB</td><td>No first-class mobile target <cite data-ref="iced-github"></cite></td><td>Theme system; COSMIC themes ride on iced</td><td>Limited</td></tr>
+<tr><td>Slint</td><td>Runtime &lt;300 KiB <cite data-ref="slint-home"></cite></td><td>Mobile via embedded targets; iOS/Android in commercial offering <cite data-ref="slint-home"></cite></td><td>Theme via DSL; "Material" and "Fluent" styles available</td><td>Yes — Slint live preview <cite data-ref="slint-home"></cite></td></tr>
+<tr><td>GPUI</td><td>n/a — pre-1.0 <cite data-ref="gpui-home"></cite></td><td>Mobile not supported yet</td><td>Used by Zed's themes — proven but bespoke</td><td>n/a</td></tr>
+</tbody>
+</table>
+</section>
+
+<section class="section" id="summary">
+<h2>At-a-glance summary</h2>
+
+<table class="compare">
+<thead><tr><th>Framework</th><th>Family</th><th>License</th><th>Production reference</th><th>Stability</th></tr></thead>
+<tbody>
+<tr><td>Tauri 2</td><td>WebView hybrid</td><td>MIT / Apache-2.0 <cite data-ref="tauri-github"></cite></td><td>1Password 8 (initial), countless launched apps <cite data-ref="tauri-2-stable"></cite></td><td>Stable (2.0 GA Oct 2024)</td></tr>
+<tr><td>Dioxus</td><td>WebView hybrid</td><td>MIT / Apache-2.0 <cite data-ref="dioxus-home"></cite></td><td>Active 0.6 cycle, growing</td><td>Pre-1.0 but stabilizing</td></tr>
+<tr><td>egui</td><td>Native (immediate)</td><td>MIT / Apache-2.0 <cite data-ref="egui-github"></cite></td><td>Rerun (data viz) <cite data-ref="rerun-egui"></cite></td><td>Breaking changes between versions</td></tr>
+<tr><td>iced</td><td>Native (Elm)</td><td>MIT <cite data-ref="iced-github"></cite></td><td>COSMIC desktop / Kraken Desktop <cite data-ref="cosmic-iced"></cite></td><td>0.14 — final pre-1.0 experimental <cite data-ref="iced-014"></cite></td></tr>
+<tr><td>Slint</td><td>Native (DSL)</td><td><span class="pill warn">GPL or paid commercial</span> <cite data-ref="slint-github"></cite></td><td>Various embedded customers, desktop apps</td><td>1.x stable <cite data-ref="slint-1-0"></cite></td></tr>
+<tr><td>GPUI</td><td>Native (hybrid imm/retained)</td><td>Apache 2.0 (Zed)</td><td>Zed editor</td><td>Pre-1.0; macOS + Linux only <cite data-ref="gpui-home"></cite></td></tr>
+<tr><td>Freya / Xilem / Makepad</td><td>Native</td><td>MIT / Apache-2.0</td><td>Early adopters only</td><td>Alpha to pre-1.0 <cite data-ref="boringcactus-2025-survey"></cite></td></tr>
+</tbody>
+</table>
+
+<p>
+The headline reality from the boringcactus 2025 survey is that of the 43 libraries the author tested, 94% failed his minimal "label + input field with proper screen reader and IME support" test <cite data-ref="boringcactus-2025-survey"></cite>. The four that passed were <strong>Slint, egui, Dioxus, and WinSafe</strong> (the last being Windows-only). That is the empirical pool the MCP Manager GUI choice should draw from, plus Tauri (which inherits the WebView's behavior, just like Dioxus) and iced (acceptable if a11y is not a P0).
+</p>
+</section>
+</main>
+</body>
+</html>

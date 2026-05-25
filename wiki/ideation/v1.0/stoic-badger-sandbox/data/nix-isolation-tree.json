@@ -1,0 +1,112 @@
+{
+  "title": "Picking an isolation strategy for an MCP server",
+  "root": {
+    "question": "Do you have Nix installed (or are willing to install it)?",
+    "branches": [
+      {
+        "label": "Yes",
+        "node": {
+          "question": "Do you need reproducible per-server toolchains across machines / teammates / CI?",
+          "branches": [
+            {
+              "label": "Yes — reproducibility matters",
+              "node": {
+                "question": "Is a strong OS sandbox available for the target host (bubblewrap on Linux, sandbox-exec on macOS, AppContainer on Windows)?",
+                "branches": [
+                  {
+                    "label": "Yes",
+                    "node": {
+                      "answer": "devenv profile + best-available OS sandbox",
+                      "note": "Primary recommended path. Reproducible toolchain + runtime isolation layer.",
+                      "ref": "#cite-devenv-home"
+                    }
+                  },
+                  {
+                    "label": "No",
+                    "node": {
+                      "answer": "devenv profile alone (no extra sandbox)",
+                      "note": "You still get reproducibility and pinned versions, but the server inherits host FS/network.",
+                      "ref": "#cite-devenv-home"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "label": "No — just need a temp shell",
+              "node": {
+                "answer": "Use a raw nix-shell / nix run for one-off invocations",
+                "note": "Lighter than a full devenv profile; not declarative.",
+                "ref": "#cite-nix-manual-intro"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "label": "No",
+        "node": {
+          "question": "Is container runtime acceptable (Docker / Podman / OCI)?",
+          "branches": [
+            {
+              "label": "Yes",
+              "node": {
+                "question": "Do you want rootless / daemonless by default?",
+                "branches": [
+                  {
+                    "label": "Yes",
+                    "node": {
+                      "answer": "Podman rootless containers",
+                      "note": "Strong isolation, no privileged daemon.",
+                      "ref": "#cite-podman-rootless"
+                    }
+                  },
+                  {
+                    "label": "No / Docker is already installed",
+                    "node": {
+                      "answer": "Docker MCP Toolkit catalog images",
+                      "note": "Signed images, 1 CPU + 2 GB caps, no host FS by default.",
+                      "ref": "#cite-docker-mcp-toolkit"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "label": "No",
+              "node": {
+                "question": "Best-effort sandbox only — what OS?",
+                "branches": [
+                  {
+                    "label": "Linux",
+                    "node": {
+                      "answer": "bubblewrap + pinned uvx/npx with --version",
+                      "note": "Escape hatch: cheap, no daemon, decent isolation.",
+                      "ref": "#cite-bubblewrap-repo"
+                    }
+                  },
+                  {
+                    "label": "macOS",
+                    "node": {
+                      "answer": "sandbox-exec + pinned uvx/npx",
+                      "note": "Deprecated but functional; emit stderr warning is unavoidable.",
+                      "ref": "#cite-sandbox-exec-deprecation"
+                    }
+                  },
+                  {
+                    "label": "Windows",
+                    "node": {
+                      "answer": "Launch under an AppContainer with the minimum capability set",
+                      "note": "Documented Win32 isolation model; capability-based access only.",
+                      "ref": "#cite-appcontainer-isolation"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

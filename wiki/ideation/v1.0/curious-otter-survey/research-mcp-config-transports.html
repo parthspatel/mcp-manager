@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transports — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">curious-otter-survey</a> / transports</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+<main class="container">
+<h1>Transports: stdio vs Streamable HTTP vs SSE</h1>
+<p class="lede">
+What the MCP spec actually defines, how the three transports compare in adoption, and the operational constraints each one places on a manager process.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#spec">What the spec defines (and what is deprecated)</a></li>
+    <li><a href="#stdio">stdio in detail</a></li>
+    <li><a href="#http">Streamable HTTP in detail</a></li>
+    <li><a href="#sse">HTTP+SSE — the deprecated form</a></li>
+    <li><a href="#adoption">Adoption per host</a></li>
+    <li><a href="#auth">Auth model per transport</a></li>
+    <li><a href="#constraints">Operational constraints</a></li>
+  </ul>
+</nav>
+
+<h2 id="spec">What the spec defines</h2>
+<p>The current Model Context Protocol specification (revision 2025-06-18) defines exactly two standard transports — <strong>stdio</strong> and <strong>Streamable HTTP</strong> — and states that clients SHOULD support stdio whenever possible.<cite data-ref="mcp-spec-transports"></cite> The earlier HTTP+SSE form from protocol revision 2024-11-05 was deprecated in March 2025 (spec revision 2025-03-26) and is retained only for backwards compatibility.<cite data-ref="mcp-spec-transports"></cite><cite data-ref="sse-deprecated"></cite></p>
+
+<div class="card-grid">
+  <article class="card">
+    <h3><span class="pill success">Recommended</span> stdio</h3>
+    <p>Client launches the server as a subprocess. JSON-RPC messages over stdin/stdout, newline-delimited, logs on stderr.<cite data-ref="mcp-spec-transports"></cite></p>
+  </article>
+  <article class="card">
+    <h3><span class="pill success">Recommended</span> Streamable HTTP</h3>
+    <p>Single HTTP endpoint accepting POST and GET. The same endpoint can return plain JSON or open an SSE stream for long-lived operations. Optional <code>Mcp-Session-Id</code> header for stateful sessions.<cite data-ref="mcp-spec-transports"></cite></p>
+  </article>
+  <article class="card">
+    <h3><span class="pill danger">Deprecated</span> HTTP+SSE</h3>
+    <p>Used dual endpoints (one POST for requests, one GET-SSE for responses). Hostile to load balancers, serverless, and modern HTTP/2/3.<cite data-ref="sse-deprecated"></cite> Removal targeted mid-2026 deadlines.</p>
+  </article>
+</div>
+
+<h2 id="stdio">stdio in detail</h2>
+<p>The stdio transport requires very little from the host: spawn a subprocess, write JSON-RPC frames to its stdin, read newline-delimited responses from stdout. The server may write UTF-8 strings to stderr for logging and clients may capture, forward, or ignore these. Crucially, the server MUST NOT write anything to stdout that is not a valid MCP message.<cite data-ref="mcp-spec-transports"></cite></p>
+
+<h4>Constraints stdio imposes</h4>
+<ul>
+  <li><strong>One process per server, per client.</strong> Two hosts running the same stdio server today each spawn an independent child process; there is no shared session.<cite data-ref="transports-explained"></cite></li>
+  <li><strong>No persistent state across sessions.</strong> Process exit drops any in-memory caches.<cite data-ref="transports-explained"></cite></li>
+  <li><strong>Working directory is undefined.</strong> The MCP spec maintainers explicitly warn that clients may launch a server with cwd at <code>/</code>; configurations must use absolute paths.<cite data-ref="mcp-debugging"></cite></li>
+  <li><strong>Env vars are not inherited fully.</strong> Only a platform-dependent subset (typically <code>USER</code>, <code>HOME</code>, <code>PATH</code>) is passed unless the host explicitly supplies <code>env</code>.<cite data-ref="mcp-debugging"></cite></li>
+  <li><strong>stderr is not captured for HTTP servers.</strong> For Streamable HTTP servers, clients cannot read stderr — debugging must use <code>notifications/message</code> log notifications or external aggregation.<cite data-ref="mcp-debugging"></cite></li>
+</ul>
+
+<h2 id="http">Streamable HTTP in detail</h2>
+<p>Streamable HTTP is a single-endpoint transport. The client sends each JSON-RPC message as an HTTP POST with <code>Accept: application/json, text/event-stream</code>. The server then chooses to either return one JSON object or upgrade the response to an SSE stream for streaming notifications and a final response.<cite data-ref="mcp-spec-transports"></cite> The client may also open a separate GET-SSE stream to receive server-initiated messages without sending a request first.<cite data-ref="mcp-spec-transports"></cite></p>
+
+<h4>Session management</h4>
+<p>A server MAY assign a session ID via the <code>Mcp-Session-Id</code> response header on the <code>InitializeResult</code>. Subsequent requests MUST then include that header. The server MAY terminate the session at any time, responding 404 to subsequent requests; the client SHOULD send an HTTP DELETE on shutdown.<cite data-ref="mcp-spec-transports"></cite></p>
+
+<h4>Security requirements</h4>
+<p>The spec explicitly requires Streamable HTTP servers to validate the <code>Origin</code> header on every request (preventing DNS rebinding), to bind only to <code>127.0.0.1</code> for local use, and to implement authentication.<cite data-ref="mcp-spec-transports"></cite></p>
+
+<h4>Resumability</h4>
+<p>Servers MAY attach SSE <code>id</code> values to events; clients SHOULD send <code>Last-Event-ID</code> on reconnect to allow replay of missed events from the same stream.<cite data-ref="mcp-spec-transports"></cite></p>
+
+<h2 id="sse">HTTP+SSE — the deprecated form</h2>
+<p>The original SSE transport had two endpoints — one POST endpoint for client requests, one GET endpoint for the SSE stream — which created coordination state that was error-prone, scaled poorly behind load balancers and serverless platforms, and could not recover from mid-stream disconnects.<cite data-ref="sse-deprecated"></cite><cite data-ref="transports-explained"></cite> The deprecation deadlines were communicated for mid-2026, with Streamable HTTP support landing in the TypeScript SDK at v1.10.0 (April 2025).<cite data-ref="sse-deprecated"></cite></p>
+
+<h2 id="adoption">Adoption per host</h2>
+<table class="compare">
+  <thead><tr><th>Host</th><th>stdio</th><th>Streamable HTTP</th><th>SSE (legacy)</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Claude Desktop</td><td><span class="pill success">Yes</span></td><td>via connectors / DXT</td><td><span class="pill warn">limited</span></td><td>No raw remote HTTP in user config; remote arrives via curated connectors<cite data-ref="anthropic-dxt"></cite></td></tr>
+    <tr><td>Claude Code</td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes (<code>http</code>)</span></td><td><span class="pill warn">deprecated</span></td><td>Auto-reconnect with exponential backoff for HTTP/SSE; stdio not auto-restarted<cite data-ref="claude-code-mcp"></cite></td></tr>
+    <tr><td>Cursor</td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td>OAuth flow built in for remote<cite data-ref="cursor-mcp"></cite></td></tr>
+    <tr><td>Cline</td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td>UI restart and timeout controls<cite data-ref="cline-mcp"></cite></td></tr>
+    <tr><td>Continue</td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td>Three transports explicitly listed in YAML <code>type</code><cite data-ref="continue-mcp"></cite></td></tr>
+    <tr><td>Zed</td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td>via URL field</td><td>OAuth flow for remote servers without preset headers<cite data-ref="zed-mcp"></cite></td></tr>
+    <tr><td>Windsurf</td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td>All three explicitly supported per docs<cite data-ref="windsurf-mcp"></cite></td></tr>
+    <tr><td>VS Code (Copilot MCP)</td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes (<code>http</code>)</span></td><td><span class="pill warn">via http compat</span></td><td><code>sandboxEnabled</code> applies to stdio only<cite data-ref="vscode-mcp"></cite></td></tr>
+    <tr><td>Goose</td><td><span class="pill success">Yes</span></td><td><span class="pill warn">via SSE alias</span></td><td><span class="pill success">Yes</span></td><td>Schema uses <code>type: sse</code>; Streamable HTTP support varies by version<cite data-ref="goose-extensions"></cite></td></tr>
+    <tr><td>MCP Inspector</td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td><span class="pill success">Yes</span></td><td>Bridges remote HTTP servers through a local proxy on port 6277<cite data-ref="mcp-inspector-repo"></cite></td></tr>
+  </tbody>
+</table>
+
+<h2 id="auth">Auth model per transport</h2>
+<div class="card-grid">
+  <article class="card">
+    <h3>stdio</h3>
+    <p>Authentication is the server's responsibility, typically through environment variables for API keys. The transport itself is unauthenticated — anything that can spawn the process can connect to it. Isolation comes from the OS user account boundary.<cite data-ref="mcp-spec-transports"></cite></p>
+  </article>
+  <article class="card">
+    <h3>Streamable HTTP — header-based</h3>
+    <p>The simplest model: <code>Authorization: Bearer ...</code> or custom headers. Claude Code supports <code>headersHelper</code> to compute headers dynamically on each connection (Kerberos, short-lived tokens) — running an arbitrary shell command whose stdout JSON merges into request headers.<cite data-ref="claude-code-mcp"></cite></p>
+  </article>
+  <article class="card">
+    <h3>Streamable HTTP — OAuth 2.0</h3>
+    <p>Discovery starts at <code>/.well-known/oauth-protected-resource</code> (RFC 9728), falling back to <code>/.well-known/oauth-authorization-server</code> (RFC 8414). Claude Code supports DCR (Dynamic Client Registration), CIMD, and pre-registered client IDs with <code>--callback-port</code>. Tokens are stored in the OS keychain (macOS) or a credentials file.<cite data-ref="claude-code-mcp"></cite></p>
+  </article>
+  <article class="card">
+    <h3>Scope pinning</h3>
+    <p>Claude Code's <code>oauth.scopes</code> string lets administrators restrict tokens to a security-approved subset of advertised scopes. <code>offline_access</code> is appended automatically for refresh support.<cite data-ref="claude-code-mcp"></cite></p>
+  </article>
+</div>
+
+<h2 id="constraints">Operational constraints a manager must respect</h2>
+<table class="compare">
+  <thead><tr><th>Constraint</th><th>stdio implication</th><th>HTTP implication</th></tr></thead>
+  <tbody>
+    <tr><td>Process supervision</td><td>One supervised subprocess per (server, client) pair; manager must restart on crash</td><td>Long-lived TCP socket; reconnect with backoff (Claude Code uses up to 5 attempts, doubling)<cite data-ref="claude-code-mcp"></cite></td></tr>
+    <tr><td>Port management</td><td>None (process pipes)</td><td>If running locally, the manager owns port allocation; must bind to <code>127.0.0.1</code> only<cite data-ref="mcp-spec-transports"></cite></td></tr>
+    <tr><td>Logs</td><td>Captured from stderr; stdout corruption breaks the protocol</td><td>Not captured by client; must use <code>notifications/message</code> or external aggregation<cite data-ref="mcp-debugging"></cite></td></tr>
+    <tr><td>State across reconnects</td><td>Lost on process exit</td><td>Resumable via <code>Last-Event-ID</code> if server supports it<cite data-ref="mcp-spec-transports"></cite></td></tr>
+    <tr><td>Security boundary</td><td>OS user; sandbox is the host's job (e.g., VS Code <code>sandboxEnabled</code>)</td><td>Network + Origin validation + OAuth scopes</td></tr>
+  </tbody>
+</table>
+
+</main>
+</body>
+</html>

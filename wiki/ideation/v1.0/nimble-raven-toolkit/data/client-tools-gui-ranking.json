@@ -1,0 +1,172 @@
+{
+  "title": "Rust GUI framework candidates for the MCP Manager GUI",
+  "options": [
+    "Tauri 2 (system WebView)",
+    "Dioxus desktop (WebView)",
+    "egui + eframe",
+    "iced",
+    "Slint",
+    "GPUI",
+    "Freya",
+    "Xilem"
+  ],
+  "criteria": [
+    { "key": "dx", "label": "Developer experience", "weight": 0.13 },
+    { "key": "perf", "label": "Runtime performance", "weight": 0.1 },
+    { "key": "binary_size", "label": "Binary / install size", "weight": 0.1 },
+    { "key": "cross_platform", "label": "Cross-platform coverage", "weight": 0.13 },
+    { "key": "community", "label": "Community / ecosystem", "weight": 0.12 },
+    { "key": "accessibility", "label": "Accessibility (screen reader)", "weight": 0.12 },
+    { "key": "theming", "label": "Theming / dark mode / native feel", "weight": 0.1 },
+    { "key": "async_support", "label": "Async support", "weight": 0.08 },
+    { "key": "stability", "label": "API stability", "weight": 0.12 }
+  ],
+  "scores": {
+    "Tauri 2 (system WebView)": {
+      "dx": 5,
+      "perf": 4,
+      "binary_size": 5,
+      "cross_platform": 5,
+      "community": 5,
+      "accessibility": 4,
+      "theming": 5,
+      "async_support": 5,
+      "stability": 5,
+      "_evidence": {
+        "dx": ["#cite-tauri-home", "#cite-tauri-leptos"],
+        "perf": ["#cite-tauri-vs-electron"],
+        "binary_size": ["#cite-tauri-vs-electron", "#cite-tauri-home"],
+        "cross_platform": ["#cite-tauri-2-stable", "#cite-tauri-github"],
+        "community": ["#cite-tauri-github"],
+        "accessibility": ["#cite-boringcactus-2025-survey"],
+        "theming": ["#cite-tauri-home"],
+        "async_support": ["#cite-tauri-2-stable"],
+        "stability": ["#cite-tauri-2-stable", "#cite-tauri-2-rcandidate"]
+      }
+    },
+    "Dioxus desktop (WebView)": {
+      "dx": 5,
+      "perf": 4,
+      "binary_size": 4,
+      "cross_platform": 4,
+      "community": 4,
+      "accessibility": 4,
+      "theming": 5,
+      "async_support": 5,
+      "stability": 3,
+      "_evidence": {
+        "dx": ["#cite-dioxus-0-6", "#cite-dioxus-home"],
+        "perf": ["#cite-dioxus-home"],
+        "accessibility": ["#cite-boringcactus-2025-survey"],
+        "stability": ["#cite-dioxus-0-6"]
+      }
+    },
+    "egui + eframe": {
+      "dx": 4,
+      "perf": 5,
+      "binary_size": 4,
+      "cross_platform": 4,
+      "community": 4,
+      "accessibility": 4,
+      "theming": 3,
+      "async_support": 3,
+      "stability": 3,
+      "_evidence": {
+        "dx": ["#cite-egui-home", "#cite-egui-github"],
+        "perf": ["#cite-egui-home"],
+        "community": ["#cite-egui-github", "#cite-rerun-egui"],
+        "accessibility": ["#cite-egui-github", "#cite-accesskit-home"],
+        "theming": ["#cite-boringcactus-2025-survey"],
+        "stability": ["#cite-rerun-egui"]
+      }
+    },
+    "iced": {
+      "dx": 4,
+      "perf": 4,
+      "binary_size": 4,
+      "cross_platform": 4,
+      "community": 4,
+      "accessibility": 2,
+      "theming": 4,
+      "async_support": 5,
+      "stability": 3,
+      "_evidence": {
+        "dx": ["#cite-iced-github", "#cite-iced-book-architecture"],
+        "perf": ["#cite-iced-014"],
+        "cross_platform": ["#cite-iced-github"],
+        "community": ["#cite-iced-github", "#cite-cosmic-iced"],
+        "accessibility": ["#cite-boringcactus-2025-survey"],
+        "async_support": ["#cite-iced-github"],
+        "stability": ["#cite-iced-014"]
+      }
+    },
+    "Slint": {
+      "dx": 5,
+      "perf": 5,
+      "binary_size": 5,
+      "cross_platform": 5,
+      "community": 4,
+      "accessibility": 5,
+      "theming": 4,
+      "async_support": 3,
+      "stability": 5,
+      "_evidence": {
+        "dx": ["#cite-slint-home", "#cite-slint-github"],
+        "perf": ["#cite-slint-home"],
+        "binary_size": ["#cite-slint-home"],
+        "cross_platform": ["#cite-slint-home"],
+        "accessibility": ["#cite-slint-github", "#cite-accesskit-home"],
+        "stability": ["#cite-slint-1-0"]
+      }
+    },
+    "GPUI": {
+      "dx": 3,
+      "perf": 5,
+      "binary_size": 4,
+      "cross_platform": 2,
+      "community": 2,
+      "accessibility": 2,
+      "theming": 4,
+      "async_support": 4,
+      "stability": 1,
+      "_evidence": {
+        "perf": ["#cite-gpui-readme"],
+        "cross_platform": ["#cite-gpui-readme", "#cite-gpui-home"],
+        "stability": ["#cite-gpui-crates", "#cite-gpui-home"],
+        "community": ["#cite-gpui-home"]
+      }
+    },
+    "Freya": {
+      "dx": 4,
+      "perf": 4,
+      "binary_size": 4,
+      "cross_platform": 4,
+      "community": 2,
+      "accessibility": 3,
+      "theming": 4,
+      "async_support": 4,
+      "stability": 2,
+      "_evidence": {
+        "dx": ["#cite-freya-home"],
+        "stability": ["#cite-boringcactus-2025-survey"],
+        "accessibility": ["#cite-accesskit-home"]
+      }
+    },
+    "Xilem": {
+      "dx": 3,
+      "perf": 5,
+      "binary_size": 4,
+      "cross_platform": 3,
+      "community": 2,
+      "accessibility": 3,
+      "theming": 3,
+      "async_support": 3,
+      "stability": 1,
+      "_evidence": {
+        "stability": ["#cite-xilem-github", "#cite-boringcactus-2025-survey"],
+        "perf": ["#cite-xilem-github"],
+        "accessibility": ["#cite-accesskit-home"]
+      }
+    }
+  }
+}

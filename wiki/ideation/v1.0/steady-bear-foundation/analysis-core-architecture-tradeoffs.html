@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tradeoffs — Core architecture · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">steady-bear-foundation</a> / analysis · tradeoffs</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Analysis — Crate boundaries and the API surface</h1>
+  <p class="lede">
+    This page is the bridge between the research pages (what's possible) and the recommendation page (what we should pick). It draws crate boundaries inside the workspace, explains why each boundary is where it is, and marks where the API surface that <a href="../precise-crane-conduit/index.html">Stream 4</a> needs to consume lives. Tradeoffs only — no decisions yet.
+  </p>
+
+  <nav class="toc">
+    <h4>On this page</h4>
+    <ul>
+      <li><a href="#scoping">What "CORE" includes (and excludes)</a></li>
+      <li><a href="#crate-boundaries">Proposed crate boundaries</a></li>
+      <li><a href="#dep-graph">Dependency graph</a></li>
+      <li><a href="#api-surface">Where the API surface lives</a></li>
+      <li><a href="#telemetry">Telemetry / observability story</a></li>
+      <li><a href="#cross-stream">Cross-stream coupling points</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="scoping">What "CORE" includes (and excludes)</h2>
+  <p>
+    The core is everything <em>below</em> the IPC boundary that clients (CLI / TUI / GUI) cross to talk to the manager. The core <em>does not</em>:
+  </p>
+  <ul>
+    <li>Define the wire protocol between manager and client. That's Stream 4's territory. The core exposes a Rust trait API; Stream 4 picks how to serialize it (gRPC vs JSON-RPC vs custom).</li>
+    <li>Render UI. Streams 5's territory.</li>
+    <li>Define what a sandbox looks like — Stream 2 picks Nix/devenv/Docker/raw. The core just calls into a <code>Sandbox</code> trait.</li>
+    <li>Specify which host applications get adapters — Stream 1 produces the inventory. The core ships a <code>HostAdapter</code> trait plus one reference implementation.</li>
+  </ul>
+  <p>
+    The core <em>does</em> include: process supervision, transport handling, registry/config/journal state, secrets indirection, lifecycle reconciliation, the runtime, the per-MCP-server protocol speaker (if proxy mode), and the IPC server that clients connect to.
+  </p>
+
+  <h2 id="crate-boundaries">Proposed crate boundaries</h2>
+  <p>
+    The matklad recommendation is the working baseline: flat <code>crates/</code> directory, one crate per folder, folder name == crate name, virtual root manifest, version pinning via <code>[workspace.dependencies]</code><cite data-ref="matklad-large-workspaces"></cite><cite data-ref="cargo-workspaces-book"></cite>.
+  </p>
+
+  <table class="compare">
+    <thead><tr><th>Crate</th><th>Kind</th><th>Responsibility</th><th>Stable API for clients?</th><th>Primary deps</th></tr></thead>
+    <tbody>
+      <tr><td><code>mcp-proto</code></td><td>lib</td><td>JSON-RPC frames, MCP message types, transport trait, capability negotiation glue. Re-exports useful bits of <code>rmcp</code>.</td><td>No (internal)</td><td><code>rmcp</code>, <code>serde</code>, <code>serde_json</code></td></tr>
+      <tr><td><code>mcp-supervisor</code></td><td>lib</td><td>Per-server lifecycle. Owns a <code>Child</code>, drives transport, runs ping, owns the reconciliation loop. Cross-platform (Unix + Windows).</td><td>No (internal)</td><td><code>tokio</code>, <code>process-wrap</code>, <code>nix</code>, <code>win32job</code>, <code>mcp-proto</code></td></tr>
+      <tr><td><code>mcp-secrets</code></td><td>lib</td><td>Secret references (resolve <code>@keyring:foo/bar</code>), keychain backend integration, redaction helpers.</td><td>No (internal)</td><td><code>keyring</code>, <code>secrecy</code>, <code>zeroize</code></td></tr>
+      <tr><td><code>mcp-store</code></td><td>lib</td><td>SQLite-backed registry + config + journal. Migration runner. Event broadcast channel for live readers.</td><td>No (internal)</td><td><code>rusqlite</code> <em>or</em> <code>sqlx</code>, <code>tokio</code>, <code>serde</code>, <code>directories</code></td></tr>
+      <tr><td><code>mcp-host-adapters</code></td><td>lib</td><td><code>HostAdapter</code> trait + reference implementations for the host applications Stream 1 inventories.</td><td>No (internal)</td><td><code>serde_json</code>, <code>toml</code>, <code>mcp-store</code></td></tr>
+      <tr><td><code>mcp-core</code></td><td>lib</td><td>The public Rust API: <code>CoreApi</code> trait that clients call, plus the engine that ties together supervisor + store + secrets + host adapters. Embedded mode: clients link this directly.</td><td><span class="pill success">Yes</span> — Stream 4 consumes this</td><td>All the above</td></tr>
+      <tr><td><code>mcpd</code></td><td>bin</td><td>The optional daemon. Wraps <code>mcp-core</code>, listens on an IPC socket, serves Stream 4's wire protocol. Handles signal handling, single-instance lock, OS-service integration.</td><td>(serves the API; doesn't define it)</td><td><code>mcp-core</code>, <code>interprocess</code>, <code>tracing</code>, <code>tracing-subscriber</code></td></tr>
+      <tr><td><code>mcp-cli-core</code></td><td>lib</td><td>Shared CLI plumbing — output formatters, error helpers — used by both the standalone CLI and embedded subcommands.</td><td>(Stream 5)</td><td><code>mcp-core</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Why this split</h3>
+  <ul>
+    <li><strong><code>mcp-proto</code> exists separately from <code>mcp-supervisor</code></strong> — so a future "lightweight client probe" tool can depend on protocol types without pulling in tokio child-process internals.</li>
+    <li><strong><code>mcp-secrets</code> is its own crate</strong> — because <code>keyring</code> has platform-conditional feature flags that no other crate should have to think about<cite data-ref="keyring-crate"></cite>. Isolating it also makes auditing the secret-handling code path one-directory-shaped.</li>
+    <li><strong><code>mcp-store</code> separate from <code>mcp-core</code></strong> — so the synchronous-vs-async question for SQLite is contained. If we pick <code>rusqlite</code><cite data-ref="rusqlite-docs"></cite> the store can wrap blocking calls in <code>spawn_blocking</code> internally and present an async surface; <code>mcp-core</code> doesn't know.</li>
+    <li><strong><code>mcp-core</code> as a real library, not just a daemon</strong> — embedded mode (library + ephemeral) and daemon mode (mcpd hosts it) both fall out of the same code path. Stream 4 only has to define the wire mapping once.</li>
+    <li><strong><code>mcpd</code> is thin</strong> — it owns the IPC socket lifecycle, the OS-service plumbing, and signal handling. It does not own MCP semantics.</li>
+  </ul>
+
+  <h2 id="dep-graph">Dependency graph</h2>
+  <p>An ASCII sketch of the intended directed acyclic shape (arrows mean "depends on"):</p>
+<pre><code>                       ┌──────────────────────────┐
+                       │  mcp-cli / mcp-tui / mcp-gui  (Stream 5)
+                       └─────────────┬────────────┘
+                                     │
+                          Stream 4 wire protocol
+                                     │
+        ┌──────── embedded ──────────┼──────────── daemon (IPC) ──────────┐
+        │                            │                                    │
+        ▼                            │                                    ▼
+   ┌──────────┐                      │                              ┌──────────┐
+   │ mcp-core │◄─────────────────────┼──────────────────────────────│   mcpd   │
+   └──────────┘                                                     └──────────┘
+        │
+        ├──► mcp-supervisor ──► mcp-proto ──► rmcp (official SDK)
+        │
+        ├──► mcp-store         (sqlite, tokio broadcast)
+        │
+        ├──► mcp-secrets       (keyring, secrecy)
+        │
+        └──► mcp-host-adapters (per-host config writers)
+</code></pre>
+
+  <h2 id="api-surface">Where the API surface lives</h2>
+  <p>
+    Stream 4 picks how to serialize the API; this stream defines its Rust shape. The shape we ship from <code>mcp-core</code> determines what every client must support, so it should be conservative.
+  </p>
+
+  <h3>Sketch of <code>CoreApi</code></h3>
+<pre><code>#[async_trait::async_trait]
+pub trait CoreApi: Send + Sync + 'static {
+    // Discovery
+    async fn list_servers(&amp;self) -&gt; Result&lt;Vec&lt;ServerSummary&gt;&gt;;
+    async fn get_server(&amp;self, id: &amp;ServerId) -&gt; Result&lt;ServerDetail&gt;;
+
+    // Lifecycle
+    async fn install(&amp;self, spec: InstallSpec) -&gt; Result&lt;ServerId&gt;;
+    async fn uninstall(&amp;self, id: &amp;ServerId) -&gt; Result&lt;()&gt;;
+    async fn start(&amp;self, id: &amp;ServerId) -&gt; Result&lt;()&gt;;
+    async fn stop(&amp;self, id: &amp;ServerId) -&gt; Result&lt;()&gt;;
+    async fn restart(&amp;self, id: &amp;ServerId) -&gt; Result&lt;()&gt;;
+
+    // Observation (streaming)
+    fn subscribe_events(&amp;self, filter: EventFilter)
+        -&gt; BoxStream&lt;'static, Event&gt;;
+    fn subscribe_state(&amp;self, id: &amp;ServerId)
+        -&gt; watch::Receiver&lt;ServerState&gt;;
+
+    // Host wiring
+    async fn link_to_host(&amp;self, host: HostId, id: &amp;ServerId) -&gt; Result&lt;()&gt;;
+    async fn unlink_from_host(&amp;self, host: HostId, id: &amp;ServerId) -&gt; Result&lt;()&gt;;
+
+    // Inspection (matches mcp-inspector's use case)
+    async fn list_tools(&amp;self, id: &amp;ServerId) -&gt; Result&lt;Vec&lt;ToolDescriptor&gt;&gt;;
+    async fn call_tool(&amp;self, id: &amp;ServerId, name: &amp;str, args: Value)
+        -&gt; Result&lt;ToolCallResult&gt;;
+}
+</code></pre>
+  <p>
+    The streaming methods (<code>subscribe_events</code>, <code>subscribe_state</code>) lean on Tokio's <code>broadcast</code> (for events) and <code>watch</code> (for state) — these are the canonical Tokio primitives for "many consumers, fire-and-forget" and "many consumers, latest-value" respectively<cite data-ref="tokio-channels-guide"></cite><cite data-ref="tokio-mpsc"></cite>.
+  </p>
+  <p>
+    For Stream 4: this trait is what the wire protocol needs to expose; any wire format (gRPC, JSON-RPC over Unix socket, custom binary) can be a thin translation. The streaming methods are why a request/response-only protocol (e.g. plain JSON-RPC) is awkward — server-sent events / bidi streams / SSE / WebSockets are needed.
+  </p>
+
+  <h2 id="telemetry">Telemetry / observability story</h2>
+  <p>
+    Choosing <code>tracing</code> as the instrumentation layer<cite data-ref="tracing-crate-docs"></cite> buys three things at once:
+  </p>
+  <ol>
+    <li><strong>Internal journal</strong> — a custom <code>tracing::Subscriber</code> Layer funnels structured events into <code>mcp-store</code>'s event table. Every <code>#[instrument]</code> in <code>mcp-supervisor</code> becomes a row.</li>
+    <li><strong>Local debug logs</strong> — <code>tracing-subscriber</code>'s fmt layer for human-readable stderr in <code>mcpd --foreground</code>.</li>
+    <li><strong>Optional OTLP export</strong> — <code>tracing-opentelemetry</code> as a Layer, off by default; users who run Datadog/Honeycomb/SigNoz flip a config flag<cite data-ref="tracing-opentelemetry"></cite>.</li>
+  </ol>
+  <p>
+    Bridges to keep in mind: <code>tracing-log</code> for crates that still use <code>log</code> (e.g. <code>hyper</code>), so we get unified output without forking those crates<cite data-ref="tracing-crate-docs"></cite>.
+  </p>
+
+  <h2 id="cross-stream">Cross-stream coupling points</h2>
+  <table class="compare">
+    <thead><tr><th>Stream</th><th>What it gives this stream</th><th>What this stream gives it</th></tr></thead>
+    <tbody>
+      <tr><td>1 — curious-otter-survey</td><td>The set of host applications to write <code>HostAdapter</code> impls for; field-level schema of each host's config file.</td><td>The <code>HostAdapter</code> trait + reference impl pattern.</td></tr>
+      <tr><td>2 — stoic-badger-sandbox</td><td>The <code>Sandbox</code> trait shape — likely <code>fn build_env(&amp;self, spec: &amp;ServerSpec) -&gt; Result&lt;ResolvedEnv&gt;</code> producing command + args + env.</td><td>The supervisor will <em>call</em> the chosen sandbox impl; never inline-implement isolation.</td></tr>
+      <tr><td>4 — precise-crane-conduit</td><td>The wire protocol that serializes <code>CoreApi</code>; the IPC mechanism (Unix socket / named pipe).</td><td>The <code>CoreApi</code> trait shape; the IPC server lives in <code>mcpd</code>.</td></tr>
+      <tr><td>5 — nimble-raven-toolkit</td><td>Which clap/ratatui/Tauri/etc. variants are picked.</td><td>The library mode (embedded <code>mcp-core</code>) for tools that want to skip the daemon.</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

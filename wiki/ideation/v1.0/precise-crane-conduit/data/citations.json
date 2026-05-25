@@ -1,0 +1,347 @@
+{
+  "entries": [
+    {
+      "id": "jsonrpc-2-spec",
+      "title": "JSON-RPC 2.0 Specification",
+      "url": "https://www.jsonrpc.org/specification",
+      "accessed": "2026-05-24",
+      "note": "Defines request/response/notification/batch shapes; the canonical wire-format reference."
+    },
+    {
+      "id": "mcp-transports",
+      "title": "Model Context Protocol — Transports (2025-06-18)",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports",
+      "accessed": "2026-05-24",
+      "note": "MCP uses JSON-RPC 2.0 over stdio (newline-delimited) and Streamable HTTP (POST + optional SSE)."
+    },
+    {
+      "id": "interprocess-crate",
+      "title": "interprocess — Rust cross-platform IPC toolkit",
+      "url": "https://docs.rs/interprocess/",
+      "accessed": "2026-05-24",
+      "note": "Local sockets abstraction: UDS on Unix, named pipes on Windows; tokio-async feature."
+    },
+    {
+      "id": "interprocess-github",
+      "title": "kotauskas/interprocess (GitHub)",
+      "url": "https://github.com/kotauskas/interprocess",
+      "accessed": "2026-05-24",
+      "note": "Source repo for the interprocess crate; documents platform-specific behavior."
+    },
+    {
+      "id": "parity-tokio-ipc",
+      "title": "parity-tokio-ipc — Tokio IPC transport (UDS + Windows named pipes)",
+      "url": "https://docs.rs/parity-tokio-ipc",
+      "accessed": "2026-05-24",
+      "note": "Transport-agnostic Endpoint API; UDS on Unix, named pipes on Windows."
+    },
+    {
+      "id": "tonic-uds-example",
+      "title": "tonic — Unix domain socket example (issue #826)",
+      "url": "https://github.com/hyperium/tonic/issues/826",
+      "accessed": "2026-05-24",
+      "note": "Confirms gRPC-over-UDS via connect_with_connector; tonic ships a uds example."
+    },
+    {
+      "id": "tonic-bidi-streaming",
+      "title": "Building Bidirectional gRPC Streaming with tonic in Rust",
+      "url": "https://oneuptime.com/blog/post/2026-01-25-bidirectional-grpc-streaming-tonic-rust/view",
+      "accessed": "2026-05-24",
+      "note": "Walks through tonic bidi streams + tokio mpsc channels + backpressure."
+    },
+    {
+      "id": "tonic-web-crate",
+      "title": "tonic-web — gRPC-Web layer for tonic",
+      "url": "https://docs.rs/tonic-web/latest/tonic_web/",
+      "accessed": "2026-05-24",
+      "note": "Lets browsers/WebViews talk to tonic servers; unary + server-streaming only."
+    },
+    {
+      "id": "jsonrpsee-github",
+      "title": "paritytech/jsonrpsee — async/await JSON-RPC for Rust",
+      "url": "https://github.com/paritytech/jsonrpsee",
+      "accessed": "2026-05-24",
+      "note": "Server supports HTTP and WebSocket transports; module-style API registration."
+    },
+    {
+      "id": "jsonrpsee-docs",
+      "title": "jsonrpsee — docs.rs",
+      "url": "https://docs.rs/jsonrpsee",
+      "accessed": "2026-05-24",
+      "note": "Subscriptions, modules, transport feature flags."
+    },
+    {
+      "id": "axum-uds-example",
+      "title": "axum — Unix domain socket example",
+      "url": "https://github.com/tokio-rs/axum/blob/main/examples/unix-domain-socket/src/main.rs",
+      "accessed": "2026-05-24",
+      "note": "Canonical pattern for axum over UDS using UnixListener."
+    },
+    {
+      "id": "axum-docs",
+      "title": "axum — docs.rs",
+      "url": "https://docs.rs/axum/latest/axum/",
+      "accessed": "2026-05-24",
+      "note": "HTTP routing/extractors on tokio + tower."
+    },
+    {
+      "id": "capnp-rust",
+      "title": "capnp — Rust runtime for Cap'n Proto",
+      "url": "https://docs.rs/capnp",
+      "accessed": "2026-05-24",
+      "note": "Zero-copy in-memory traversal; latest 0.25.x line."
+    },
+    {
+      "id": "capnp-language",
+      "title": "Cap'n Proto: Schema Language",
+      "url": "https://capnproto.org/language.html",
+      "accessed": "2026-05-24",
+      "note": "Field numbering rules, backward-compat conventions (@N ordinals)."
+    },
+    {
+      "id": "capnproto-rust-gh",
+      "title": "capnproto-rust (GitHub)",
+      "url": "https://github.com/capnproto/capnproto-rust",
+      "accessed": "2026-05-24",
+      "note": "Source repo; capnp-futures provides async reading/writing."
+    },
+    {
+      "id": "prost-gh",
+      "title": "tokio-rs/prost — PROST! Protocol Buffers for Rust",
+      "url": "https://github.com/tokio-rs/prost",
+      "accessed": "2026-05-24",
+      "note": "Protobuf code generation for Rust; tag attributes for stable field numbers."
+    },
+    {
+      "id": "proto3-guide",
+      "title": "Protocol Buffers — Language Guide (proto 3)",
+      "url": "https://protobuf.dev/programming-guides/proto3/",
+      "accessed": "2026-05-24",
+      "note": "Field-number rules: never reuse, lower numbers cheaper, 'reserved' keyword."
+    },
+    {
+      "id": "rmp-serde-docs",
+      "title": "rmp-serde — MessagePack for Rust via serde",
+      "url": "https://docs.rs/rmp-serde",
+      "accessed": "2026-05-24",
+      "note": "Streaming Serializer/Deserializer over readers/writers."
+    },
+    {
+      "id": "msgpack-rust-gh",
+      "title": "3Hren/msgpack-rust",
+      "url": "https://github.com/3Hren/msgpack-rust",
+      "accessed": "2026-05-24",
+      "note": "Source for rmp / rmp-serde."
+    },
+    {
+      "id": "ndjson-spec",
+      "title": "NDJSON specification",
+      "url": "https://github.com/ndjson/ndjson-spec",
+      "accessed": "2026-05-24",
+      "note": "Each line is a valid JSON text; LF (0x0A) delimited; well-suited to streams and pipes."
+    },
+    {
+      "id": "ndjson-dataprotocols",
+      "title": "NDJSON — Data Protocols",
+      "url": "https://dataprotocols.org/ndjson/",
+      "accessed": "2026-05-24",
+      "note": "Reference description of NDJSON for streaming records."
+    },
+    {
+      "id": "tauri-ipc",
+      "title": "Tauri v2 — Inter-Process Communication",
+      "url": "https://v2.tauri.app/concept/inter-process-communication/",
+      "accessed": "2026-05-24",
+      "note": "Async message passing model; commands, events, channels."
+    },
+    {
+      "id": "tauri-calling-rust",
+      "title": "Tauri v2 — Calling Rust from the Frontend",
+      "url": "https://v2.tauri.app/develop/calling-rust/",
+      "accessed": "2026-05-24",
+      "note": "#[tauri::command], invoke(), tauri::ipc::Channel for streaming."
+    },
+    {
+      "id": "tauri-sidecar",
+      "title": "Tauri v2 — Embedding External Binaries (sidecar)",
+      "url": "https://v2.tauri.app/develop/sidecar/",
+      "accessed": "2026-05-24",
+      "note": "Sidecar pattern + alternative IPC choices (localhost, stdio, local sockets)."
+    },
+    {
+      "id": "tauri-ipc-perf-discussion",
+      "title": "Tauri — IPC vs React Native JSI performance discussion",
+      "url": "https://github.com/orgs/tauri-apps/discussions/11915",
+      "accessed": "2026-05-24",
+      "note": "Tauri JSON IPC overhead measurable past a few KB; v2 introduces raw bytes."
+    },
+    {
+      "id": "tauri-channel-streaming",
+      "title": "Tauri v2 — Calling the Frontend from Rust (Channels)",
+      "url": "https://v2.tauri.app/develop/calling-frontend/",
+      "accessed": "2026-05-24",
+      "note": "tauri::ipc::Channel for ordered streams; events vs channels tradeoffs."
+    },
+    {
+      "id": "grpc-flow-control",
+      "title": "gRPC — Flow Control",
+      "url": "https://grpc.io/docs/guides/flow-control/",
+      "accessed": "2026-05-24",
+      "note": "HTTP/2 WINDOW_UPDATE-based backpressure; only applies to streaming RPCs."
+    },
+    {
+      "id": "k8s-watch",
+      "title": "Kubernetes API Concepts (watch + resourceVersion)",
+      "url": "https://kubernetes.io/docs/reference/using-api/api-concepts/",
+      "accessed": "2026-05-24",
+      "note": "Resume-from-cursor via resourceVersion; bookmarks; chunked streaming."
+    },
+    {
+      "id": "k8s-streaming-blog",
+      "title": "Kubernetes blog — Enhancing API Server Efficiency with API Streaming",
+      "url": "https://kubernetes.io/blog/2024/12/17/kube-apiserver-api-streaming/",
+      "accessed": "2026-05-24",
+      "note": "Streaming list/watch keeps memory overhead constant on the server."
+    },
+    {
+      "id": "msdn-named-pipe-security",
+      "title": "Named Pipe Security and Access Rights — Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights",
+      "accessed": "2026-05-24",
+      "note": "Default DACL: LocalSystem/admins/creator owner full; Everyone gets read."
+    },
+    {
+      "id": "msdn-named-pipe-client-pid",
+      "title": "GetNamedPipeClientProcessId — Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-getnamedpipeclientprocessid",
+      "accessed": "2026-05-24",
+      "note": "Server-side function to obtain the connected pipe client's PID."
+    },
+    {
+      "id": "msdn-well-known-sids",
+      "title": "Well-known SIDs — Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/secauthz/well-known-sids",
+      "accessed": "2026-05-24",
+      "note": "Reference for SDDL shorthand SIDs (e.g., WD = Everyone)."
+    },
+    {
+      "id": "linux-unix-7",
+      "title": "unix(7) — Linux man page",
+      "url": "https://man7.org/linux/man-pages/man7/unix.7.html",
+      "accessed": "2026-05-24",
+      "note": "SO_PEERCRED, SCM_RIGHTS (FD passing), abstract socket namespace (Linux only)."
+    },
+    {
+      "id": "scm-rights-cloudflare",
+      "title": "Cloudflare — Know your SCM_RIGHTS",
+      "url": "https://blog.cloudflare.com/know-your-scm_rights/",
+      "accessed": "2026-05-24",
+      "note": "FD passing over UDS for capability-style handoff."
+    },
+    {
+      "id": "xdg-runtime-dir",
+      "title": "XDG Base Directory Specification — ArchWiki",
+      "url": "https://wiki.archlinux.org/title/XDG_Base_Directory",
+      "accessed": "2026-05-24",
+      "note": "XDG_RUNTIME_DIR defaults to /run/user/<uid>, mode 0700 owner-only."
+    },
+    {
+      "id": "docker-socket-perms",
+      "title": "Permission denied on /var/run/docker.sock — Baeldung",
+      "url": "https://www.baeldung.com/linux/docker-permission-denied-daemon-socket-error",
+      "accessed": "2026-05-24",
+      "note": "Default 0660 root:docker; group membership is the gating mechanism."
+    },
+    {
+      "id": "openapi-spec",
+      "title": "OpenAPI Specification 3.1 — Swagger",
+      "url": "https://swagger.io/specification/",
+      "accessed": "2026-05-24",
+      "note": "Schema-first REST API description; aligned with JSON Schema 2020-12."
+    },
+    {
+      "id": "grpcurl",
+      "title": "fullstorydev/grpcurl — curl for gRPC",
+      "url": "https://github.com/fullstorydev/grpcurl",
+      "accessed": "2026-05-24",
+      "note": "Reflection-based debugging client for gRPC services."
+    },
+    {
+      "id": "grpc-reflection",
+      "title": "gRPC Server Reflection Tutorial",
+      "url": "https://grpc.github.io/grpc/core/md_doc_server_reflection_tutorial.html",
+      "accessed": "2026-05-24",
+      "note": "Reflection service lets clients discover proto schema at runtime."
+    },
+    {
+      "id": "mdn-eventsource",
+      "title": "EventSource API — MDN",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/EventSource",
+      "accessed": "2026-05-24",
+      "note": "Browser SSE client with automatic reconnect + Last-Event-ID."
+    },
+    {
+      "id": "html-spec-sse",
+      "title": "HTML Living Standard — Server-Sent Events",
+      "url": "https://html.spec.whatwg.org/multipage/server-sent-events.html",
+      "accessed": "2026-05-24",
+      "note": "Reconnect semantics, last-event-ID, retry field."
+    },
+    {
+      "id": "rfc6455-websocket",
+      "title": "RFC 6455 — The WebSocket Protocol",
+      "url": "https://datatracker.ietf.org/doc/html/rfc6455",
+      "accessed": "2026-05-24",
+      "note": "Full-duplex framed messages over a single TCP connection."
+    },
+    {
+      "id": "rfc7234-http2",
+      "title": "RFC 9113 — HTTP/2",
+      "url": "https://datatracker.ietf.org/doc/html/rfc9113",
+      "accessed": "2026-05-24",
+      "note": "Stream multiplexing + flow control used by gRPC."
+    },
+    {
+      "id": "capnp-roadmap",
+      "title": "Cap'n Proto Road Map",
+      "url": "https://capnproto.org/roadmap.html",
+      "accessed": "2026-05-24",
+      "note": "Stance on schema evolution and validation."
+    },
+    {
+      "id": "msdn-create-named-pipe",
+      "title": "CreateNamedPipeW — Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-createnamedpipew",
+      "accessed": "2026-05-24",
+      "note": "Security descriptor passed at pipe creation."
+    },
+    {
+      "id": "rust-cli-book-completion",
+      "title": "Rust CLI Book — Discoverability hints",
+      "url": "https://rust-cli.github.io/book/",
+      "accessed": "2026-05-24",
+      "note": "Standard well-known config locations via dirs / XDG."
+    },
+    {
+      "id": "swatinem-grpc-capnp",
+      "title": "A Rustacean's view on gRPC and Cap'n Proto — Swatinem",
+      "url": "https://swatinem.de/blog/rust-grpc-capnp/",
+      "accessed": "2026-05-24",
+      "note": "Practitioner comparison of codegen ergonomics + perf."
+    },
+    {
+      "id": "tauri-event-vs-channel",
+      "title": "Tauri — Calling the Frontend (events vs channels)",
+      "url": "https://v2.tauri.app/develop/calling-frontend/",
+      "accessed": "2026-05-24",
+      "note": "Channels preserve order and avoid event-name collisions for streaming."
+    },
+    {
+      "id": "msdn-impersonation",
+      "title": "ImpersonateNamedPipeClient — Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient",
+      "accessed": "2026-05-24",
+      "note": "Server can adopt client's token to make access checks."
+    }
+  ]
+}

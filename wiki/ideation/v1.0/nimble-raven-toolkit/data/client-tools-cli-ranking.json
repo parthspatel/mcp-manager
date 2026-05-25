@@ -1,0 +1,123 @@
+{
+  "title": "Rust CLI argument-parser candidates for the MCP Manager CLI",
+  "options": [
+    "clap (derive)",
+    "clap (builder)",
+    "bpaf",
+    "argh",
+    "gumdrop",
+    "pico-args"
+  ],
+  "criteria": [
+    { "key": "dx", "label": "Developer experience", "weight": 0.18 },
+    { "key": "features", "label": "Feature breadth", "weight": 0.18 },
+    { "key": "community", "label": "Community / ecosystem", "weight": 0.14 },
+    { "key": "compile_time", "label": "Compile time", "weight": 0.1 },
+    { "key": "binary_size", "label": "Binary size", "weight": 0.08 },
+    { "key": "shell_completion", "label": "Shell completion", "weight": 0.1 },
+    { "key": "unix_conventions", "label": "Unix conventions", "weight": 0.12 },
+    { "key": "msrv_stability", "label": "MSRV / stability", "weight": 0.1 }
+  ],
+  "scores": {
+    "clap (derive)": {
+      "dx": 5,
+      "features": 5,
+      "community": 5,
+      "compile_time": 2,
+      "binary_size": 2,
+      "shell_completion": 5,
+      "unix_conventions": 5,
+      "msrv_stability": 5,
+      "_evidence": {
+        "dx": ["#cite-clap-faq-derive-vs-builder", "#cite-sunshowers-cli-parser"],
+        "features": ["#cite-clap-docs", "#cite-clap-derive-cookbook"],
+        "community": ["#cite-sunshowers-cli-parser"],
+        "compile_time": ["#cite-argparse-rosetta"],
+        "binary_size": ["#cite-argparse-rosetta"],
+        "shell_completion": ["#cite-clap-complete"],
+        "unix_conventions": ["#cite-sunshowers-cli-parser"],
+        "msrv_stability": ["#cite-clap-docs"]
+      }
+    },
+    "clap (builder)": {
+      "dx": 3,
+      "features": 5,
+      "community": 5,
+      "compile_time": 3,
+      "binary_size": 2,
+      "shell_completion": 5,
+      "unix_conventions": 5,
+      "msrv_stability": 5,
+      "_evidence": {
+        "dx": ["#cite-clap-faq-derive-vs-builder"],
+        "compile_time": ["#cite-clap-faq-derive-vs-builder"],
+        "shell_completion": ["#cite-clap-complete"],
+        "features": ["#cite-clap-docs"]
+      }
+    },
+    "bpaf": {
+      "dx": 4,
+      "features": 4,
+      "community": 3,
+      "compile_time": 3,
+      "binary_size": 3,
+      "shell_completion": 5,
+      "unix_conventions": 4,
+      "msrv_stability": 3,
+      "_evidence": {
+        "dx": ["#cite-bpaf-docs"],
+        "features": ["#cite-bpaf-docs"],
+        "shell_completion": ["#cite-bpaf-docs"],
+        "binary_size": ["#cite-argparse-rosetta"],
+        "compile_time": ["#cite-argparse-rosetta"]
+      }
+    },
+    "argh": {
+      "dx": 4,
+      "features": 3,
+      "community": 3,
+      "compile_time": 4,
+      "binary_size": 5,
+      "shell_completion": 2,
+      "unix_conventions": 2,
+      "msrv_stability": 4,
+      "_evidence": {
+        "dx": ["#cite-argh-crate"],
+        "binary_size": ["#cite-argparse-rosetta"],
+        "unix_conventions": ["#cite-sunshowers-cli-parser"],
+        "shell_completion": ["#cite-sunshowers-cli-parser"]
+      }
+    },
+    "gumdrop": {
+      "dx": 3,
+      "features": 2,
+      "community": 2,
+      "compile_time": 5,
+      "binary_size": 5,
+      "shell_completion": 1,
+      "unix_conventions": 3,
+      "msrv_stability": 3,
+      "_evidence": {
+        "binary_size": ["#cite-argparse-rosetta"],
+        "compile_time": ["#cite-argparse-rosetta"],
+        "community": ["#cite-sunshowers-cli-parser", "#cite-gumdrop-crate"]
+      }
+    },
+    "pico-args": {
+      "dx": 2,
+      "features": 1,
+      "community": 3,
+      "compile_time": 5,
+      "binary_size": 5,
+      "shell_completion": 0,
+      "unix_conventions": 3,
+      "msrv_stability": 4,
+      "_evidence": {
+        "binary_size": ["#cite-argparse-rosetta"],
+        "compile_time": ["#cite-argparse-rosetta"],
+        "features": ["#cite-pico-args"],
+        "shell_completion": ["#cite-pico-args"]
+      }
+    }
+  }
+}

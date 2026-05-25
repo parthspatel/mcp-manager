@@ -1,0 +1,185 @@
+{
+  "title": "Isolation strategies for MCP server runtimes — scored 0–5; drag sliders to re-weight",
+  "options": [
+    "devenv + OS sandbox",
+    "devenv (naked)",
+    "Docker",
+    "Podman (rootless)",
+    "bubblewrap + uvx/npx",
+    "sandbox-exec + uvx/npx",
+    "raw npx / uvx",
+    "OS native install (brew/apt)"
+  ],
+  "criteria": [
+    { "key": "reproducibility",        "label": "Reproducibility",         "weight": 0.16 },
+    { "key": "isolation_strength",     "label": "Isolation strength",      "weight": 0.18 },
+    { "key": "startup_latency",        "label": "Startup latency",         "weight": 0.10 },
+    { "key": "install_friction",       "label": "Install friction (low)",  "weight": 0.12 },
+    { "key": "cross_platform",         "label": "Cross-platform parity",   "weight": 0.12 },
+    { "key": "secrets_story",          "label": "Secrets story",           "weight": 0.10 },
+    { "key": "network_egress_control", "label": "Network egress control",  "weight": 0.10 },
+    { "key": "dev_ergonomics",         "label": "Dev ergonomics",          "weight": 0.12 }
+  ],
+  "scores": {
+    "devenv + OS sandbox": {
+      "reproducibility": 5,
+      "isolation_strength": 4,
+      "startup_latency": 4,
+      "install_friction": 2,
+      "cross_platform": 3,
+      "secrets_story": 5,
+      "network_egress_control": 4,
+      "dev_ergonomics": 4,
+      "_evidence": {
+        "reproducibility":        ["#cite-nix-manual-intro", "#cite-nix-flakes", "#cite-devenv-home"],
+        "isolation_strength":     ["#cite-bubblewrap-repo", "#cite-sandbox-exec-jmmv", "#cite-appcontainer-isolation"],
+        "startup_latency":        ["#cite-devenv-home"],
+        "install_friction":       ["#cite-nix-pain-rgoulter", "#cite-nix-discourse-curve"],
+        "cross_platform":         ["#cite-sandbox-exec-deprecation", "#cite-appcontainer-isolation"],
+        "secrets_story":          ["#cite-secretspec-home", "#cite-devenv-secretspec-integration", "#cite-sops-nix"],
+        "network_egress_control": ["#cite-bubblewrap-repo", "#cite-sandbox-exec-jmmv"],
+        "dev_ergonomics":         ["#cite-devenv-home", "#cite-devenv-languages"]
+      }
+    },
+    "devenv (naked)": {
+      "reproducibility": 5,
+      "isolation_strength": 2,
+      "startup_latency": 4,
+      "install_friction": 2,
+      "cross_platform": 4,
+      "secrets_story": 4,
+      "network_egress_control": 1,
+      "dev_ergonomics": 4,
+      "_evidence": {
+        "reproducibility":        ["#cite-devenv-home", "#cite-nix-flakes"],
+        "isolation_strength":     ["#cite-mcp-supply-chain-docker"],
+        "startup_latency":        ["#cite-devenv-home"],
+        "install_friction":       ["#cite-nix-pain-rgoulter"],
+        "cross_platform":         ["#cite-devenv-home"],
+        "secrets_story":          ["#cite-devenv-secretspec-integration", "#cite-secretspec-home"],
+        "network_egress_control": ["#cite-mcp-supply-chain-docker"],
+        "dev_ergonomics":         ["#cite-devenv-languages"]
+      }
+    },
+    "Docker": {
+      "reproducibility": 4,
+      "isolation_strength": 4,
+      "startup_latency": 2,
+      "install_friction": 3,
+      "cross_platform": 5,
+      "secrets_story": 4,
+      "network_egress_control": 5,
+      "dev_ergonomics": 3,
+      "_evidence": {
+        "reproducibility":        ["#cite-docker-mcp-toolkit", "#cite-docker-mcp-blog"],
+        "isolation_strength":     ["#cite-docker-mcp-toolkit", "#cite-docker-mcp-blog"],
+        "startup_latency":        ["#cite-podman-rootless"],
+        "install_friction":       ["#cite-docker-mcp-blog"],
+        "cross_platform":         ["#cite-docker-mcp-toolkit"],
+        "secrets_story":          ["#cite-docker-mcp-toolkit"],
+        "network_egress_control": ["#cite-docker-mcp-toolkit"],
+        "dev_ergonomics":         ["#cite-docker-mcp-toolkit"]
+      }
+    },
+    "Podman (rootless)": {
+      "reproducibility": 4,
+      "isolation_strength": 5,
+      "startup_latency": 2,
+      "install_friction": 3,
+      "cross_platform": 3,
+      "secrets_story": 3,
+      "network_egress_control": 5,
+      "dev_ergonomics": 3,
+      "_evidence": {
+        "reproducibility":        ["#cite-docker-mcp-blog"],
+        "isolation_strength":     ["#cite-podman-rootless"],
+        "startup_latency":        ["#cite-podman-rootless"],
+        "install_friction":       ["#cite-podman-rootless"],
+        "cross_platform":         ["#cite-podman-rootless"],
+        "secrets_story":          ["#cite-vault-agent"],
+        "network_egress_control": ["#cite-podman-rootless"],
+        "dev_ergonomics":         ["#cite-podman-rootless"]
+      }
+    },
+    "bubblewrap + uvx/npx": {
+      "reproducibility": 2,
+      "isolation_strength": 4,
+      "startup_latency": 5,
+      "install_friction": 4,
+      "cross_platform": 1,
+      "secrets_story": 2,
+      "network_egress_control": 4,
+      "dev_ergonomics": 2,
+      "_evidence": {
+        "reproducibility":        ["#cite-uvx-docs", "#cite-mcp-supply-chain-docker"],
+        "isolation_strength":     ["#cite-bubblewrap-repo"],
+        "startup_latency":        ["#cite-uvx-docs"],
+        "install_friction":       ["#cite-bubblewrap-repo"],
+        "cross_platform":         ["#cite-bubblewrap-repo"],
+        "secrets_story":          ["#cite-libsecret-arch"],
+        "network_egress_control": ["#cite-bubblewrap-repo"],
+        "dev_ergonomics":         ["#cite-bubblewrap-repo"]
+      }
+    },
+    "sandbox-exec + uvx/npx": {
+      "reproducibility": 2,
+      "isolation_strength": 3,
+      "startup_latency": 5,
+      "install_friction": 5,
+      "cross_platform": 1,
+      "secrets_story": 3,
+      "network_egress_control": 3,
+      "dev_ergonomics": 3,
+      "_evidence": {
+        "reproducibility":        ["#cite-uvx-docs"],
+        "isolation_strength":     ["#cite-sandbox-exec-jmmv", "#cite-sandbox-exec-deprecation"],
+        "startup_latency":        ["#cite-uvx-docs"],
+        "install_friction":       ["#cite-sandbox-exec-deprecation"],
+        "cross_platform":         ["#cite-sandbox-exec-deprecation"],
+        "secrets_story":          ["#cite-keyring-rust"],
+        "network_egress_control": ["#cite-sandbox-exec-jmmv"],
+        "dev_ergonomics":         ["#cite-alcoholless-medium"]
+      }
+    },
+    "raw npx / uvx": {
+      "reproducibility": 2,
+      "isolation_strength": 1,
+      "startup_latency": 4,
+      "install_friction": 5,
+      "cross_platform": 5,
+      "secrets_story": 2,
+      "network_egress_control": 0,
+      "dev_ergonomics": 5,
+      "_evidence": {
+        "reproducibility":        ["#cite-mcp-supply-chain-docker", "#cite-uvx-docs"],
+        "isolation_strength":     ["#cite-mcp-supply-chain-docker", "#cite-mcp-toolradar"],
+        "startup_latency":        ["#cite-uvx-docs"],
+        "install_friction":       ["#cite-uvx-docs", "#cite-pipx-comparisons"],
+        "cross_platform":         ["#cite-uvx-docs"],
+        "secrets_story":          ["#cite-keyring-rust"],
+        "network_egress_control": ["#cite-mcp-supply-chain-docker"],
+        "dev_ergonomics":         ["#cite-uvx-docs"]
+      }
+    },
+    "OS native install (brew/apt)": {
+      "reproducibility": 1,
+      "isolation_strength": 0,
+      "startup_latency": 5,
+      "install_friction": 4,
+      "cross_platform": 2,
+      "secrets_story": 2,
+      "network_egress_control": 0,
+      "dev_ergonomics": 4,
+      "_evidence": {
+        "reproducibility":        ["#cite-mcp-supply-chain-docker"],
+        "isolation_strength":     ["#cite-mcp-supply-chain-docker", "#cite-mcp-toolradar"],
+        "startup_latency":        ["#cite-uvx-docs"],
+        "install_friction":       ["#cite-mcp-toolradar"],
+        "cross_platform":         ["#cite-mcp-toolradar"],
+        "secrets_story":          ["#cite-keyring-rust"],
+        "network_egress_control": ["#cite-mcp-supply-chain-docker"],
+        "dev_ergonomics":         ["#cite-mcp-toolradar"]
+      }
+    }
+  }
+}

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>State stores — Core architecture · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">steady-bear-foundation</a> / research · state</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Research — State stores: registry, config, journal, secrets</h1>
+  <p class="lede">
+    The core owns four logically separate pieces of state. They have different read/write patterns, different durability requirements, and different exposure to clients — and conflating them into one store is the source of most "why is my CLI showing stale data" bugs in this class of tool. This page maps each store to candidate Rust crates, lays out a migration strategy for schema evolution, and discusses how the core's registry relates to host applications' own MCP config files.
+  </p>
+
+  <nav class="toc">
+    <h4>On this page</h4>
+    <ul>
+      <li><a href="#stores">The four stores</a></li>
+      <li><a href="#registry">Installed-server registry</a></li>
+      <li><a href="#config">Config store + host-app linkage</a></li>
+      <li><a href="#journal">Event journal</a></li>
+      <li><a href="#secrets">Secrets vault</a></li>
+      <li><a href="#migration">Schema migration</a></li>
+      <li><a href="#layout">On-disk layout convention</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="stores">The four stores</h2>
+  <table class="compare">
+    <thead><tr><th>Store</th><th>What lives there</th><th>Write rate</th><th>Read rate</th><th>Durability</th><th>Multi-writer?</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Registry</strong></td><td>Installed servers, version, runtime kind (uvx/npx/nix/docker), command + args + env template.</td><td>Low (install/uninstall/update).</td><td>High (every CLI command).</td><td>Hard.</td><td>Yes — multi-client, occasionally root vs user.</td></tr>
+      <tr><td><strong>Config</strong></td><td>Per-server resolved configuration (env vars, working dir, transport choice, secret refs).</td><td>Low.</td><td>High.</td><td>Hard.</td><td>Yes.</td></tr>
+      <tr><td><strong>Event journal</strong></td><td>Lifecycle events (started, exited, ping-failed), captured stderr, tool-call audit.</td><td>Very high (per ping, per tool call).</td><td>High (TUI live tail).</td><td>Soft (rotatable / TTLd).</td><td>Single writer (daemon).</td></tr>
+      <tr><td><strong>Secrets</strong></td><td>API keys, OAuth tokens, anything users don't want on disk in plaintext.</td><td>Low.</td><td>Low (only on server start).</td><td>Hard, encrypted at rest.</td><td>OS-mediated.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="registry">Installed-server registry</h2>
+  <p>
+    The registry is the source of truth for "what servers does this user have installed and how are they invoked?". The shape closely mirrors a systemd unit file: a name, an immutable identity (registry URL + version + integrity hash), an exec spec, restart policy, and optional resource limits<cite data-ref="systemd-wikipedia"></cite>. Like Lima's templates, it should be replayable: if the registry is restored from backup, the supervisor can fully reconstruct managed servers without depending on its in-memory state<cite data-ref="lima-architecture"></cite>.
+  </p>
+
+  <h3>Format candidates</h3>
+  <table class="compare">
+    <thead><tr><th>Format</th><th>Pros</th><th>Cons</th></tr></thead>
+    <tbody>
+      <tr><td><strong>TOML files</strong> (one per server)</td><td>Human-readable; git-friendly; aligns with Cargo's convention; trivial backup.</td><td>Hard to atomically update across many files; concurrent writers race.</td></tr>
+      <tr><td><strong>Single JSON file</strong></td><td>One mtime to watch; matches every host app's MCP config format (cf. Stream 1).</td><td>Whole-file rewrite per change; concurrent writes are atomic-via-rename only.</td></tr>
+      <tr><td><strong>SQLite via <code>rusqlite</code></strong></td><td>Real transactions; queryable; <code>libsqlite3-sys</code> can bundle SQLite so no system dep<cite data-ref="rusqlite-docs"></cite>; rusqlite supports hooks, blobs, prepared statements<cite data-ref="rusqlite-docs"></cite>.</td><td>Synchronous-only (rusqlite has no async)<cite data-ref="rusqlite-docs"></cite>; binary file harder to diff in git; needs <code>spawn_blocking</code> from tokio.</td></tr>
+      <tr><td><strong><code>sqlx</code> (sqlite backend)</strong></td><td>Async-native, compile-time-checked queries, multi-backend if we later add Postgres for shared installs<cite data-ref="sqlx-rust-orms-2026"></cite>.</td><td>Heavier dependency footprint; query macros require offline mode for reproducible builds.</td></tr>
+      <tr><td><strong><code>sled</code></strong></td><td>Crash-safe append-only log, atomic batches, no SQL learning curve<cite data-ref="sqlx-rust-orms-2026"></cite>.</td><td>Not 1.0; KV semantics mean every query is hand-rolled; smaller ecosystem.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    The dominant patterns in similar tools: Docker uses BoltDB; podman uses BoltDB and then SQLite; cargo uses one TOML manifest per crate; rustup uses TOML; nix uses SQLite. SQLite-via-<code>rusqlite</code> is the most common "embedded persistent state in a Rust CLI/daemon" choice — it ships in 0 system dependencies if bundled, has decades of crash-safety hardening, and exposes a real query language that grows with the tool<cite data-ref="rusqlite-docs"></cite>.
+  </p>
+
+  <h2 id="config">Config store + host-app linkage</h2>
+  <p>
+    Configuration has two distinct layers we should not collapse:
+  </p>
+  <ol>
+    <li><strong>Manager-internal config</strong> — the merged truth about each server (env vars, transport, sandbox profile, secret refs). Lives in the registry's database row or a side table.</li>
+    <li><strong>Host-app config files</strong> — the JSON/YAML files that Claude Desktop, Cursor, Cline, Continue, Zed, VS Code etc. each maintain. Stream 1 (<code>curious-otter-survey</code>) inventories these.</li>
+  </ol>
+  <p>
+    For v1, the manager's <em>internal</em> config is the source of truth, and the manager <em>writes</em> the host-app files (with a `# managed by mcp-manager` header so we can detect manual edits). This is the same approach <code>nvm</code>, <code>rustup</code>, and <code>pyenv</code> take to shell profile files: small, reversible, fenced edits driven by the tool. The alternative — the manager <em>reads</em> the host files and treats them as authoritative — fails fast because the host file formats diverge: Claude Desktop and Cursor differ enough that a unified read model needs per-host adapters anyway.
+  </p>
+
+  <h3>Adapter pattern for host files</h3>
+<pre><code>trait HostAdapter {
+    fn id(&amp;self) -&gt; HostId;
+    fn config_path(&amp;self) -&gt; PathBuf;
+    fn read(&amp;self) -&gt; Result&lt;Vec&lt;HostServerEntry&gt;&gt;;
+    fn write(&amp;self, entries: &amp;[HostServerEntry]) -&gt; Result&lt;()&gt;;
+    fn supports_transport(&amp;self, t: Transport) -&gt; bool;
+}
+
+// each host (Claude Desktop, Cursor, Cline, …) ships one impl.
+</code></pre>
+
+  <h2 id="journal">Event journal</h2>
+  <p>
+    The event journal serves three readers:
+  </p>
+  <ul>
+    <li><strong>TUI</strong> tailing live, expecting sub-second latency.</li>
+    <li><strong>CLI</strong> <code>mcp logs &lt;server&gt;</code> reading a windowed slice.</li>
+    <li><strong>GUI</strong> rendering a timeline + filter UI.</li>
+  </ul>
+  <p>
+    Two existing designs to crib from. systemd-journald writes append-only binary files with indexed fields like PID, UID, and cgroup so queries by service/time are O(log n)<cite data-ref="systemd-wikipedia"></cite>. <code>conmon</code> (podman's per-container monitor) writes each container's logs to a per-container file or directly into the systemd journal, capturing exit time and status code for later retrieval<cite data-ref="conmon-readme"></cite>.
+  </p>
+  <p>
+    For MCP Manager, the closest Rust-native realization is: a SQLite table <code>events(server_id, ts, level, kind, payload)</code> with an index on <code>(server_id, ts)</code>, plus a Tokio <code>broadcast</code> channel that lets live readers tail without polling. <code>broadcast</code> is the Tokio convention for "multi-consumer, fire-and-forget events"<cite data-ref="tokio-channels-guide"></cite>, and bounded <code>broadcast</code> automatically drops the slowest receiver rather than blocking the writer.
+  </p>
+
+<pre><code>// fan-out journal
+pub struct Journal {
+    db:    SqlitePool,             // durable, queryable
+    live:  broadcast::Sender&lt;Event&gt; // 1024-deep ring buffer
+}
+
+impl Journal {
+    pub async fn record(&amp;self, e: Event) -&gt; Result&lt;()&gt; {
+        sqlx::query("insert into events …").bind(&amp;e).execute(&amp;self.db).await?;
+        let _ = self.live.send(e); // ignore "no subscribers"
+        Ok(())
+    }
+    pub fn subscribe(&amp;self) -&gt; broadcast::Receiver&lt;Event&gt; { self.live.subscribe() }
+}
+</code></pre>
+
+  <h2 id="secrets">Secrets vault</h2>
+  <p>
+    The <strong><code>keyring</code></strong> crate is the de facto cross-platform secrets store for Rust. It exposes a platform-independent <code>Entry</code> identified by a (service, user) pair and offers <code>set_password</code> / <code>get_password</code> / <code>delete_password</code> plus binary-secret variants<cite data-ref="keyring-crate"></cite>. Supported backends:
+  </p>
+  <ul>
+    <li>macOS: <strong>Keychain Services</strong></li>
+    <li>Windows: <strong>Credential Manager</strong></li>
+    <li>Linux: <strong>Secret Service</strong> (dbus / zbus) and/or <strong>keyutils</strong></li>
+    <li>Android: shared preferences store</li>
+    <li>Plus a SQLite-encrypted fallback (Turso) and a mock store for tests<cite data-ref="keyring-crate"></cite></li>
+  </ul>
+  <p>
+    The crate has no default features; the consumer must explicitly enable the platforms they intend to ship<cite data-ref="keyring-crate"></cite>.
+  </p>
+
+  <h3>Secret indirection</h3>
+  <p>
+    A practical pattern is to store opaque references in the registry — e.g. <code>{"api_key": "@keyring:openai/api_key"}</code> — and resolve them at server-spawn time. This keeps secrets out of database backups, out of <code>mcp config dump</code> output, and out of crash reports. The supervisor reads the secret, places it into the child's environment via <code>tokio::process::Command::env</code><cite data-ref="tokio-process-command"></cite>, and never logs the resolved value.
+  </p>
+
+  <h2 id="migration">Schema migration</h2>
+  <p>
+    The state schema will change between v1 and v2; we should adopt a migration strategy <em>before</em> shipping rather than retrofit. Two ergonomic approaches in Rust:
+  </p>
+  <ol>
+    <li><strong>SQLite migration files</strong> — numbered SQL files (<code>0001-init.sql</code>, <code>0002-add-secret-refs.sql</code>) applied in order with the version stored in <code>PRAGMA user_version</code>. <code>sqlx</code>'s built-in migrator handles this; <code>rusqlite_migration</code> does the same for the sync stack<cite data-ref="rusqlite-docs"></cite>.</li>
+    <li><strong>Tagged-enum serde versioning</strong> — for the JSON-ish parts (e.g. transport descriptors, host-app config payloads). <code>serde-evolve</code> formalizes the pattern: <code>enum FileVN { V1(Schema1), V2(Schema2) }</code> with <code>From<V1> for V2</code> implementations; compile errors flag missing migration paths<cite data-ref="serde-evolve"></cite>.</li>
+  </ol>
+  <p>
+    Combined: SQL DDL migrations for the registry / config / journal tables; serde-evolve enums for the structured columns whose shape will change without a DDL change (e.g. the transport descriptor field).
+  </p>
+
+  <h2 id="layout">On-disk layout convention</h2>
+  <p>
+    Following XDG on Linux, Apple's recommendations on macOS, and Known Folders on Windows:
+  </p>
+<pre><code>$XDG_DATA_HOME/mcp-manager/       # ~/.local/share/mcp-manager on Linux
+  ├─ state.db                     # SQLite: registry + config + journal
+  ├─ servers/&lt;id&gt;/                # per-server scratch (logs overflow, caches)
+  └─ migrations.log
+
+$XDG_CONFIG_HOME/mcp-manager/     # ~/.config/mcp-manager
+  └─ daemon.toml                  # daemon-level config (listen socket, log level)
+
+$XDG_RUNTIME_DIR/mcp-manager/     # ephemeral, per-session
+  └─ daemon.sock                  # IPC socket (Stream 4)
+
+# secrets: OS keychain via `keyring` crate, never on disk
+</code></pre>
+  <p>
+    macOS maps to <code>~/Library/Application Support/mcp-manager/</code>; Windows maps to <code>%LOCALAPPDATA%\mcp-manager\</code>. The <code>directories</code> or <code>dirs</code> crates already encapsulate these mappings.
+  </p>
+</main>
+</body>
+</html>

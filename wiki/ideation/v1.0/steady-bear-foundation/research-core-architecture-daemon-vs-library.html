@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daemon vs library — Core architecture · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+<script type="module" src="../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">steady-bear-foundation</a> / research · daemon-vs-library</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Research — Daemon-only, library-only, or hybrid</h1>
+  <p class="lede">
+    This page lays out four real-world archetypes for "tool that manages other long-running processes" — Docker (daemon-required), Podman (daemonless, optional service), Cargo (library + ephemeral CLI), Nix (privileged daemon + unprivileged clients) — and projects them onto MCP Manager. It also covers the practical OS-integration angle: how each archetype interacts with launchd, systemd, and Windows services.
+  </p>
+
+  <nav class="toc">
+    <h4>On this page</h4>
+    <ul>
+      <li><a href="#archetypes">The four archetypes</a></li>
+      <li><a href="#docker">Docker — daemon required</a></li>
+      <li><a href="#podman">Podman — daemonless + optional</a></li>
+      <li><a href="#cargo">Cargo — library + ephemeral CLI</a></li>
+      <li><a href="#nix">Nix-daemon — privileged + clients</a></li>
+      <li><a href="#implications">Implications for MCP Manager</a></li>
+      <li><a href="#os-integration">OS-service integration</a></li>
+      <li><a href="#startup-latency">Startup latency budget</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="archetypes">The four archetypes</h2>
+  <table class="compare">
+    <thead><tr><th>Archetype</th><th>Persistent state owner</th><th>Daemon required?</th><th>Root required?</th><th>Remote-control?</th><th>Crash recovery</th></tr></thead>
+    <tbody>
+      <tr><td>Docker</td><td>dockerd</td><td>Yes</td><td>Yes (rootful) or rootless mode</td><td>Yes (over TCP)</td><td>Daemon's job</td></tr>
+      <tr><td>Podman</td><td>Per-container conmon + filesystem state</td><td>No</td><td>No</td><td>Via systemd or REST opt-in</td><td>conmon + systemd</td></tr>
+      <tr><td>Cargo</td><td>None (filesystem only)</td><td>No</td><td>No</td><td>No</td><td>None needed</td></tr>
+      <tr><td>Nix-daemon</td><td>nix-daemon (multi-user) or none (single-user)</td><td>Multi-user yes</td><td>Multi-user yes</td><td>Local socket</td><td>Daemon restarts in place</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="docker">Docker — daemon required</h2>
+  <p>
+    Docker is the canonical "always-on daemon" design: the <code>docker</code> CLI is thin and converts commands into REST API requests sent to <code>dockerd</code> over a Unix socket (default <code>/var/run/docker.sock</code>) or TCP; the daemon does all the work of building, running, and supervising containers and exposing them over the network<cite data-ref="docker-overview"></cite>.
+  </p>
+  <p>
+    Architectural consequences:
+  </p>
+  <ul>
+    <li><strong>Startup latency near-zero per command</strong> — the daemon is already warm; first call to the runtime is fast<cite data-ref="docker-overview"></cite>.</li>
+    <li><strong>Centralized supervision</strong> — auto-restart, log capture, network setup all happen daemon-side, automatically. If a container dies, the daemon notices.</li>
+    <li><strong>Remote management for free</strong> — same REST API works locally over Unix socket or remotely over TCP.</li>
+    <li><strong>Single point of failure</strong> — if the daemon crashes, every container loses its supervisor (mitigated in modern Docker by containerd-shim staying alive per container<cite data-ref="containerd-shim-blog"></cite>).</li>
+    <li><strong>Privilege model</strong> — by default <code>dockerd</code> runs as root, so containers it spawns inherit a path to root; rootless mode exists but is opt-in.</li>
+    <li><strong>OS service required</strong> — needs systemd / launchd / Windows Service to start on boot.</li>
+  </ul>
+
+  <h2 id="podman">Podman — daemonless + optional</h2>
+  <p>
+    Podman explicitly inverts Docker's design: "a simple daemonless tool"<cite data-ref="podman-overview"></cite>. The CLI invokes the OCI runtime directly. Persistent supervision is delegated to two layers:
+  </p>
+  <ol>
+    <li><strong>Per-container <code>conmon</code></strong> — daemonizes itself, holds stdio, captures exit status, writes logs to a file or systemd-journal<cite data-ref="conmon-readme"></cite>. There is one conmon per running container, "the smallest daemon a container can have"<cite data-ref="conmon-readme"></cite>.</li>
+    <li><strong>Optional systemd integration</strong> — generated unit files (e.g. <code>podman generate systemd</code>) let users opt into proper service supervision.</li>
+  </ol>
+  <p>
+    Podman also offers an opt-in <em>podman-system-service</em> daemon that exposes a Docker-API-compatible REST endpoint for compatibility with tools that want a daemon — making podman effectively "daemonless by default, daemon if you ask"<cite data-ref="podman-overview"></cite>.
+  </p>
+  <p>
+    Performance characteristics reported in independent benchmarks: Podman scales linearly with 100+ concurrent containers (vs slight Docker degradation), uses ~65% lower memory and ~70% lower idle CPU because there's no persistent daemon paying overhead — Docker funnels every container start through the daemon's event loop, while Podman forks independent processes concurrently<cite data-ref="podman-overview"></cite>.
+  </p>
+
+  <h2 id="cargo">Cargo — library + ephemeral CLI</h2>
+  <p>
+    Cargo is the "no daemon at all" archetype. State lives on the filesystem (<code>Cargo.toml</code>, <code>Cargo.lock</code>, <code>target/</code>, <code>~/.cargo/</code>) and each invocation is a fresh process that reads and writes those files. The advisory Rust workspace pattern is documented in the Cargo book<cite data-ref="cargo-workspaces-book"></cite> and matklad's "Large Rust Workspaces"<cite data-ref="matklad-large-workspaces"></cite>.
+  </p>
+  <p>
+    Consequences:
+  </p>
+  <ul>
+    <li><strong>Startup latency is the cost of process spawn + reading state files</strong> — adequate for a build tool, marginal for a tool the user invokes many times a minute.</li>
+    <li><strong>No background work possible</strong> — Cargo doesn't ping anything between invocations.</li>
+    <li><strong>No supervision</strong> — Cargo would not know if a server it started died after Cargo itself exited.</li>
+    <li><strong>Zero installation overhead</strong> — no service to install on boot; works on machines where the user can't enable LaunchAgents/systemd units.</li>
+  </ul>
+  <p>
+    uvx takes a similar shape — short-lived environment, execute, exit; cached environments live on disk to make subsequent invocations cheap<cite data-ref="uvx-handbook"></cite>. pipx similarly stores each tool's venv in <code>$PIPX_HOME/venvs/&lt;name&gt;</code> and shells out per invocation<cite data-ref="pipx-overview"></cite>.
+  </p>
+
+  <h2 id="nix">Nix-daemon — privileged + clients</h2>
+  <p>
+    In multi-user Nix the <code>nix-daemon</code> owns the store (database + filesystem) at root privilege. Unprivileged users set <code>NIX_REMOTE=daemon</code> and their CLI connects to the daemon over a Unix socket; the daemon performs all operations on behalf of the user, including running builds inside unprivileged <code>nixbld*</code> users<cite data-ref="nix-multi-user"></cite>. Build concurrency is capped by the number of build users<cite data-ref="nix-multi-user"></cite>.
+  </p>
+  <p>
+    Notable design points the spec / manual call out:
+  </p>
+  <ul>
+    <li>The sandbox is for <em>reproducibility</em>, not as a strong security boundary between users<cite data-ref="nix-multi-user"></cite>.</li>
+    <li>The daemon is launched by the host's service manager — systemd on Linux, launchd on macOS.</li>
+    <li>Single-user mode skips the daemon entirely; the CLI itself becomes the privilege owner.</li>
+  </ul>
+  <p>
+    This is the most relevant template for MCP Manager's "shared install across users" question, even though MCP server installs probably don't require root.
+  </p>
+
+  <h2 id="implications">Implications for MCP Manager</h2>
+
+  <h3>Background work the manager actually needs</h3>
+  <ul>
+    <li><strong>Lifecycle of long-running stdio MCP servers</strong> — must persist across host-app restarts so a server doesn't die just because Claude Desktop quit.</li>
+    <li><strong>Periodic ping</strong><cite data-ref="mcp-spec-ping"></cite> — needs <em>someone</em> awake between client invocations.</li>
+    <li><strong>Log/journal capture from stderr</strong> — needs to consume the pipe continuously even when no CLI/TUI/GUI is watching.</li>
+    <li><strong>OAuth refresh / scheduled re-auth</strong> — many MCP servers will eventually mint tokens with finite lifetimes.</li>
+  </ul>
+  <p>
+    These are background tasks; a library-only design (pure cargo-style) cannot do them.
+  </p>
+
+  <h3>Where the lines actually fall</h3>
+  <p>
+    Cross-referencing against the archetypes, the realistic options for MCP Manager are:
+  </p>
+  <table class="compare">
+    <thead><tr><th>Option</th><th>Background work?</th><th>Multi-user?</th><th>Latency per CLI</th><th>Closest precedent</th></tr></thead>
+    <tbody>
+      <tr><td>Pure library (cargo-style)</td><td>No</td><td>No</td><td>~50ms (cold start)</td><td>cargo, uvx, pipx</td></tr>
+      <tr><td>Library + sometimes-spawned helper</td><td>Yes (via per-server <code>conmon</code>-likes)</td><td>Limited</td><td>~50ms cold, fast warm</td><td>podman + conmon</td></tr>
+      <tr><td>Optional daemon (podman-system-service shape)</td><td>Yes (if enabled)</td><td>Yes (if shared)</td><td>~5ms warm</td><td>podman, nix single-user vs multi-user</td></tr>
+      <tr><td>Required daemon (docker shape)</td><td>Yes always</td><td>Yes</td><td>~5ms warm</td><td>dockerd, nix multi-user</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="os-integration">OS-service integration</h2>
+  <p>
+    Whichever archetype we pick, "manage on boot" needs a per-OS plan:
+  </p>
+  <table class="compare">
+    <thead><tr><th>OS</th><th>Mechanism</th><th>File location</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>macOS</td><td>launchd LaunchAgent</td><td><code>~/Library/LaunchAgents/com.example.mcp-manager.plist</code></td><td>plist with <code>KeepAlive</code>, <code>OnDemand</code>, sockets<cite data-ref="launchd-info"></cite>; on-demand activation means lazy start on socket connect<cite data-ref="launchd-wikipedia"></cite>.</td></tr>
+      <tr><td>Linux</td><td>systemd user unit</td><td><code>~/.config/systemd/user/mcp-manager.service</code></td><td>cgroup-tracked, journald-logged<cite data-ref="systemd-wikipedia"></cite>; <code>systemctl --user enable --now mcp-manager</code> autostarts on login.</td></tr>
+      <tr><td>Windows</td><td>Scheduled Task or Service</td><td>Per-user Task Scheduler entry "On logon"</td><td>Service requires admin install; Scheduled Task does not — better UX for per-user installs.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Some prior-art notes on lazy / on-demand activation: launchd lets a service register listening sockets, and launchd itself accepts connections, starting the service only when the first connection arrives — useful for an "idle until first IPC connect" daemon model<cite data-ref="launchd-wikipedia"></cite>.
+  </p>
+
+  <h2 id="startup-latency">Startup latency budget</h2>
+  <p>
+    A grounded budget for CLI invocations:
+  </p>
+  <ul>
+    <li><strong>Cold Rust binary start</strong>: ~5-30ms depending on target / static-linkage.</li>
+    <li><strong>Reading SQLite + deserializing registry</strong>: 1-10ms for typical (1-50 servers) cases.</li>
+    <li><strong>IPC connect (Unix socket)</strong>: &lt;1ms locally.</li>
+    <li><strong>Round-trip to daemon over IPC</strong>: &lt;1ms (kernel-only).</li>
+  </ul>
+  <p>
+    So a daemon-required CLI is dominated by Rust binary start (~5-30ms) and the daemon hop is essentially free. A library-only CLI pays the same Rust binary start plus the SQLite read (~6-40ms total). The difference is rarely perceptible. The library model gets <em>perceptibly</em> slow only when CLI commands trigger work that the daemon would have already done in the background (e.g. listing tools across 20 stdio servers requires connecting to all of them).
+  </p>
+</main>
+</body>
+</html>

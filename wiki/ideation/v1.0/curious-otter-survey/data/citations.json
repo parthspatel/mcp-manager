@@ -1,0 +1,200 @@
+{
+  "entries": [
+    {
+      "id": "mcp-spec-transports",
+      "title": "Model Context Protocol — Transports (spec 2025-06-18)",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports",
+      "accessed": "2026-05-24",
+      "note": "Authoritative: defines stdio and Streamable HTTP, deprecates HTTP+SSE."
+    },
+    {
+      "id": "claude-desktop-local",
+      "title": "Connect to local MCP servers — Claude Desktop",
+      "url": "https://modelcontextprotocol.io/docs/develop/connect-local-servers",
+      "accessed": "2026-05-24",
+      "note": "Canonical guide to claude_desktop_config.json, paths and troubleshooting."
+    },
+    {
+      "id": "mcp-debugging",
+      "title": "Debugging — Model Context Protocol",
+      "url": "https://modelcontextprotocol.io/docs/tools/debugging",
+      "accessed": "2026-05-24",
+      "note": "Working directory, env inheritance, Claude Desktop log paths, DevTools."
+    },
+    {
+      "id": "claude-code-mcp",
+      "title": "Connect Claude Code to tools via MCP",
+      "url": "https://code.claude.com/docs/en/mcp",
+      "accessed": "2026-05-24",
+      "note": "claude mcp add CLI, scope hierarchy, .mcp.json, env expansion, OAuth, headersHelper."
+    },
+    {
+      "id": "cursor-mcp",
+      "title": "Model Context Protocol (MCP) | Cursor Docs",
+      "url": "https://cursor.com/docs/mcp",
+      "accessed": "2026-05-24",
+      "note": "~/.cursor/mcp.json and .cursor/mcp.json; type field; envFile; ${env:VAR} expansion."
+    },
+    {
+      "id": "cline-mcp",
+      "title": "Adding & Configuring Servers — Cline",
+      "url": "https://docs.cline.bot/mcp/configuring-mcp-servers",
+      "accessed": "2026-05-24",
+      "note": "cline_mcp_settings.json schema with disabled / autoApprove fields."
+    },
+    {
+      "id": "continue-mcp",
+      "title": "How to Set Up Model Context Protocol (MCP) in Continue",
+      "url": "https://docs.continue.dev/customize/deep-dives/mcp",
+      "accessed": "2026-05-24",
+      "note": "YAML / JSON, .continue/mcpServers directory, ${{ secrets.KEY_NAME }} syntax."
+    },
+    {
+      "id": "zed-mcp",
+      "title": "Model Context Protocol (MCP) in Zed",
+      "url": "https://zed.dev/docs/ai/mcp",
+      "accessed": "2026-05-24",
+      "note": "context_servers key in settings.json; OAuth and extension model."
+    },
+    {
+      "id": "windsurf-mcp",
+      "title": "Cascade MCP Integration — Windsurf",
+      "url": "https://docs.windsurf.com/windsurf/cascade/mcp",
+      "accessed": "2026-05-24",
+      "note": "~/.codeium/windsurf/mcp_config.json, 100-tool cap, ${env:VAR} and ${file:} expansion."
+    },
+    {
+      "id": "vscode-mcp",
+      "title": "Add and manage MCP servers in VS Code",
+      "url": "https://code.visualstudio.com/docs/copilot/customization/mcp-servers",
+      "accessed": "2026-05-24",
+      "note": "mcp.json with servers key (not mcpServers); inputs for secret prompts; sandboxEnabled."
+    },
+    {
+      "id": "vscode-mcp-reference",
+      "title": "MCP configuration reference — VS Code",
+      "url": "https://code.visualstudio.com/docs/copilot/reference/mcp-configuration",
+      "accessed": "2026-05-24",
+      "note": "Full schema reference for VS Code's mcp.json."
+    },
+    {
+      "id": "mcp-inspector-repo",
+      "title": "modelcontextprotocol/inspector",
+      "url": "https://github.com/modelcontextprotocol/inspector",
+      "accessed": "2026-05-24",
+      "note": "Browser UI on 6274, proxy on 6277; supports stdio, SSE, Streamable HTTP."
+    },
+    {
+      "id": "mcp-inspector-docs",
+      "title": "MCP Inspector — modelcontextprotocol.io",
+      "url": "https://modelcontextprotocol.io/docs/tools/inspector",
+      "accessed": "2026-05-24",
+      "note": "Official inspector docs."
+    },
+    {
+      "id": "keychain-feature-15961",
+      "title": "[FEATURE] OS Keychain/Credential Manager Support for MCP Configuration #15961",
+      "url": "https://github.com/anthropics/claude-code/issues/15961",
+      "accessed": "2026-05-24",
+      "note": "Closed as not planned; documents the gap exhaustively."
+    },
+    {
+      "id": "plaintext-keys-blog",
+      "title": "Why Every MCP Setup Guide Is Teaching You to Store API Keys Wrong",
+      "url": "https://dev.to/the_seventeen/why-every-mcp-setup-guide-is-teaching-you-to-store-api-keys-wrong-4ghf",
+      "accessed": "2026-05-24",
+      "note": "Risk catalogue: agent context exfil, prompt injection, fs exposure, VCS leakage."
+    },
+    {
+      "id": "keychain-workaround",
+      "title": "Securing MCP Server Secrets with macOS Keychain",
+      "url": "https://kahunam.com/articles/automations-ai/securing-mcp-server-secrets-with-macos-keychain/",
+      "accessed": "2026-05-24",
+      "note": "/bin/sh wrapper that calls 'security find-generic-password'; adds ~30ms startup."
+    },
+    {
+      "id": "anthropic-dxt",
+      "title": "Desktop Extensions: One-click MCP installation (Anthropic engineering)",
+      "url": "https://www.anthropic.com/engineering/desktop-extensions",
+      "accessed": "2026-05-24",
+      "note": "manifest.json user_config with sensitive:true stores values in OS keychain."
+    },
+    {
+      "id": "mcpb-repo",
+      "title": "modelcontextprotocol/mcpb (Desktop Extensions)",
+      "url": "https://github.com/anthropics/dxt",
+      "accessed": "2026-05-24",
+      "note": ".mcpb / .dxt bundles + manifest.json schema."
+    },
+    {
+      "id": "sse-deprecated",
+      "title": "Why MCP Deprecated SSE and Went with Streamable HTTP",
+      "url": "https://blog.fka.dev/blog/2025-06-06-why-mcp-deprecated-sse-and-go-with-streamable-http/",
+      "accessed": "2026-05-24",
+      "note": "Timeline: spec 2025-03-26 introduces Streamable HTTP; TS SDK v1.10.0 (Apr 2025)."
+    },
+    {
+      "id": "transports-explained",
+      "title": "MCP Transports Explained: stdio vs Streamable HTTP",
+      "url": "https://chatforest.com/guides/mcp-transports-explained/",
+      "accessed": "2026-05-24",
+      "note": "Tradeoffs: one process per server for stdio; serverless friction with old SSE."
+    },
+    {
+      "id": "win-msix-bug-26073",
+      "title": "[BUG] Windows MSIX: Edit Config opens wrong claude_desktop_config.json #26073",
+      "url": "https://github.com/anthropics/claude-code/issues/26073",
+      "accessed": "2026-05-24",
+      "note": "Edit Config writes to %APPDATA%\\Claude\\... while app reads from MSIX virtualized path."
+    },
+    {
+      "id": "claude-crash-28211",
+      "title": "[BUG] Claude Desktop v1.1.4088 crashes with 2+ MCP servers #28211",
+      "url": "https://github.com/anthropics/claude-code/issues/28211",
+      "accessed": "2026-05-24",
+      "note": "Crash-restart loop with >=2 servers; regression from prior version."
+    },
+    {
+      "id": "claude-quit-slow-30267",
+      "title": "[BUG] Claude Desktop Windows: Quit takes 10+ seconds with multiple MCP servers #30267",
+      "url": "https://github.com/anthropics/claude-code/issues/30267",
+      "accessed": "2026-05-24",
+      "note": "Sequential stdio teardown bottlenecks beforeQuit."
+    },
+    {
+      "id": "nish-path-issue",
+      "title": "Notes on setting up Claude Desktop MCP servers — Nish Tahir",
+      "url": "https://nishtahir.com/notes-on-setting-up-claude-desktop-mcp-servers/",
+      "accessed": "2026-05-24",
+      "note": "Desktop apps don't inherit shell PATH; keg-only Node not found."
+    },
+    {
+      "id": "windows-install-disc-50",
+      "title": "Share experience with windows installation #50 (modelcontextprotocol discussion)",
+      "url": "https://github.com/orgs/modelcontextprotocol/discussions/50",
+      "accessed": "2026-05-24",
+      "note": "Developer Mode requirement; Chocolatey conflicts; silent connect failures."
+    },
+    {
+      "id": "smithery-cli",
+      "title": "Smithery CLI — install MCP servers across clients",
+      "url": "https://smithery.ai/docs/concepts/cli",
+      "accessed": "2026-05-24",
+      "note": "Cross-client installer pattern: smithery mcp add <url> --client claude."
+    },
+    {
+      "id": "mcp-config-guide",
+      "title": "The Complete Guide to MCP Config Files",
+      "url": "https://mcpplaygroundonline.com/blog/complete-guide-mcp-config-files-claude-desktop-cursor-lovable",
+      "accessed": "2026-05-24",
+      "note": "Side-by-side host comparison; notes Continue uses an array schema."
+    },
+    {
+      "id": "goose-extensions",
+      "title": "Built-in Extensions | block/goose (DeepWiki)",
+      "url": "https://deepwiki.com/block/goose/5.2-built-in-extensions",
+      "accessed": "2026-05-24",
+      "note": "Goose config.yaml schema with type: stdio | sse | builtin."
+    }
+  ]
+}
