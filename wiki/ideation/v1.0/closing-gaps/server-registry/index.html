@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server discovery + install &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../index.html">closing-gaps</a> / server-registry</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Server discovery + install (closing gap)</h1>
+
+<p class="lede">
+How does a user go from <em>"I want a Linear MCP server"</em> to a running, sandboxed, secrets-aware server entry in their mcpd state &mdash; in one command, from a CLI, with no telemetry, on macOS or Linux? This sub-stream answers that. The five other tier-1 streams handle isolation, secrets, config projection, and onboarding; we sit between <em>"user has mcpd installed"</em> and <em>"user has a sandbox spec to feed to stoic-badger-sandbox"</em>.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="./research-mcp-registry-landscape.html">Research &mdash; the 2026 MCP registry landscape</a></li>
+    <li><a href="./analysis-registry-strategies-tradeoffs.html">Analysis &mdash; registry strategy trade-offs (interactive matrix)</a></li>
+    <li><a href="./recommendation-server-registry-summary.html">Recommendation &mdash; concrete CLI surface for v1.0</a></li>
+  </ul>
+</nav>
+
+<section class="section">
+<h2>Sister closing-gap streams</h2>
+<div class="stream-grid">
+  <a class="stream-card" href="../onboarding/index.html">
+    <span class="codename">closing-gaps / onboarding</span>
+    <h3>Onboarding flow</h3>
+    <p>First-run experience from <code>curl | sh</code> to "I see my servers in Claude Code". Hands off to us once the user types <code>mcpm search</code>.</p>
+  </a>
+  <a class="stream-card" href="../secrets-lifecycle/index.html">
+    <span class="codename">closing-gaps / secrets-lifecycle</span>
+    <h3>Secrets lifecycle</h3>
+    <p>Rotation, revocation, audit. Our <code>mcpm install</code> hands them the freshly declared env-var references for any server that needs secrets.</p>
+  </a>
+  <a class="stream-card" href="../version-management/index.html">
+    <span class="codename">closing-gaps / version-management</span>
+    <h3>Version management</h3>
+    <p>Pinning, upgrades, lockfiles. We give them the initial version reference; they own everything after install.</p>
+  </a>
+</div>
+</section>
+
+<section class="section">
+<h2>The gap in one paragraph</h2>
+<p>
+v1.0 has <em>five</em> tier-1 streams that all assume the user already has a server entry in their canonical TOML state. None of them answer the question <em>"how does an entry get there in the first place?"</em> Asking the user to hand-author a TOML stanza with a binary path, an args array, a sandbox spec, and a transport discriminator is a non-starter for the brand promise (Just Works on Day 1). This gap closes that.
+</p>
+
+<h3>What we are <em>not</em> solving here</h3>
+<ul>
+  <li><strong>How the server runs after install.</strong> That is stoic-badger-sandbox. We emit a sandbox-spec reference; they execute it.</li>
+  <li><strong>How secrets get supplied.</strong> That is secrets-lifecycle. We emit secret-reference placeholders in the TOML entry; they resolve them.</li>
+  <li><strong>How clients see the server.</strong> That is clever-fox-bridge. We update canonical state; they project into client config files.</li>
+  <li><strong>Discovery of <em>what already exists locally</em>.</strong> mcpd already enumerates installed servers via <code>mcpm list</code> &mdash; this stream is strictly about <em>new</em> servers from upstream sources.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>v1.0 constraints we respect</h2>
+<table class="compare">
+<thead><tr><th>Constraint</th><th>How this stream respects it</th></tr></thead>
+<tbody>
+<tr><td>macOS + Linux only</td><td>No Windows-specific paths in any registry adapter; we only ship code we test on both platforms.</td></tr>
+<tr><td>No telemetry, ever</td><td>Search hits the registry's read endpoints; <em>nothing</em> is sent about the user, the query is the entire payload, and we do not log it remotely. Registries that require telemetry tokens for read access are disqualified or behind explicit per-source opt-in.</td></tr>
+<tr><td>Apache 2.0 license</td><td>Registry source code adapters we write are Apache 2.0. Registries we <em>read from</em> are flagged in the source manifest with their own license so a corporate user can audit downstream.</td></tr>
+<tr><td>10s of MCPs / user, not 1000s</td><td>Search returns top-50 by default; results cached locally (TTL minutes); install is rare and OK to be slow.</td></tr>
+<tr><td>No GUI in v1.0</td><td>Every surface is <code>mcpm</code> CLI + TUI. TUI install picker reuses the same search backend.</td></tr>
+<tr><td>Distribution via curl + Nix flake</td><td>Registry adapter code ships in the same mcpd binary; no extra install step.</td></tr>
+<tr><td>Isolation via devenv + sandbox-exec / bwrap</td><td>Our install emits a sandbox-spec reference, never a bare command. The package's declared runtime (npx, uvx, docker) chooses the wrapper.</td></tr>
+<tr><td>Canonical state is TOML</td><td>Install writes a single <code>[servers.&lt;name&gt;]</code> block to <code>~/.config/mcpd/servers.toml</code>; nothing else.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section class="section">
+<h2>Headline recommendation</h2>
+<div class="recommendation-callout">
+<h3>Multi-source federation with the official registry seeded, signed manifests at the registry layer, and trust-anchored "tap" semantics for private sources.</h3>
+<p>
+Default sources are <strong>registry.modelcontextprotocol.io</strong> (official, signed) and <strong>GitHub MCP Registry</strong> (curated, GitHub-auth backed). A user can <code>mcpm registry add &lt;name&gt; &lt;url&gt;</code> to add Smithery, Docker, a private corp registry, or a local file path. All search queries fan out in parallel, results are union-merged with source-of-truth attribution, and ranking is local (BM25 over name+description+capabilities) so we never ship a query to a third party. See the <a href="./recommendation-server-registry-summary.html">recommendation page</a> for the full CLI surface and worked examples.
+</p>
+</div>
+</section>
+
+<section class="citations">
+  <h2>Citations</h2>
+  <p>Sources for this stream live in <a href="./data/citations.json">data/citations.json</a> and are rendered inline via the shared citations module.</p>
+</section>
+</main>
+</body>
+</html>

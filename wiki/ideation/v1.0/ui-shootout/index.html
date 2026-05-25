@@ -20,6 +20,11 @@
 <main class="container">
   <h1>GUI stack shootout</h1>
 
+  <aside class="card" style="border-left:4px solid var(--warn);background:var(--bg-faint);margin-block:1.5rem">
+    <h4 style="margin-top:0">Status (2026-05-24): GUI deferred to a future version</h4>
+    <p style="margin-bottom:0">After this shootout completed, the product owner moved the GUI out of v1.0 scope entirely. v1.0 ships CLI + TUI + config files only. <strong>This page is preserved as the pre-decided recommendation for whenever a GUI is added</strong> — see <a href="../future-features-v1.1.html#gui">future features → GUI</a>. The recommendation below (Actix + Askama inside mcpd) stands as the canonical answer to "if we build a GUI, what stack?"; the v1.x date for actually building it is to-be-determined.</p>
+  </aside>
+
   <p class="lede">
     User direction (2026-05-24): "<strong>We need to be OBSESSED about UX.</strong>" Three parallel research agents evaluated Tauri+Leptos, Tauri+Dioxus, and Actix-Web+Tera/Askama against MCP Manager's needs on macOS + Linux. This page synthesizes their scorecards into a single comparison and recommendation.
   </p>

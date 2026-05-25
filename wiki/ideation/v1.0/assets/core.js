@@ -171,7 +171,7 @@ const SIDEBAR_STREAMS = [
   {
     id: "ui-shootout",
     n: 7,
-    title: "GUI shootout",
+    title: "GUI shootout (deferred)",
     pages: [
       { path: "index.html", label: "Shootout hub", kind: "index" },
       { path: "matrix-shootout.html", label: "Ranking matrix", kind: "matrix" },
@@ -187,6 +187,28 @@ const SIDEBAR_STREAMS = [
       { path: "tauri-leptos/research-stack.html", label: "Leptos · stack", kind: "research" },
       { path: "tauri-leptos/research-mcp-manager-fit.html", label: "Leptos · fit", kind: "research" },
       { path: "tauri-leptos/recommendation-tauri-leptos-summary.html", label: "Leptos · recommendation", kind: "recommendation" },
+    ],
+  },
+  {
+    id: "closing-gaps",
+    n: 8,
+    title: "Closing v1.0 gaps",
+    pages: [
+      { path: "index.html", label: "Closing-gaps hub", kind: "index" },
+      { path: "server-registry/index.html", label: "Server registry · overview", kind: "index" },
+      { path: "server-registry/research-mcp-registry-landscape.html", label: "Registry · landscape", kind: "research" },
+      { path: "server-registry/analysis-registry-strategies-tradeoffs.html", label: "Registry · tradeoffs", kind: "analysis" },
+      { path: "server-registry/recommendation-server-registry-summary.html", label: "Registry · recommendation", kind: "recommendation" },
+      { path: "onboarding/index.html", label: "Onboarding · overview", kind: "index" },
+      { path: "onboarding/research-onboarding-prior-art.html", label: "Onboarding · prior art", kind: "research" },
+      { path: "onboarding/recommendation-onboarding-flow-summary.html", label: "Onboarding · recommendation", kind: "recommendation" },
+      { path: "secrets-lifecycle/index.html", label: "Secrets · overview", kind: "index" },
+      { path: "secrets-lifecycle/research-secrets-prior-art.html", label: "Secrets · prior art", kind: "research" },
+      { path: "secrets-lifecycle/recommendation-secrets-summary.html", label: "Secrets · recommendation", kind: "recommendation" },
+      { path: "version-management/index.html", label: "Versioning · overview", kind: "index" },
+      { path: "version-management/research-versioning-prior-art.html", label: "Versioning · prior art", kind: "research" },
+      { path: "version-management/analysis-versioning-tradeoffs.html", label: "Versioning · tradeoffs", kind: "analysis" },
+      { path: "version-management/recommendation-versioning-summary.html", label: "Versioning · recommendation", kind: "recommendation" },
     ],
   },
 ];

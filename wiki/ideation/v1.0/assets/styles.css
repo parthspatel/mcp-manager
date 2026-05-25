@@ -438,6 +438,8 @@ body.has-sidebar { padding-left: var(--sidebar-width); }
 .sidebar-stream-pill.stream-4::before { background: #8b5cf6; }
 .sidebar-stream-pill.stream-5::before { background: #ec4899; }
 .sidebar-stream-pill.stream-6::before { background: #14b8a6; }
+.sidebar-stream-pill.stream-7::before { background: #64748b; }
+.sidebar-stream-pill.stream-8::before { background: #eab308; }
 .sidebar-stream.is-current .sidebar-stream-pill {
   background: var(--accent);
   color: var(--accent-fg);

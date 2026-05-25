@@ -32,11 +32,101 @@
   <nav class="toc">
     <h4>Contents</h4>
     <ul>
+      <li><a href="#gui">GUI (deferred from v1.0)</a></li>
+      <li><a href="#secrets-advanced">Secrets: rotation, TTLs, vault providers</a></li>
+      <li><a href="#import-from">Import-from existing editor configs</a></li>
+      <li><a href="#observability">Observability: metrics, tracing, Prometheus</a></li>
+      <li><a href="#backup-restore">Backup / restore / state portability</a></li>
+      <li><a href="#resource-limits">Resource limits beyond memory (CPU, disk, network)</a></li>
+      <li><a href="#plugin-system">Plugin / extensibility system</a></li>
       <li><a href="#community-registry">Curated community toolchain registry</a></li>
-      <li><a href="#tauri-shell">Tauri shell over the Actix UI</a></li>
+      <li><a href="#tauri-shell">Tauri shell over the future GUI</a></li>
       <li><a href="#future-scope-criteria">When to revisit each item</a></li>
     </ul>
   </nav>
+
+  <section class="section" id="gui">
+    <h2>GUI (deferred from v1.0)</h2>
+    <p><strong>What:</strong> A visual interface for MCP Manager — server list, log tails, secret editor, toolchain projection status. v1.0 ships with CLI + TUI + config files; the GUI was researched but deferred.</p>
+
+    <h3>Why deferred from v1.0</h3>
+    <ul>
+      <li><strong>Scope reduction.</strong> Cutting the GUI removes Actix-Web, Askama, HTMX/Alpine, the HTTP/SSE bridge, the DNS-rebinding mitigations, the tray-icon helper, and the entire "browser tab vs native window" UX-tax debate from v1.0. mcpd simplifies to a tokio daemon with JSON-RPC over UDS.</li>
+      <li><strong>The TUI is sufficient for v1.0's target user.</strong> Power developers running a few dozen MCP servers don't need a dashboard; they need `mcpm` + a terminal log tail. The GUI was the surface most likely to delay shipping.</li>
+      <li><strong>Pre-decided architecture preserved.</strong> The <a href="./ui-shootout/">GUI shootout</a> remains as research — whenever the GUI ships, Actix + Askama (served from inside mcpd) is the standing recommendation.</li>
+    </ul>
+
+    <h3>v1.x spec (pre-decided in 2026-05-24 shootout)</h3>
+    <ol>
+      <li><strong>Architecture:</strong> Actix-Web + Askama, served from inside mcpd on <code>localhost:NNNN</code>. Server-rendered HTML + SSE for live updates + HTMX for interactivity. Zero IPC, single auth surface.</li>
+      <li><strong>Tray-icon helper</strong> (<code>tray-icon</code> crate, ~2MB) — dock/menubar presence on macOS + Linux.</li>
+      <li><strong>PWA install manifest</strong> — users who want a dock icon can install the localhost app to their dock with one click.</li>
+      <li><strong>Auth on localhost:</strong> bearer token in URL on first launch (Pi-hole pattern). <code>Host:</code> header allowlist (refuse anything except <code>localhost</code>/<code>127.0.0.1</code>/<code>[::1]</code>) to neutralize DNS rebinding.</li>
+      <li><strong>Save-on-blur</strong> for all edit flows — Cmd-W can't lose work.</li>
+      <li><strong>Opt-in LAN/mobile access:</strong> <code>mcpm gui --bind 0.0.0.0</code> unlocks management from a phone or tablet on the same network. <code>--bind tailscale0</code> for Tailscale-gated remote access.</li>
+    </ol>
+
+    <h3>What v1.0 must do to not foreclose this</h3>
+    <ul>
+      <li>Keep the JSON-RPC RPC method names stable so the GUI can talk to mcpd over the same wire as the CLI/TUI.</li>
+      <li>Keep mcpd's canonical state in TOML + structured journal — the GUI is just another view onto the same state.</li>
+      <li>Don't bake CLI-only assumptions into mcp-core (e.g. terminal-only progress reporting). The TUI already enforces this separation.</li>
+    </ul>
+
+    <p style="color:var(--fg-faint);font-size:0.85rem">Source of deferral: 2026-05-24 product lockdown. Research preserved at <a href="./ui-shootout/">ui-shootout/</a> (3 stacks evaluated; Actix+Askama recommended).</p>
+  </section>
+
+  <section class="section" id="secrets-advanced">
+    <h2>Secrets: rotation, TTLs, vault providers</h2>
+    <p><strong>What:</strong> v1.0 ships <code>mcpm secret set/list/unset</code> backed by OS keychain + an env-var passthrough escape hatch. v1.1+ adds:</p>
+    <ul>
+      <li><strong>TTL / rotation:</strong> declare per-secret rotation policy; mcpd warns or refuses to spawn a server with an expired secret.</li>
+      <li><strong>Vault providers:</strong> 1Password CLI (<code>op</code>), Bitwarden CLI (<code>bw</code>), HashiCorp Vault, Doppler, Infisical, AWS Secrets Manager, GCP Secret Manager, Azure Key Vault. Each plugs in through the <code>SecretStore</code> trait designed in v1.0 (closing-gap agent C).</li>
+      <li><strong>Per-secret access policies:</strong> "this secret can only be read by server <code>github</code>, not arbitrary servers."</li>
+      <li><strong>Lease-based / on-demand fetch:</strong> never persist the secret value locally; fetch from vault at spawn time, cache in memory only for the lifetime of the server process.</li>
+    </ul>
+    <p style="color:var(--fg-faint);font-size:0.85rem">Source: 2026-05-24 lockdown. The v1.0 trait sketch in <code>closing-gaps/secrets-lifecycle/</code> is designed to support these without re-architecting.</p>
+  </section>
+
+  <section class="section" id="import-from">
+    <h2>Import-from existing editor configs</h2>
+    <p><strong>What:</strong> <code>mcpm import-from cursor</code>, <code>mcpm import-from claude-code</code>, etc. Read the user's current editor MCP configs (which were the input to Stream 1's survey) and seed mcpd's canonical state. Massive friction-removal for adoption: a user with 8 servers already configured in Cursor doesn't have to redo any of them.</p>
+    <p><strong>Why deferred:</strong> v1.0 ships with hand-write or `mcpm install`. Import-from is a polish feature; it can wait until v1.1.</p>
+    <p><strong>v1.x scope:</strong> S6's projector code is already symmetric — it CAN read the same configs it writes. Import is a thin CLI verb wrapping that capability + a "first-run: shall I import?" hook in the onboarding flow (agent B's `mcpm init` accepts a stub <code>--import-from</code> flag in v1.0).</p>
+    <p style="color:var(--fg-faint);font-size:0.85rem">Source: 2026-05-24 lockdown.</p>
+  </section>
+
+  <section class="section" id="observability">
+    <h2>Observability: metrics, tracing, Prometheus</h2>
+    <p><strong>What:</strong> v1.0 ships logs (the 3-stream tail API) and audit log. v1.1+ adds:</p>
+    <ul>
+      <li>Prometheus-style <code>/metrics</code> endpoint on the (then-existing) GUI HTTP server, or a separate <code>mcpd --metrics-addr</code> bind.</li>
+      <li>OpenTelemetry tracing spans across the wrapper-command → mcpd → MCP-server boundary. Per-request latency histograms.</li>
+      <li>Standard MCP metrics: requests/sec, error rate, tool invocation counts per server, p50/p95/p99 latencies.</li>
+    </ul>
+    <p style="color:var(--fg-faint);font-size:0.85rem">Source: 2026-05-24 lockdown. Out of v1.0 scope because logs cover the user-facing case; metrics are ops-facing.</p>
+  </section>
+
+  <section class="section" id="backup-restore">
+    <h2>Backup / restore / state portability</h2>
+    <p><strong>What:</strong> <code>mcpm export</code> dumps the user's canonical state (servers, projections, lockfiles, audit log) to a tarball. <code>mcpm import-state</code> restores it on a new machine. Secrets are NOT in the tarball — those must be re-set on the target machine via <code>mcpm secret set</code> (or imported from a vault in v1.x when vault providers are supported).</p>
+    <p><strong>Why deferred:</strong> v1.0 workaround is to manually back up <code>~/.config/mcp-manager/</code>; secrets are already in OS keychain (with native backup tooling on macOS). v1.1 makes this first-class.</p>
+    <p style="color:var(--fg-faint);font-size:0.85rem">Source: 2026-05-24 lockdown.</p>
+  </section>
+
+  <section class="section" id="resource-limits">
+    <h2>Resource limits beyond memory (CPU, disk, network)</h2>
+    <p><strong>What:</strong> v1.0 supports per-server memory limits via cgroupv2 (Linux) / RLIMIT_AS (macOS). v1.1+ adds CPU quota (cgroupv2 <code>cpu.max</code>, RLIMIT_CPU), disk I/O quotas, and network egress filtering (Linux: nftables / cgroup-bound rules; macOS: pf rules).</p>
+    <p><strong>Why deferred:</strong> OOM was the most-frequent failure mode; CPU/disk/network are nice-to-have. The supervisor architecture already abstracts "resource limits" — adding more dimensions is additive.</p>
+    <p style="color:var(--fg-faint);font-size:0.85rem">Source: 2026-05-24 lockdown.</p>
+  </section>
+
+  <section class="section" id="plugin-system">
+    <h2>Plugin / extensibility system</h2>
+    <p><strong>What:</strong> Beyond the TOML manifest escape hatch, a real plugin SDK that lets third parties add: custom isolation backends (e.g. <code>firejail</code> on Linux), custom audit sinks (Splunk, Datadog), custom transport adapters (e.g. gRPC instead of stdio), custom registry providers (private corporate registries).</p>
+    <p><strong>Why deferred:</strong> The TOML manifests + the <code>SecretStore</code> trait designed in v1.0 cover most third-party extension needs. A full plugin SDK with versioning, ABI compatibility, and a marketplace is a v2+ concern, not v1.1.</p>
+    <p style="color:var(--fg-faint);font-size:0.85rem">Source: 2026-05-24 lockdown.</p>
+  </section>
 
   <section class="section" id="community-registry">
     <h2>Curated community toolchain registry</h2>
@@ -87,15 +177,15 @@ mcpm toolchain list --remote</code></pre>
   </section>
 
   <section class="section" id="tauri-shell">
-    <h2>Tauri shell over the Actix UI</h2>
+    <h2>Tauri shell over the future GUI</h2>
 
-    <p><strong>What:</strong> A thin Tauri 2 binary whose WebView points at <code>http://localhost:NNNN</code> — i.e., the same Actix UI v1.0 ships, but wrapped in a real native window with a dock icon, native menu bar, system notifications, and macOS code signing / notarization. The Actix server runs as a Tauri "sidecar" process (or the same mcpd binary, just launched by Tauri instead of by the user). Both targets ship from one codebase.</p>
+    <p><strong>What:</strong> Once the GUI itself ships (see above), a follow-on improvement is a thin Tauri 2 binary whose WebView points at <code>http://localhost:NNNN</code> — i.e., the same Actix UI wrapped in a real native window with a dock icon, native menu bar, system notifications, and macOS code signing / notarization. Best of both: zero UI rewrite, but a "real app" feel.</p>
 
-    <h3>Why deferred from v1.0</h3>
+    <h3>Why this lands later than the GUI itself</h3>
     <ul>
-      <li><strong>v1.0 ships Actix + Askama served from inside mcpd</strong> (see <a href="./ui-shootout/">ui-shootout</a>). That gets users a working GUI sooner with the simplest architecture.</li>
-      <li>The "browser tab" UX taxes (no dock icon, Cmd-W kills the UI, no global hotkeys) are partially mitigated in v1.0 by a tray-icon helper + PWA manifest. Whether they're <em>painful</em> in practice is an empirical question — we'll know after v1.0 ships.</li>
-      <li>Tauri adds packaging complexity (Apple notarization, code-signing certs, AppImage/.deb/.rpm builds) that we want to learn after the UI itself is stable.</li>
+      <li>The GUI deferral (the section above) is the primary v1.0 → v1.x scope reduction. The Tauri shell only makes sense once the GUI exists.</li>
+      <li>The "browser tab" UX taxes (no dock icon, Cmd-W kills the UI, no global hotkeys) can be measured empirically once the GUI ships — we'll know whether the tray-icon + PWA mitigations are enough.</li>
+      <li>Tauri adds packaging complexity (Apple notarization, code-signing certs, AppImage/.deb/.rpm builds) that's better learned after the UI itself is stable.</li>
     </ul>
 
     <h3>v1.1 spec sketch</h3>
@@ -129,13 +219,48 @@ mcpm toolchain list --remote</code></pre>
       </thead>
       <tbody>
         <tr>
+          <td>GUI (Actix + Askama inside mcpd)</td>
+          <td>v1.0 has shipped and TUI usability feedback indicates a real gap (e.g. user complaints about server-list browsing, log-tail multiplexing, or remote/mobile access)</td>
+          <td>~6–8 weeks: Actix server inside mcpd + Askama templates + HTMX wiring + tray-icon helper + PWA manifest. Architecture pre-decided in <a href="./ui-shootout/">ui-shootout</a>.</td>
+        </tr>
+        <tr>
+          <td>Secrets: rotation + vault providers</td>
+          <td>v1.0 has shipped; teams using corporate vaults (1Password Business, AWS Secrets Manager, HashiCorp Vault) are blocked or working around</td>
+          <td>~3–4 weeks per provider, ~2 weeks for rotation. The <code>SecretStore</code> trait designed in v1.0 means each provider is additive.</td>
+        </tr>
+        <tr>
+          <td>Import-from existing editor configs</td>
+          <td>Adoption-friction signal — new users hitting "I have 8 servers in Cursor already" frequently</td>
+          <td>~1 week — S6's projector already reads these configs; just wrap as a CLI verb + onboarding hook.</td>
+        </tr>
+        <tr>
+          <td>Observability (metrics, tracing, Prometheus)</td>
+          <td>Production deployments running mcpd as a service want SLOs / dashboards</td>
+          <td>~3 weeks: <code>tracing</code> spans already exist; just add metrics emission + Prometheus exporter.</td>
+        </tr>
+        <tr>
+          <td>Backup / restore / state portability</td>
+          <td>Multi-machine users (dev laptop + work desktop + ephemeral cloud dev env) hit this</td>
+          <td>~1 week — mostly tarball-and-untar plus a "what does this NOT include" UX (secrets).</td>
+        </tr>
+        <tr>
+          <td>Resource limits beyond memory (CPU, disk, network)</td>
+          <td>Specific user demand (e.g. an MCP server that fork-bombs or downloads gigabytes)</td>
+          <td>~2 weeks per dimension; cgroupv2 makes Linux easy, macOS is harder.</td>
+        </tr>
+        <tr>
+          <td>Plugin / extensibility system</td>
+          <td>Multiple credible third-party requests to extend mcpd in ways the TOML manifest can't express</td>
+          <td>v2+ scope — not a v1.1 candidate. Real plugin SDK is months.</td>
+        </tr>
+        <tr>
           <td>Curated community toolchain registry</td>
           <td>v1.0 has shipped and there's measurable demand (e.g. ≥10 community-authored manifests floating around in GitHub gists)</td>
           <td>~6 weeks: registry repo + signing + capability declarations + CLI surface + governance policy</td>
         </tr>
         <tr>
-          <td>Tauri shell over Actix UI</td>
-          <td>v1.0 has shipped; user feedback flags "no dock icon" / "Cmd-W lost my work" / "can't get global hotkeys" as recurring complaints in &gt;~20% of sessions</td>
+          <td>Tauri shell over the future GUI</td>
+          <td>GUI has shipped; user feedback flags "no dock icon" / "Cmd-W lost my work" / "can't get global hotkeys" as recurring complaints in &gt;~20% of sessions</td>
           <td>~3–4 weeks: Tauri scaffold + sidecar config + notarization + auto-updater (no UI work — wraps the existing Actix server)</td>
         </tr>
       </tbody>

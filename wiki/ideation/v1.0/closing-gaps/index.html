@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Closing v1.0 gaps — MCP Manager</title>
+<meta name="description" content="Four focused-design agents resolving the v1.0 gaps surfaced in the 2026-05-24 review: server registry+install, onboarding, secrets lifecycle, version management.">
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">closing-gaps</span></div>
+    <div class="crumbs"><a href="../index.html">← v1.0 synthesis hub</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Closing v1.0 gaps</h1>
+
+  <p class="lede">
+    The 2026-05-24 gap review identified five Tier-1 blocking gaps. Distribution was resolved directly (curl + Nix flake), and the GUI was deferred. The remaining four gaps — <strong>server discovery+install</strong>, <strong>onboarding flow</strong>, <strong>secrets lifecycle</strong>, <strong>version management</strong> — were each given to a focused-design agent. All four reported back; this hub summarises and links to their work.
+  </p>
+
+  <p>
+    <span class="evidence-badge">152 citations</span>
+    <span class="evidence-badge">14 HTML pages</span>
+    <span class="evidence-badge">2 ranking matrices</span>
+    <span class="pill success">All 4 agents complete</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#agents">The four agents</a></li>
+      <li><a href="#headlines">Headline recommendations</a></li>
+      <li><a href="#convergence">Cross-agent convergence</a></li>
+      <li><a href="#open-questions">Aggregated open questions</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="agents">
+    <h2>The four agents</h2>
+    <div class="stream-grid">
+      <a class="stream-card" href="./server-registry/">
+        <div class="codename">server-registry</div>
+        <h3>Server discovery + install</h3>
+        <p><strong>Headline:</strong> Multi-source federation seeded with the official LF-stewarded MCP Registry + GitHub MCP Registry + Docker MCP Catalog. minisign on the index, cosign-when-present on packages, user-addable private registries via apt-style <code>--signed-by</code>.</p>
+        <div class="meta"><span class="pill accent">Agent A</span><span class="pill success">Complete</span><span class="evidence-badge">38 citations</span></div>
+      </a>
+      <a class="stream-card" href="./onboarding/">
+        <div class="codename">onboarding</div>
+        <h3>Onboarding flow</h3>
+        <p><strong>Headline:</strong> <code>mcpm init</code> as a thin scaffolder (NOT a doctor), modelled on <code>aws configure</code> + <code>terraform init</code> + <code>npm init -y</code>. Idempotent, full non-interactive via <code>--defaults -y</code>, direnv-style trust gate for project configs cloned from elsewhere.</p>
+        <div class="meta"><span class="pill accent">Agent B</span><span class="pill success">Complete</span><span class="evidence-badge">37 citations</span></div>
+      </a>
+      <a class="stream-card" href="./secrets-lifecycle/">
+        <div class="codename">secrets-lifecycle</div>
+        <h3>Secrets lifecycle</h3>
+        <p><strong>Headline:</strong> One <code>SecretStore</code> Rust trait, two v1.0 backends (<code>OsKeyringStore</code> + <code>EnvVarPassthroughStore</code>) composed via <code>LayeredSecretStore</code>. <code>#[non_exhaustive]</code> + opt-in subtraits leave room for v1.1 vault providers / rotation / leasing with zero re-architecture.</p>
+        <div class="meta"><span class="pill accent">Agent C</span><span class="pill success">Complete</span><span class="evidence-badge">32 citations</span></div>
+      </a>
+      <a class="stream-card" href="./version-management/">
+        <div class="codename">version-management</div>
+        <h3>Version management</h3>
+        <p><strong>Headline:</strong> Range-in-manifest + exact-in-lockfile (Cargo/npm model). Three-phase MCP-spec-version negotiation. Renovate vocabulary for <code>mcpm update</code> classification (PATCH/MINOR/MAJOR/DIGEST/PIN/MAINT + a new SPEC class).</p>
+        <div class="meta"><span class="pill accent">Agent D</span><span class="pill success">Complete</span><span class="evidence-badge">45 citations</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="section" id="headlines">
+    <h2>Headline recommendations (one-line each)</h2>
+    <table class="compare">
+      <thead>
+        <tr><th>Agent</th><th>v1.0 deliverable</th><th>Designed-for-extension hook</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a href="./server-registry/">A — server registry</a></td>
+          <td><code>mcpm search/install</code>, 3 baked-in default registries (official / GitHub / Docker), <code>mcpm registry add|list|remove|refresh|verify</code></td>
+          <td>Apt-style <code>--signed-by</code> for user/corp sources; future <code>mcpm registry trust</code> to upgrade trust after the fact</td>
+        </tr>
+        <tr>
+          <td><a href="./onboarding/">B — onboarding</a></td>
+          <td><code>mcpm init</code> (interactive + <code>--defaults -y</code>), <code>mcpm project init</code>, service-manager prompt (opt-in, declines by default since daemon auto-spawns)</td>
+          <td><code>--import-from cursor</code> stubbed in v1.0 with "deferred to v1.1" message; the flag exists so v1.1 doesn't break v1.0 muscle memory</td>
+        </tr>
+        <tr>
+          <td><a href="./secrets-lifecycle/">C — secrets</a></td>
+          <td><code>mcpm secret set/list/unset</code>; OS Keychain (macOS) / libsecret (Linux); env-var passthrough as escape hatch; values never on argv</td>
+          <td><code>SecretStore</code> trait with <code>#[non_exhaustive] SecretRef</code>; opt-in subtraits <code>RotatableSecretStore</code> / <code>LeasedSecretStore</code> for v1.1 vault providers</td>
+        </tr>
+        <tr>
+          <td><a href="./version-management/">D — versioning</a></td>
+          <td><code>mcpm install foo@^0.4</code>, lockfile (TOML, co-located with projection lock), <code>mcpm update</code> / <code>mcpm outdated</code> with Renovate-class labels; 3-phase MCP-spec negotiation</td>
+          <td>Spec allow-list grows over releases without dropping olds; per-server <code>spec = "..."</code> escape hatch; health-check (<code>mcpm test</code>) auto-runs after every classified change</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section" id="convergence">
+    <h2>Cross-agent convergence</h2>
+    <p>Four independent agents (each unaware of the others) all converged on the same architectural principles. That's a robust signal.</p>
+
+    <div class="card-grid">
+      <article class="card">
+        <h4>Trait-based extension points</h4>
+        <p>Each agent designed a v1.0 surface that v1.1 can extend without re-architecting:</p>
+        <ul>
+          <li>Secrets: <code>SecretStore</code> trait, <code>#[non_exhaustive]</code> ref enum</li>
+          <li>Registry: <code>RegistrySource</code> trait (named + signed + cached) — multi-source federation built in</li>
+          <li>Versioning: per-server <code>spec</code> override, opt-in <code>--accept-breaking</code>, lockfile schema versioned</li>
+          <li>Onboarding: <code>--import-from</code> stubbed but already accepted as a flag</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h4>Argv hygiene</h4>
+        <p>Three agents independently rejected putting sensitive data on argv (secrets via <code>--value</code>, install via <code>--token</code>, etc.). Universal pattern: TTY prompt (<code>rpassword</code>) or env-var passthrough. The fourth agent (versioning) doesn't surface sensitive values, but applied the same hygiene to its lockfile (no plaintext checksums or hashes leaking past safe boundaries).</p>
+      </article>
+
+      <article class="card">
+        <h4>Audit-log integration</h4>
+        <p>Every agent emits audit events: <code>secret.read</code>/<code>write</code>/<code>unset</code> (C), <code>config.change</code> on lockfile updates (D), <code>registry.refresh</code> + <code>registry.verify</code> (A), <code>project.trust</code> + <code>project.register</code> (B). The common audit-log shape decided by directive #3 lands as the single sink. Schemas are non-conflicting; the orchestrator confirms the unified schema below.</p>
+      </article>
+
+      <article class="card">
+        <h4>Default trust = baked into binary</h4>
+        <p>The "default registries" (A's 3 sources) and the "default mcpd spec allow-list" (D's 2 dates) both ship inside the mcpd binary. Updating either is a hotfix release, not a runtime manifest. Same model as OS-package-manager trusted-keys. Pubkey rotation cadence is the open question both agents flagged.</p>
+      </article>
+
+      <article class="card">
+        <h4>Idempotency by construction</h4>
+        <p>Onboarding (<code>mcpm init</code> re-runs as no-op), registry refresh (re-syncs in place), version pinning (lockfile written atomically + rolled back on health-check failure), secret set (overwrites existing keychain entry with no error). v1.0's CLI surface is replay-safe end-to-end.</p>
+      </article>
+
+      <article class="card">
+        <h4>Cross-stream coupling on per-project scope</h4>
+        <p>All four agents respected the v1.0 lockdown decision: canonical scope is user-configurable per registered project, lockfile location follows. Verified:</p>
+        <ul>
+          <li>A: <code>mcpm install --scope user|project</code> consistent</li>
+          <li>B: <code>mcpm project init</code> distinct from <code>mcpm init</code></li>
+          <li>C: per-project secret stores called out as a cross-stream open question for v1.1</li>
+          <li>D: lockfile placed alongside projection lockfile per scope</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="open-questions">
+    <h2>Aggregated open questions for the orchestrator</h2>
+    <p>Most agent-flagged questions either resolve trivially or wait for v1.1. The ones that need explicit product-owner attention:</p>
+
+    <details class="accordion" open>
+      <summary>Pubkey rotation policy (A + D)</summary>
+      <p>Both server-registry and version-management bake trust roots into the binary (default registry minisign keys for A; default MCP spec allow-list for D). Rotation today requires a hotfix mcpd release. Question: ship a "trust manifest" file in v1.0 that lets users (or us) rotate without rebuilding? Or accept hotfix-release cadence as the rotation mechanism for v1.0 and revisit in v1.1?</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Docker source auto-enable threshold (A)</summary>
+      <p>If Docker is detected on the user's machine at <code>mcpm init</code> time, should the <code>docker</code> registry be auto-enabled, or ask once? Agent A leans "ask once" to be explicit; agent B's onboarding flow has a slot for this question.</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Service-string namespace (C)</summary>
+      <p>The OS keychain entry's "service" attribute is <code>"dev.mcpmanager"</code> in the recommendation. Renaming after v1.0 ships orphans users' existing keychain entries. Confirm this is the canonical reverse-DNS we want forever.</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Code-signing commitment for macOS (C)</summary>
+      <p>TouchID-gated keychain reads and Secure Enclave entitlements require signed macOS binaries. v1.0 ships code-signed, or defer signing (blocks any biometric feature for v1.1)?</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Per-server spec override (D)</summary>
+      <p>Ship <code>[server.&lt;name&gt;].spec = "..."</code> as a v1.0 escape hatch for servers that lie about their advertised MCP version? Agent D leans yes, documented as an escape hatch. Confirm.</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Health-check gating on minor bumps (D ↔ health check)</summary>
+      <p>Agent D's recommendation auto-runs <code>mcpm test</code> after every classified change. Confirm this composes cleanly with the health-check's UX (probably a <code>--no-test</code> flag on <code>mcpm update</code> for users who'd rather skip).</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Service-manager unregister on uninstall (B)</summary>
+      <p>If the user accepted the launchd/systemd registration during onboarding and later runs <code>mcpm uninstall</code>, does mcpm unregister itself first? Agent B left this unaddressed.</p>
+    </details>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registry strategies &mdash; trade-offs &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+<script type="module" src="../../assets/matrix.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../index.html">closing-gaps</a> / <a href="./index.html">server-registry</a> / strategies</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Registry strategies &mdash; trade-offs</h1>
+
+<p class="lede">
+Given the landscape (research page), six broad strategies for how mcpd talks to the world of MCP registries. This page lays each out, scores them on the criteria that matter for v1.0, and pulls out the failure modes that ruled three of them out.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#strategies">The six strategies</a></li>
+    <li><a href="#matrix">Interactive scoring matrix</a></li>
+    <li><a href="#dimensions">Critical dimensions in detail</a></li>
+    <li><a href="#failure-modes">Failure modes that ruled options out</a></li>
+    <li><a href="#conclusion">Conclusion &amp; handoff to recommendation</a></li>
+  </ul>
+</nav>
+
+<h2 id="strategies">The six strategies</h2>
+
+<div class="card-grid">
+<div class="card">
+  <h3>1. Single official registry only</h3>
+  <p>mcpd reads <em>only</em> <code>registry.modelcontextprotocol.io</code>. No third-party sources. Pinned to a known schema, single trust root.</p>
+  <p><strong>Sibling parallel:</strong> npm against the npm registry pre-2010 &mdash; one source, one truth.</p>
+</div>
+
+<div class="card">
+  <h3>2. Multi-source federation (user-configurable)</h3>
+  <p>Seeded with two trusted sources; user can <code>mcpm registry add</code> any compliant source. Search fans out, results union-merged with attribution. Each source is independently trustable.</p>
+  <p><strong>Sibling parallel:</strong> brew taps<cite data-ref="homebrew-taps"></cite>, cargo <code>[registries]</code><cite data-ref="cargo-registries"></cite>, apt <code>sources.list.d/</code><cite data-ref="apt-third-party-signed"></cite>.</p>
+</div>
+
+<div class="card">
+  <h3>3. Registry-of-registries (meta-index)</h3>
+  <p>mcpd reads a single "index of indexes" maintained somewhere central; that index points at the actual registries. User adds sources by editing the index entry.</p>
+  <p><strong>Sibling parallel:</strong> Nix flake registry layer 1<cite data-ref="nix-flake-registry"></cite>, mise's first-party registry.<cite data-ref="mise-plugins"></cite></p>
+</div>
+
+<div class="card">
+  <h3>4. GitHub-topic search only</h3>
+  <p>No registry at all. Use the GitHub Search API for <code>topic:mcp-server</code> + query string; parse <code>server.json</code> from the repo if present, else best-effort.</p>
+  <p><strong>Sibling parallel:</strong> Go module proxy reads VCS directly &mdash; the package <em>is</em> the repo.</p>
+</div>
+
+<div class="card">
+  <h3>5. Curated allowlist + corp opt-in</h3>
+  <p>Hard-coded allowlist of ~50 high-quality servers ships with mcpd. Anything else is a manual import. Corp users can ship an allowlist via config.</p>
+  <p><strong>Sibling parallel:</strong> Docker MCP Catalog<cite data-ref="docker-mcp-catalog"></cite>, GitHub MCP Registry's curation tier.<cite data-ref="github-mcp-registry"></cite></p>
+</div>
+
+<div class="card">
+  <h3>6. Local-vendored mirror snapshot</h3>
+  <p>Bake a snapshot of the registry into mcpd at release. Periodic <code>mcpm refresh</code> pulls a new snapshot. Air-gap-friendly.</p>
+  <p><strong>Sibling parallel:</strong> cargo source replacement<cite data-ref="cargo-source-replacement"></cite>, apt offline mirrors.</p>
+</div>
+</div>
+
+<h2 id="matrix">Interactive scoring matrix</h2>
+
+<p>
+Scores are 0&ndash;5 (higher = better for that criterion); criterion direction is signalled in the label. <strong>Drag the sliders to reweight</strong>; the ranking updates live.
+</p>
+
+<div data-matrix-src="./data/registry-strategy-ranking.json"></div>
+
+<h2 id="dimensions">Critical dimensions in detail</h2>
+
+<h3>Coverage breadth</h3>
+<p>
+"How many servers can the user actually find?" Official registry today is ~2k and growing.<cite data-ref="mcp-registry-blog-preview"></cite> Glama is ~24k.<cite data-ref="glama-mcp"></cite> GitHub topic is ~16k.<cite data-ref="github-topic-mcp-server"></cite> Coverage matters less for our "10s of MCPs per user" target than freshness and trust &mdash; we just need to surface <em>the right one</em>, not <em>every one</em>.
+</p>
+
+<h3>Trust / provenance</h3>
+<p>
+Given 40+ CVEs in early 2026<cite data-ref="mcp-security-supply-chain"></cite> and the STDIO RCE class<cite data-ref="mcp-rce-vuln"></cite>, "trust" is the single most weighted criterion. Three sub-questions:
+</p>
+<ol>
+  <li><strong>Did the named publisher actually publish this?</strong> Official registry's GitHub-auth + namespace pinning<cite data-ref="mcp-registry-publish-guide"></cite> answers this. mcp.so does not.</li>
+  <li><strong>Was the underlying package signed at build time?</strong> npm Sigstore provenance<cite data-ref="npm-provenance"></cite> answers this for npm packages. Docker images via cosign.<cite data-ref="sigstore-cosign"></cite></li>
+  <li><strong>Has the registry itself attested to the manifest?</strong> Minisign-signed registry index<cite data-ref="minisign"></cite> answers this. Plain HTTPS does not.</li>
+</ol>
+
+<h3>Freshness</h3>
+<p>Registry-of-registries adds a lag layer (the meta-index has to update). Local-vendored is the worst &mdash; ships fresh at release, stale within a week. Multi-source federation fans out to live endpoints and is always fresh.</p>
+
+<h3>Search quality</h3>
+<p>
+"Semantic search" (Smithery<cite data-ref="smithery-docs-registry-search"></cite>) is great UX but requires sending the query to a third party &mdash; <em>conflicts with our no-telemetry constraint</em>. Local BM25 over name+description+tags is good enough at 10k-record scale and keeps queries local. We can <em>augment</em> with semantic if the user opts a source in.
+</p>
+
+<h3>Search latency</h3>
+<p>
+Local search over a cached index is ~ms. Fanned-out HTTP search is hundreds of ms per source, in parallel. The user-perceived ceiling is the slowest source &mdash; we apply a hard timeout (default 2s) and surface partial results.
+</p>
+
+<h3>Escape-hatch friendliness (corp / private)</h3>
+<p>
+A user at a company will need to add their internal registry. Strategies #2 and #6 make this trivial; #1 makes it impossible without a fork; #3 forces them to wait for the meta-index to add them. <strong>This single criterion eliminates strategy #1 outright.</strong>
+</p>
+
+<h3>Maintenance burden</h3>
+<p>
+Each adapter is code we own. Strategy #2 with two seeded sources = two adapters at v1.0. Strategy #3 needs a meta-index <em>and</em> all the adapters. Strategy #5 needs only manual curation but the curation itself is unending work.
+</p>
+
+<h3>License risk</h3>
+<p>
+Some registries re-publish per-server metadata under their own terms. We do not redistribute metadata &mdash; we cache it locally on the user's machine &mdash; so the risk is small, but we still want to flag per-source license in the registry manifest so a corp user can audit.
+</p>
+
+<h2 id="failure-modes">Failure modes that ruled options out</h2>
+
+<table class="compare">
+<thead><tr><th>Strategy</th><th>Killer failure mode</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>#1 Single official registry only</strong></td>
+  <td>
+    Cannot support private corporate registries without forking mcpd. With 40+ CVEs and 9 of 11 marketplaces affected<cite data-ref="mcp-security-supply-chain"></cite>, security-conscious orgs <em>must</em> have an internal allowlist. This strategy makes them ineligible users.
+  </td>
+</tr>
+<tr>
+  <td><strong>#3 Registry-of-registries</strong></td>
+  <td>
+    Adds a centralization point we don't own. Meta-index becomes a single point of failure for trust. Doubles the "who broke the world" surface. Nix has gotten away with this only because the meta-index is a flat JSON file in a famous git repo<cite data-ref="nix-flake-registry"></cite> &mdash; not a service. We'd have to host such a service or ride on someone else's.
+  </td>
+</tr>
+<tr>
+  <td><strong>#4 GitHub-topic search only</strong></td>
+  <td>
+    No manifest = we'd have to <em>guess</em> the install command, transport, env-var contract for every server. That's exactly the threat surface STDIO-spawn RCE<cite data-ref="mcp-rce-vuln"></cite> exploits. Cannot be a primary strategy; useful only as a "no results found, do you want to search GitHub?" fallback.
+  </td>
+</tr>
+<tr>
+  <td><strong>#6 Local-vendored mirror snapshot</strong></td>
+  <td>
+    PyPI's <code>pip search</code> died<cite data-ref="pip-search-deprecated"></cite> precisely because "ship the whole index to every client" doesn't scale. Even at MCP-registry scale (~2k entries) we'd be shipping ~100MB of manifests and re-shipping on every mcpd release. Air-gap users still want it &mdash; we make it a <em>per-registry option</em> (<code>--cache=full</code>), not the default mode.
+  </td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="conclusion">Conclusion &amp; handoff to recommendation</h2>
+
+<p>
+Strategy <strong>#2 (multi-source federation)</strong> dominates on the weights we expect a v1.0 user to apply, and it's the only one that closes both the "private corp registry" gap and the "ship today" gap. Strategy #5 (curation) is folded in as a <em>property of a source</em> rather than a strategy &mdash; "this source is curated" becomes a pill on results, not a separate code path. Strategy #6 (local-vendored) is folded in as a per-registry caching option for air-gapped users.
+</p>
+
+<p>
+The concrete CLI surface, default sources, signing posture, and worked transcripts are on the <a href="./recommendation-server-registry-summary.html">recommendation page</a>.
+</p>
+
+<section class="citations">
+  <h2>Citations</h2>
+  <p>All sources are listed in <a href="./data/citations.json">data/citations.json</a> and rendered inline.</p>
+</section>
+</main>
+</body>
+</html>

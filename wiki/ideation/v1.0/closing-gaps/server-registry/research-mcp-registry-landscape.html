@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP registry landscape (2026) &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../index.html">closing-gaps</a> / <a href="./index.html">server-registry</a> / landscape</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>The MCP registry landscape, May 2026</h1>
+
+<p class="lede">
+Survey of where MCP servers live in May 2026 &mdash; what each registry covers, how it gates entries, what programmatic surface (if any) it exposes, and how friendly it is to a self-hosted client like mcpd. We then briefly cover sibling-ecosystem patterns we want to borrow (cargo, brew taps, mise, apt, pipx, Nix flake registry) and the signing/provenance options on the table.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#timeline">Timeline &mdash; how we got here</a></li>
+    <li><a href="#first-party">First-party / vendor-neutral registries</a></li>
+    <li><a href="#community">Community directories &amp; marketplaces</a></li>
+    <li><a href="#raw">Raw discovery surfaces (GitHub, npm, PyPI)</a></li>
+    <li><a href="#summary">At-a-glance comparison</a></li>
+    <li><a href="#prior-art">Sibling-ecosystem prior art</a></li>
+    <li><a href="#trust">Trust &amp; provenance options</a></li>
+  </ul>
+</nav>
+
+<h2 id="timeline">Timeline &mdash; how we got here</h2>
+<ul>
+  <li><strong>Nov 2024</strong> &mdash; Anthropic announces MCP. Discovery is exclusively GitHub README lists.<cite data-ref="mcp-registry-blog-preview"></cite></li>
+  <li><strong>Q1&ndash;Q2 2025</strong> &mdash; Smithery, mcp.so, Glama, PulseMCP all bootstrap as third-party directories. Each picks its own metadata schema.<cite data-ref="smithery-ai"></cite><cite data-ref="mcp-so"></cite><cite data-ref="glama-mcp"></cite><cite data-ref="pulsemcp"></cite></li>
+  <li><strong>Sep 2025</strong> &mdash; Official MCP Registry preview launches at <code>registry.modelcontextprotocol.io</code>. Ships an OpenAPI 3.1 spec other registries can adopt ("Generic Registry API").<cite data-ref="mcp-registry-blog-preview"></cite><cite data-ref="mcp-registry-openapi"></cite></li>
+  <li><strong>Dec 2025</strong> &mdash; Anthropic donates MCP to the Linux Foundation's Agentic AI Foundation. Registry governance becomes vendor-neutral.<cite data-ref="mcp-donation-aaf"></cite></li>
+  <li><strong>Jan&ndash;Apr 2026</strong> &mdash; 40+ CVEs disclosed against MCP SDKs and 9 of 11 marketplaces; major STDIO-spawn RCE class makes "only install from verified sources" a baseline ask.<cite data-ref="mcp-security-supply-chain"></cite><cite data-ref="mcp-rce-vuln"></cite></li>
+  <li><strong>Mar 2026</strong> &mdash; Enterprise-readiness roadmap published; signing and provenance are explicit goals.<cite data-ref="mcp-roadmap-2026"></cite></li>
+  <li><strong>May 2026 (today)</strong> &mdash; 12,000&ndash;24,000 servers cataloged depending on whose counting; ~16k GitHub repos with the <code>mcp-server</code> topic.<cite data-ref="github-topic-mcp-server"></cite></li>
+</ul>
+
+<h2 id="first-party">First-party / vendor-neutral registries</h2>
+
+<details class="accordion" open>
+  <summary>Official MCP Registry &mdash; <code>registry.modelcontextprotocol.io</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>URL</strong></td><td><code>https://registry.modelcontextprotocol.io</code><cite data-ref="official-mcp-registry"></cite></td></tr>
+      <tr><td><strong>Governance</strong></td><td>Linux Foundation / Agentic AI Foundation as of Dec 2025; vendor-neutral.<cite data-ref="mcp-donation-aaf"></cite></td></tr>
+      <tr><td><strong>API surface</strong></td><td>REST, OpenAPI 3.1.0; JSON-Schema draft 2020-12.<br><code>GET /v0.1/servers</code> &mdash; paginated list<br><code>GET /v0.1/servers/{serverName}/versions</code><br><code>GET /v0.1/servers/{serverName}/versions/{version}</code> (<code>latest</code> alias)<br><code>POST /v0.1/publish</code>, <code>DELETE</code> for removal<cite data-ref="mcp-registry-openapi"></cite><cite data-ref="nordic-apis-mcp-registry"></cite></td></tr>
+      <tr><td><strong>Manifest schema</strong></td><td><code>server.json</code> with <code>name</code>, <code>description</code>, <code>version</code>, <code>repository</code>, <code>packages[]</code> (with <code>registryType</code> = npm/pypi/oci/&hellip;), <code>remotes[]</code>, transport, env. Schema hosted at <code>static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json</code>.<cite data-ref="mcp-server-json-schema"></cite></td></tr>
+      <tr><td><strong>Auth for publish</strong></td><td>GitHub OAuth; <code>io.github.&lt;user&gt;/*</code> namespaces are pinned to that user. npm packages must declare <code>mcpName</code>; PyPI packages must embed the name in README. <em>Cross-checks the package against the publisher's claim.</em><cite data-ref="mcp-registry-publish-guide"></cite></td></tr>
+      <tr><td><strong>Mutability</strong></td><td>DELETE endpoint exists; versions are append-only by convention. No yanked-version tombstones documented yet.<cite data-ref="mcp-registry-openapi"></cite></td></tr>
+      <tr><td><strong>Telemetry</strong></td><td>None observed; reads are anonymous.</td></tr>
+      <tr><td><strong>Coverage (May 2026)</strong></td><td>"~2,000 entries within months of launch" per the preview blog; growing.<cite data-ref="mcp-registry-blog-preview"></cite></td></tr>
+      <tr><td><strong>mcpd fit</strong></td><td>Excellent &mdash; this is the canonical schema we adopt for our local "normalized" representation. The Generic Registry API means private corp registries can serve the same shape.<cite data-ref="mcp-registry-generic-api"></cite></td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion" open>
+  <summary>GitHub MCP Registry &mdash; <code>github.com/mcp</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>URL</strong></td><td><code>https://github.com/mcp</code> + GitHub Blog announcement.<cite data-ref="github-mcp-registry"></cite></td></tr>
+      <tr><td><strong>Governance</strong></td><td>Curated by GitHub; each entry backed by a GitHub repo. Aligned with the official registry as an upstream consumer (publishes against the same schema where applicable).<cite data-ref="github-mcp-registry"></cite></td></tr>
+      <tr><td><strong>API surface</strong></td><td>Browseable web UI + (per blog) programmatic access integrated into GitHub Copilot's server picker. Programmatic surface for non-Copilot clients is currently limited &mdash; we treat this as a curated allowlist source.</td></tr>
+      <tr><td><strong>Trust model</strong></td><td>Strong: every entry has a known GitHub identity, repo URL, and (for org-owned servers) GitHub org verification.</td></tr>
+      <tr><td><strong>mcpd fit</strong></td><td>Treat as a high-trust seeded source for v1.0. Adapter can be a thin wrapper over a public JSON manifest at a stable URL.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>Docker MCP Catalog &mdash; <code>docs.docker.com/ai/mcp-catalog-and-toolkit</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>URL</strong></td><td><code>https://docs.docker.com/ai/mcp-catalog-and-toolkit/catalog/</code> + source at <code>github.com/docker/mcp-registry</code>.<cite data-ref="docker-mcp-catalog"></cite><cite data-ref="docker-mcp-registry-repo"></cite></td></tr>
+      <tr><td><strong>Distribution</strong></td><td>Each server is a signed Docker image on Docker Hub. Custom catalogs distribute as OCI artifacts.</td></tr>
+      <tr><td><strong>Coverage (May 2026)</strong></td><td>300+ verified servers.</td></tr>
+      <tr><td><strong>Trust model</strong></td><td>Strong: Docker-built servers are digitally signed by Docker; reproducible image hashes. Onboarding via PR with 24h SLA.</td></tr>
+      <tr><td><strong>mcpd fit</strong></td><td>Excellent for the "user already has Docker / wants containerized servers" path. Maps cleanly to the Docker escape-hatch in stoic-badger-sandbox. Adapter reads <code>github.com/docker/mcp-registry</code> directly &mdash; no telemetry surface.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="community">Community directories &amp; marketplaces</h2>
+
+<details class="accordion" open>
+  <summary>Smithery &mdash; <code>smithery.ai</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>URL</strong></td><td><code>https://smithery.ai</code><cite data-ref="smithery-ai"></cite></td></tr>
+      <tr><td><strong>Coverage (May 2026)</strong></td><td>~7,000 servers.</td></tr>
+      <tr><td><strong>API surface</strong></td><td>REST registry API with semantic search ("query is a prompt"); requires API key from <code>smithery.ai/account/api-keys</code>.<cite data-ref="smithery-docs-registry-search"></cite></td></tr>
+      <tr><td><strong>CLI parallel</strong></td><td><code>smithery mcp search [term]</code>, <code>smithery mcp add &lt;url&gt;</code>. npm-distributed (<code>@smithery/cli</code>).<cite data-ref="smithery-cli"></cite></td></tr>
+      <tr><td><strong>Telemetry</strong></td><td>API key implies an account, which implies a telemetry surface. Read-only access with anonymous key may be available; <em>must verify before bundling as a default source for v1.0</em>.</td></tr>
+      <tr><td><strong>Hosted-server option</strong></td><td>Yes &mdash; Smithery offers cloud-hosted execution. Not relevant to mcpd (we run locally), but the registry entries declare this and we just ignore that bit.</td></tr>
+      <tr><td><strong>mcpd fit</strong></td><td>Excellent as an <em>opt-in</em> source (user adds via <code>mcpm registry add smithery https://smithery.ai/&hellip;</code>). Not bundled by default because of the API-key implication.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion" open>
+  <summary>Glama &mdash; <code>glama.ai/mcp</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>URL</strong></td><td><code>https://glama.ai/mcp/servers</code><cite data-ref="glama-mcp"></cite></td></tr>
+      <tr><td><strong>Coverage (May 2026)</strong></td><td>~24,000 servers &mdash; largest by volume.</td></tr>
+      <tr><td><strong>Unique value</strong></td><td>Deep per-server scanning: tool names, input schemas, MCP annotation hints, license detection, quality scoring. Superset of the official registry per their docs.</td></tr>
+      <tr><td><strong>API surface</strong></td><td>Public registry browse + JSON API. Adapter feasible.</td></tr>
+      <tr><td><strong>License-risk note</strong></td><td>Glama re-publishes detected per-server metadata. Their TOS and our redistribution-of-metadata posture need a one-line audit before bundling.</td></tr>
+      <tr><td><strong>mcpd fit</strong></td><td>Strong as opt-in. Best registry for "I need to find an obscure server" queries.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>PulseMCP &mdash; <code>pulsemcp.com</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>URL</strong></td><td><code>https://www.pulsemcp.com/servers</code><cite data-ref="pulsemcp"></cite></td></tr>
+      <tr><td><strong>Coverage (May 2026)</strong></td><td>~15,000, hand-reviewed daily.</td></tr>
+      <tr><td><strong>Trust model</strong></td><td>Editorial curation; a human reads the README and approves.</td></tr>
+      <tr><td><strong>mcpd fit</strong></td><td>Useful as a quality signal. Could be an opt-in source. We do <em>not</em> need to re-implement their reviews &mdash; we can surface "PulseMCP-verified" as a pill in search results when present.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>MCP.so &mdash; <code>mcp.so</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>URL</strong></td><td><code>https://mcp.so</code><cite data-ref="mcp-so"></cite></td></tr>
+      <tr><td><strong>Coverage (May 2026)</strong></td><td>20,000+; lowest curation bar.</td></tr>
+      <tr><td><strong>API surface</strong></td><td>No programmatic API for clients; GitHub-issue submissions. Effectively a static directory.</td></tr>
+      <tr><td><strong>mcpd fit</strong></td><td>Skip as a default source. Listed for completeness.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="accordion">
+  <summary>Awesome MCP Servers &mdash; <code>mcpservers.org</code></summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>URL</strong></td><td><code>https://mcpservers.org</code><cite data-ref="mcpservers-org"></cite></td></tr>
+      <tr><td><strong>Format</strong></td><td>"Awesome list" style static pages; manual editorial review.</td></tr>
+      <tr><td><strong>mcpd fit</strong></td><td>Same shape as MCP.so but smaller and more curated. Not a programmatic source &mdash; reference only.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="raw">Raw discovery surfaces</h2>
+
+<details class="accordion">
+  <summary>GitHub topic <code>mcp-server</code></summary>
+  <p>~16,300 repositories tagged as of May 2026; Python ~5,700, TypeScript ~5,100, JavaScript ~1,700.<cite data-ref="github-topic-mcp-server"></cite> GitHub Search API can power <code>mcpm search</code> as a fallback, but ranking is by stars+freshness and there is <em>no manifest</em>. Treat as last-resort discovery, not as a registry.</p>
+</details>
+
+<details class="accordion">
+  <summary>npm <code>mcp-*</code> packages</summary>
+  <p>npm Search API is alive and unrestricted (unlike PyPI). Useful for "find packages whose name starts with <code>@modelcontextprotocol/server-</code> or <code>mcp-</code>" queries. Provenance via npm + Sigstore attestations is GA<cite data-ref="npm-provenance"></cite><cite data-ref="github-blog-npm-sigstore"></cite> &mdash; mcpd can verify package provenance at install time without trusting any registry adapter.</p>
+</details>
+
+<details class="accordion">
+  <summary>PyPI <code>mcp-*</code> packages</summary>
+  <p>PyPI's XML-RPC search was permanently disabled in March 2021; <code>pip search</code> no longer works.<cite data-ref="pip-search-deprecated"></cite> The only viable PyPI discovery is the JSON metadata endpoint per known package name. <strong>This is a cautionary tale for any "search a global package index" strategy that scales linearly with the index.</strong></p>
+</details>
+
+<h2 id="summary">At-a-glance comparison</h2>
+<table class="compare">
+<thead><tr><th>Registry</th><th>Coverage</th><th>API</th><th>Trust</th><th>Telemetry</th><th>v1.0 verdict</th></tr></thead>
+<tbody>
+<tr><td>Official MCP Registry</td><td>~2k (curated growth)</td><td>OpenAPI 3.1</td><td>GitHub-auth + namespace pinning</td><td>None</td><td><span class="pill success">Default source</span></td></tr>
+<tr><td>GitHub MCP Registry</td><td>Hundreds, curated</td><td>Via GitHub</td><td>GitHub identity</td><td>None</td><td><span class="pill success">Default source</span></td></tr>
+<tr><td>Docker MCP Catalog</td><td>300+</td><td>git-backed JSON</td><td>Docker-signed images</td><td>None for read</td><td><span class="pill accent">Default if Docker present</span></td></tr>
+<tr><td>Smithery</td><td>~7k</td><td>REST + semantic search</td><td>Maintainer attest</td><td>API key implies account</td><td><span class="pill warn">Opt-in</span></td></tr>
+<tr><td>Glama</td><td>~24k</td><td>REST</td><td>Scan + score</td><td>Web analytics</td><td><span class="pill warn">Opt-in</span></td></tr>
+<tr><td>PulseMCP</td><td>~15k</td><td>JSON feed</td><td>Editorial</td><td>Web analytics</td><td><span class="pill warn">Opt-in</span></td></tr>
+<tr><td>MCP.so</td><td>20k+</td><td>None</td><td>None</td><td>Unknown</td><td><span class="pill danger">Not bundled</span></td></tr>
+<tr><td>GitHub topic search</td><td>~16k</td><td>GitHub Search API</td><td>Repo-level only</td><td>GitHub's</td><td><span class="pill warn">Fallback only</span></td></tr>
+<tr><td>npm <code>mcp-*</code></td><td>Hundreds</td><td>npm Search API</td><td>Sigstore provenance</td><td>None</td><td><span class="pill accent">Auxiliary verifier</span></td></tr>
+<tr><td>PyPI <code>mcp-*</code></td><td>Hundreds</td><td>JSON per-package only</td><td>PEP 740 attestations</td><td>None</td><td><span class="pill accent">Auxiliary verifier</span></td></tr>
+</tbody>
+</table>
+
+<h2 id="prior-art">Sibling-ecosystem prior art</h2>
+
+<details class="accordion" open>
+  <summary>cargo &mdash; <code>[registries]</code> + source replacement</summary>
+  <p>
+  Cargo lets a user define multiple named registries in <code>.cargo/config.toml</code>, then pass <code>--registry &lt;name&gt;</code> on install. A separate "source replacement" knob lets a corp mirror the whole crates.io index without changing crate URLs in <code>Cargo.toml</code>.<cite data-ref="cargo-registries"></cite><cite data-ref="cargo-source-replacement"></cite> <strong>Lesson:</strong> two distinct concepts &mdash; <em>additive sources</em> (more packages) and <em>replacement sources</em> (same packages, different endpoint) &mdash; both matter. We need additive in v1.0; replacement is v1.1.
+  </p>
+</details>
+
+<details class="accordion" open>
+  <summary>brew taps</summary>
+  <p>
+  <code>brew tap user/repo</code> adds a git repo to the search universe; tap order matters for collisions.<cite data-ref="homebrew-taps"></cite> <strong>Lesson:</strong> the UX of "give me a URL, I clone it locally and re-scan periodically" is friendly and well-understood. We adopt the verb <code>tap</code>'s ergonomics under the name <code>mcpm registry add</code>.
+  </p>
+</details>
+
+<details class="accordion">
+  <summary>mise plugins</summary>
+  <p>
+  mise rejects new asdf-style plugins because they execute arbitrary shell at install time &mdash; instead, it favors declarative aqua/github backends.<cite data-ref="mise-plugins"></cite><cite data-ref="mise-supply-chain"></cite> <strong>Lesson:</strong> we follow the same posture &mdash; never let a registry tell us "run this shell snippet to install". We only accept declarative manifests (the official <code>server.json</code> schema). Tool-poisoning attacks <cite data-ref="mcp-security-supply-chain"></cite> make this non-negotiable.
+  </p>
+</details>
+
+<details class="accordion">
+  <summary>apt sources.list.d + signed-by</summary>
+  <p>
+  Each third-party apt source pins to a specific signing key via <code>signed-by=/etc/apt/keyrings/&lt;name&gt;.gpg</code>.<cite data-ref="apt-third-party-signed"></cite> <strong>Lesson:</strong> per-source signing key is the right abstraction. <code>mcpm registry add</code> should accept an optional <code>--signed-by &lt;key&gt;</code> argument and refuse manifests not signed by that key.
+  </p>
+</details>
+
+<details class="accordion">
+  <summary>pipx with custom <code>--index-url</code></summary>
+  <p>
+  pipx supports per-install <code>--index-url</code> but <em>not</em> <code>--extra-index-url</code>.<cite data-ref="pipx-index-url"></cite> <strong>Lesson:</strong> single-source-per-invocation is too constraining for our case; we need fan-out across multiple registries in one search, with per-result attribution.
+  </p>
+</details>
+
+<details class="accordion">
+  <summary>Nix flake registry</summary>
+  <p>
+  Three layers: global registry (<code>channels.nixos.org/flake-registry.json</code>), per-user overrides via <code>nix registry add</code>, and per-flake <code>nixConfig.flake-registry</code>.<cite data-ref="nix-flake-registry"></cite> <strong>Lesson:</strong> three-layer precedence is overkill for v1.0 but the per-user override is the natural mcpd model. Per-project pinning is a v1.1 idea.
+  </p>
+</details>
+
+<h2 id="trust">Trust &amp; provenance options for v1.0</h2>
+<table class="compare">
+<thead><tr><th>Option</th><th>What it gives us</th><th>v1.0 verdict</th></tr></thead>
+<tbody>
+<tr><td><strong>Maintainer trust only</strong> (the apt PPA model before signed-by became mandatory)</td><td>"You added this registry, you trust it." Zero crypto.</td><td><span class="pill warn">Acceptable floor</span> &mdash; what we do for unsigned user-added sources.</td></tr>
+<tr><td><strong>Minisign / signify per-registry manifest</strong></td><td>Single Ed25519 pubkey signs the entire registry's manifest list. Tiny, embeddable, no infra.<cite data-ref="minisign"></cite></td><td><span class="pill success">Default for v1.0 official + GitHub registries</span> &mdash; lowest implementation cost, strongest practical guarantee for our threat model.</td></tr>
+<tr><td><strong>Sigstore (Fulcio + Rekor) per-package</strong></td><td>Keyless OIDC-bound signing, transparency log, per-version attestation. Already GA on npm.<cite data-ref="sigstore-cosign"></cite><cite data-ref="github-blog-npm-sigstore"></cite></td><td><span class="pill accent">Verify-only in v1.0</span> &mdash; if a package has npm/PyPI provenance, mcpd checks it before install. We don't <em>require</em> it.</td></tr>
+<tr><td><strong>Cosign for OCI images</strong></td><td>For the Docker MCP Catalog path, image signatures live alongside images in the registry.<cite data-ref="sigstore-cosign"></cite></td><td><span class="pill accent">Verify-only in v1.0</span> &mdash; rely on Docker's existing signature check; mcpd invokes <code>cosign verify</code> when the package is OCI.</td></tr>
+<tr><td><strong>Full PKI (Notary v2 / TUF)</strong></td><td>Defense in depth against registry compromise.</td><td><span class="pill danger">Out of scope for v1.0</span> &mdash; complexity not justified at 10s-of-MCPs scale.</td></tr>
+</tbody>
+</table>
+
+<section class="citations">
+  <h2>Citations</h2>
+  <p>All sources are listed in <a href="./data/citations.json">data/citations.json</a> and rendered inline.</p>
+</section>
+</main>
+</body>
+</html>

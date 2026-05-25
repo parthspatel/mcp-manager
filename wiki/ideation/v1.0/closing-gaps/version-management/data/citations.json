@@ -1,0 +1,364 @@
+{
+  "entries": [
+    {
+      "id": "mcp-spec-2025-11-25",
+      "title": "Model Context Protocol — Specification 2025-11-25",
+      "url": "https://modelcontextprotocol.io/specification/2025-11-25",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Current stable MCP spec at time of writing; tasks, extensions framework, OAuth-2.1 authorization."
+    },
+    {
+      "id": "mcp-spec-2025-11-25-changelog",
+      "title": "MCP 2025-11-25 — Key Changes",
+      "url": "https://modelcontextprotocol.io/specification/2025-11-25/changelog",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Backward-compatible release; lists every SEP rolled in; one-year anniversary release."
+    },
+    {
+      "id": "mcp-spec-2025-06-18",
+      "title": "Model Context Protocol — Specification 2025-06-18",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Mid-2025 spec revision; still advertised by many servers in the wild."
+    },
+    {
+      "id": "mcp-spec-2025-03-26",
+      "title": "Model Context Protocol — Specification 2025-03-26",
+      "url": "https://modelcontextprotocol.io/specification/2025-03-26",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Older but still encountered version of the MCP spec."
+    },
+    {
+      "id": "mcp-2026-roadmap",
+      "title": "The 2026 MCP Roadmap",
+      "url": "https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/",
+      "source": "blog.modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Stateless core, extensions, formal deprecation policy, Tier-1 SDK support window."
+    },
+    {
+      "id": "mcp-spec-2026-07-28-rc",
+      "title": "The 2026-07-28 MCP Specification Release Candidate",
+      "url": "https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/",
+      "source": "blog.modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Upcoming RC; largest revision since launch; ten-week validation window for Tier-1 SDKs."
+    },
+    {
+      "id": "mcp-version-negotiation",
+      "title": "MCP — Initialize / Lifecycle (protocol version negotiation)",
+      "url": "https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Client sends latest supported protocolVersion; server returns same or a supported alternative; mismatch → SHOULD disconnect."
+    },
+    {
+      "id": "mcp-protocol-version-header-bug",
+      "title": "vercel/ai #14413 — Streamable HTTP does not downgrade mcp-protocol-version header after negotiation",
+      "url": "https://github.com/vercel/ai/issues/14413",
+      "source": "github.com/vercel/ai",
+      "accessed": "2026-05-24",
+      "note": "Real-world break: the negotiated version is wire-level state, must be re-emitted on every HTTP call after negotiation."
+    },
+    {
+      "id": "mcp-registry",
+      "title": "The MCP Registry",
+      "url": "https://modelcontextprotocol.io/registry/about",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Metadata-only catalog; points to npm/PyPI/Docker; each publish tied to a specific version; reverse-DNS namespacing."
+    },
+    {
+      "id": "mcp-registry-launch",
+      "title": "Introducing the MCP Registry (preview launch 2025-09-08)",
+      "url": "https://blog.modelcontextprotocol.io/posts/2025-09-08-mcp-registry-preview/",
+      "source": "blog.modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Anthropic / GitHub / PulseMCP / Microsoft backed catalog; only metadata, no package hosting."
+    },
+    {
+      "id": "cargo-specifying-deps",
+      "title": "The Cargo Book — Specifying Dependencies",
+      "url": "https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "Caret (^), tilde (~), equals (=), wildcards; default operator is caret."
+    },
+    {
+      "id": "cargo-toml-vs-lock",
+      "title": "The Cargo Book — Cargo.toml vs Cargo.lock",
+      "url": "https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "Cargo.lock is committed for binaries, ignored for libraries; exact graph reproduction."
+    },
+    {
+      "id": "cargo-update",
+      "title": "cargo update — The Cargo Book",
+      "url": "https://doc.rust-lang.org/cargo/commands/cargo-update.html",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "--precise flag for exact pinning; --workspace; --dry-run."
+    },
+    {
+      "id": "cargo-resolver",
+      "title": "The Cargo Book — Dependency Resolution",
+      "url": "https://doc.rust-lang.org/cargo/reference/resolver.html",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "How Cargo picks versions given a set of requirements; minimum-version selection mode."
+    },
+    {
+      "id": "cargo-lock-deepwiki",
+      "title": "Cargo Lockfile Management — DeepWiki",
+      "url": "https://deepwiki.com/rust-lang/cargo/3.3-lockfile-management",
+      "source": "deepwiki.com",
+      "accessed": "2026-05-24",
+      "note": "Concrete schema of [[package]] entries: name, version, source, checksum."
+    },
+    {
+      "id": "npm-package-lock",
+      "title": "npm Docs — package-locks",
+      "url": "https://docs.npmjs.com/cli/v6/configuring-npm/package-locks/",
+      "source": "docs.npmjs.com",
+      "accessed": "2026-05-24",
+      "note": "Lockfile semantics; reproducible installs."
+    },
+    {
+      "id": "npm-update",
+      "title": "npm-update — npm Docs",
+      "url": "https://docs.npmjs.com/cli/v11/commands/npm-update/",
+      "source": "docs.npmjs.com",
+      "accessed": "2026-05-24",
+      "note": "Respects semver in package.json; updates lockfile in place."
+    },
+    {
+      "id": "npm-shrinkwrap",
+      "title": "npm-shrinkwrap — npm Docs",
+      "url": "https://docs.npmjs.com/cli/v8/commands/npm-shrinkwrap",
+      "source": "docs.npmjs.com",
+      "accessed": "2026-05-24",
+      "note": "Publishable lockfile for libraries; rarely used today since package-lock.json supersedes it."
+    },
+    {
+      "id": "mise-lock",
+      "title": "mise — mise.lock Lockfile",
+      "url": "https://mise.jdx.dev/dev-tools/mise-lock.html",
+      "source": "mise.jdx.dev",
+      "accessed": "2026-05-24",
+      "note": "Per-platform URLs + checksums; strict mode refuses to fetch outside lockfile; opt-in via `mise lock`."
+    },
+    {
+      "id": "mise-upgrade",
+      "title": "mise upgrade — CLI reference",
+      "url": "https://mise.jdx.dev/cli/upgrade.html",
+      "source": "mise.jdx.dev",
+      "accessed": "2026-05-24",
+      "note": "Upgrade within the version specifier in mise.toml; preview with --dry-run."
+    },
+    {
+      "id": "mise-lockfile-reproducibility",
+      "title": "Lockfiles and Reproducibility — mise (DeepWiki)",
+      "url": "https://deepwiki.com/jdx/mise/6.7-lockfiles-and-reproducibility",
+      "source": "deepwiki.com",
+      "accessed": "2026-05-24",
+      "note": "Pin-loose-in-manifest, exact-in-lock pattern; strict mode."
+    },
+    {
+      "id": "asdf-tool-versions",
+      "title": "asdf — Configuration (.tool-versions)",
+      "url": "https://asdf-vm.com/manage/configuration.html",
+      "source": "asdf-vm.com",
+      "accessed": "2026-05-24",
+      "note": ".tool-versions is the lockfile in asdf; no separate lock; plugins are not versioned."
+    },
+    {
+      "id": "mise-vs-asdf",
+      "title": "Mise vs asdf — Better Stack",
+      "url": "https://betterstack.com/community/guides/scaling-nodejs/mise-vs-asdf/",
+      "source": "betterstack.com",
+      "accessed": "2026-05-24",
+      "note": "Contrasts the manifest-as-lock (asdf) and manifest+lock (mise) models."
+    },
+    {
+      "id": "nix-flake-lock",
+      "title": "nix flake lock — Nix Reference Manual",
+      "url": "https://nix.dev/manual/nix/2.25/command-ref/new-cli/nix3-flake-update",
+      "source": "nix.dev",
+      "accessed": "2026-05-24",
+      "note": "flake.lock is content-addressed via narHash; update-input for targeted updates."
+    },
+    {
+      "id": "nix-flakes-wiki",
+      "title": "Flakes — NixOS Wiki",
+      "url": "https://nixos.wiki/wiki/Flakes",
+      "source": "nixos.wiki",
+      "accessed": "2026-05-24",
+      "note": "Lock graph isomorphic to dependency graph; narHash for binary cache substitution."
+    },
+    {
+      "id": "renovate-update-types",
+      "title": "Renovate — matchUpdateTypes enum reference",
+      "url": "https://github.com/renovatebot/renovate/discussions/34878",
+      "source": "github.com/renovatebot/renovate",
+      "accessed": "2026-05-24",
+      "note": "major / minor / patch / pin / pinDigest / digest / lockFileMaintenance / rollback."
+    },
+    {
+      "id": "renovate-config-options",
+      "title": "Renovate — Configuration Options",
+      "url": "https://docs.renovatebot.com/configuration-options/",
+      "source": "docs.renovatebot.com",
+      "accessed": "2026-05-24",
+      "note": "packageRules driven by matchUpdateTypes; automerge gates."
+    },
+    {
+      "id": "renovate-upgrade-best-practices",
+      "title": "Renovate — Upgrade best practices",
+      "url": "https://docs.renovatebot.com/upgrade-best-practices/",
+      "source": "docs.renovatebot.com",
+      "accessed": "2026-05-24",
+      "note": "Recommends auto-merge of patch + digest; manual review for major."
+    },
+    {
+      "id": "uv-pip-compile",
+      "title": "uv — Locking environments (uv pip compile)",
+      "url": "https://docs.astral.sh/uv/pip/compile/",
+      "source": "docs.astral.sh",
+      "accessed": "2026-05-24",
+      "note": "Drop-in pip-tools replacement; reproducible resolutions; platform-independent locks."
+    },
+    {
+      "id": "pip-tools",
+      "title": "pip-tools documentation",
+      "url": "https://pip-tools.readthedocs.io/en/latest/",
+      "source": "pip-tools.readthedocs.io",
+      "accessed": "2026-05-24",
+      "note": "pip-compile + pip-sync workflow; constraints in requirements.in, exact pins in requirements.txt."
+    },
+    {
+      "id": "semver-spec",
+      "title": "Semantic Versioning 2.0.0",
+      "url": "https://semver.org/spec/v2.0.0.html",
+      "source": "semver.org",
+      "accessed": "2026-05-24",
+      "note": "MAJOR.MINOR.PATCH semantics; the basis of caret/tilde resolution everywhere."
+    },
+    {
+      "id": "rust-rust-version",
+      "title": "Cargo — rust-version field",
+      "url": "https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "Toolchain version compatibility advertisement at the manifest level."
+    },
+    {
+      "id": "python-requires-python",
+      "title": "PEP 621 / packaging — requires-python",
+      "url": "https://packaging.python.org/en/latest/specifications/pyproject-toml/#requires-python",
+      "source": "packaging.python.org",
+      "accessed": "2026-05-24",
+      "note": "Language-version compatibility advertised at package metadata level; resolver refuses incompatible interpreters."
+    },
+    {
+      "id": "postgres-protocol-versioning",
+      "title": "PostgreSQL — Frontend/Backend Protocol",
+      "url": "https://www.postgresql.org/docs/current/protocol-overview.html",
+      "source": "postgresql.org",
+      "accessed": "2026-05-24",
+      "note": "Major.minor protocol versions; NegotiateProtocolVersion response advertises supported versions and unsupported optional params."
+    },
+    {
+      "id": "http-upgrade-rfc9110",
+      "title": "RFC 9110 — HTTP Semantics, §7.8 Upgrade",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110#name-upgrade",
+      "source": "rfc-editor.org",
+      "accessed": "2026-05-24",
+      "note": "Upgrade header allows client to list acceptable protocols; server selects one or 101 Switching Protocols."
+    },
+    {
+      "id": "grpc-version-policy",
+      "title": "gRPC — Versioning Policy",
+      "url": "https://grpc.io/docs/what-is-grpc/core-concepts/#protocol-versioning",
+      "source": "grpc.io",
+      "accessed": "2026-05-24",
+      "note": "Backward/forward compatibility via field numbering; non-breaking is the contract, not negotiated."
+    },
+    {
+      "id": "cargo-rfc-3493",
+      "title": "Rust RFC 3493 — precise-pre-release-cargo-update",
+      "url": "https://rust-lang.github.io/rfcs/3493-precise-pre-release-cargo-update.html",
+      "source": "rust-lang.github.io",
+      "accessed": "2026-05-24",
+      "note": "Refinement of `cargo update --precise` to handle pre-release versions explicitly."
+    },
+    {
+      "id": "claude-code-mcp-versions",
+      "title": "Claude Code — MCP server configuration",
+      "url": "https://code.claude.com/docs/en/mcp",
+      "source": "code.claude.com",
+      "accessed": "2026-05-24",
+      "note": "Cited host: ships negotiated protocol version selection; does not pin servers."
+    },
+    {
+      "id": "mcp-typescript-sdk-releases",
+      "title": "modelcontextprotocol/typescript-sdk — Releases",
+      "url": "https://github.com/modelcontextprotocol/typescript-sdk/releases",
+      "source": "github.com/modelcontextprotocol/typescript-sdk",
+      "accessed": "2026-05-24",
+      "note": "SDK semver releases; each tied to one or more supported spec dates."
+    },
+    {
+      "id": "mcp-python-sdk-releases",
+      "title": "modelcontextprotocol/python-sdk — Releases",
+      "url": "https://github.com/modelcontextprotocol/python-sdk/releases",
+      "source": "github.com/modelcontextprotocol/python-sdk",
+      "accessed": "2026-05-24",
+      "note": "Python SDK release history; shows the lag between spec date and SDK GA."
+    },
+    {
+      "id": "mcp-rust-sdk",
+      "title": "modelcontextprotocol/rust-sdk",
+      "url": "https://github.com/modelcontextprotocol/rust-sdk",
+      "source": "github.com/modelcontextprotocol",
+      "accessed": "2026-05-24",
+      "note": "Official Rust SDK; the foundation our daemon uses; spec coverage advertised in README."
+    },
+    {
+      "id": "deprecation-rfc8594",
+      "title": "RFC 8594 — The Deprecation HTTP Response Header",
+      "url": "https://www.rfc-editor.org/rfc/rfc8594",
+      "source": "rfc-editor.org",
+      "accessed": "2026-05-24",
+      "note": "Pattern for advertising deprecation date in protocol responses; useful prior art for our mcpd advisory."
+    },
+    {
+      "id": "renovate-package-rules-guide",
+      "title": "Renovate — Package Rules Guide (Mend)",
+      "url": "https://docs.mend.io/wsk/renovate-package-rules-guide",
+      "source": "docs.mend.io",
+      "accessed": "2026-05-24",
+      "note": "Worked examples of matchUpdateTypes → automerge."
+    },
+    {
+      "id": "mcp-ibm-version-negotiation-feature",
+      "title": "ibm/mcp-context-forge #546 — Protocol Version Negotiation & Backward Compatibility",
+      "url": "https://github.com/ibm/mcp-context-forge/issues/546",
+      "source": "github.com/ibm/mcp-context-forge",
+      "accessed": "2026-05-24",
+      "note": "Production gateway grappling with multi-version compatibility — confirms this is a real problem in the wild."
+    },
+    {
+      "id": "mcp-bundler-2025-11-25",
+      "title": "MCPBundler — What 2025-11-25 brings to end users and providers",
+      "url": "https://mcp-bundler.com/2025/12/08/mcp-specification-end-users-server-providers/",
+      "source": "mcp-bundler.com",
+      "accessed": "2026-05-24",
+      "note": "Practitioner write-up of compatibility planning around 2025-11-25 adoption."
+    }
+  ]
+}

@@ -1,0 +1,308 @@
+{
+  "entries": [
+    {
+      "id": "official-mcp-registry",
+      "title": "Official MCP Registry — registry.modelcontextprotocol.io",
+      "url": "https://registry.modelcontextprotocol.io/",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Official Anthropic-stewarded registry; preview launched September 2025, ~2,000 entries in months."
+    },
+    {
+      "id": "mcp-registry-about",
+      "title": "The MCP Registry — overview",
+      "url": "https://modelcontextprotocol.io/registry/about",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Distinguishes Official Registry vs. Generic Registry API (OpenAPI spec reusable by anyone)."
+    },
+    {
+      "id": "mcp-registry-openapi",
+      "title": "MCP Registry OpenAPI 3.1 spec (openapi.yaml)",
+      "url": "https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/api/openapi.yaml",
+      "source": "github.com/modelcontextprotocol/registry",
+      "accessed": "2026-05-24",
+      "note": "Authoritative OpenAPI for the registry; JSON-Schema draft 2020-12; $id 2025-09-29/server-registry-openapi."
+    },
+    {
+      "id": "mcp-registry-generic-api",
+      "title": "Generic MCP Registry API reference",
+      "url": "https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/api/generic-registry-api.md",
+      "source": "github.com/modelcontextprotocol/registry",
+      "accessed": "2026-05-24",
+      "note": "Reusable API spec any third-party registry can implement: GET /v0.1/servers, /versions, pagination, etc."
+    },
+    {
+      "id": "mcp-registry-blog-preview",
+      "title": "Introducing the MCP Registry (preview)",
+      "url": "https://blog.modelcontextprotocol.io/posts/2025-09-08-mcp-registry-preview/",
+      "source": "blog.modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "September 2025 announcement of the official registry preview."
+    },
+    {
+      "id": "mcp-server-json-schema",
+      "title": "server.json format specification",
+      "url": "https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md",
+      "source": "github.com/modelcontextprotocol/registry",
+      "accessed": "2026-05-24",
+      "note": "Canonical manifest schema: name, version, packages[], remotes[], transport, env. Hosted at static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json."
+    },
+    {
+      "id": "mcp-registry-publish-guide",
+      "title": "Quickstart — Publish an MCP server to the registry",
+      "url": "https://modelcontextprotocol.io/registry/quickstart",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "mcp-publisher CLI, GitHub auth for io.github.<user>/* namespaces, npm mcpName / PyPI README binding."
+    },
+    {
+      "id": "github-mcp-registry",
+      "title": "Meet the GitHub MCP Registry",
+      "url": "https://github.blog/ai-and-ml/github-copilot/meet-the-github-mcp-registry-the-fastest-way-to-discover-mcp-servers/",
+      "source": "github.blog",
+      "accessed": "2026-05-24",
+      "note": "GitHub's curated entry-point for MCP server discovery, each entry backed by a GitHub repo."
+    },
+    {
+      "id": "github-topic-mcp-server",
+      "title": "GitHub topic — mcp-server",
+      "url": "https://github.com/topics/mcp-server",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "16,312 repos tagged as of May 2026; Python ~5.7k, TypeScript ~5.1k, JavaScript ~1.7k."
+    },
+    {
+      "id": "mcp-so",
+      "title": "MCP.so — community directory",
+      "url": "https://mcp.so/",
+      "source": "mcp.so",
+      "accessed": "2026-05-24",
+      "note": "Community-led directory; >20,000 servers via PR/issue submissions; no programmatic install, no curation tier."
+    },
+    {
+      "id": "smithery-ai",
+      "title": "Smithery — MCP server registry",
+      "url": "https://smithery.ai/",
+      "source": "smithery.ai",
+      "accessed": "2026-05-24",
+      "note": "~7,000 servers; semantic-search registry API, CLI install (smithery mcp search/add), hosted remote-server option."
+    },
+    {
+      "id": "smithery-docs-registry-search",
+      "title": "Smithery Registry — Search Servers (API docs)",
+      "url": "https://smithery.ai/docs/concepts/registry_search_servers",
+      "source": "smithery.ai",
+      "accessed": "2026-05-24",
+      "note": "REST API surface; semantic search treats query as a prompt; requires API key from smithery.ai/account/api-keys."
+    },
+    {
+      "id": "smithery-cli",
+      "title": "Smithery CLI — install/manage MCP servers",
+      "url": "https://github.com/smithery-ai/cli",
+      "source": "github.com/smithery-ai",
+      "accessed": "2026-05-24",
+      "note": "npm install -g @smithery/cli; smithery mcp search / smithery mcp add <url>."
+    },
+    {
+      "id": "mcpservers-org",
+      "title": "Awesome MCP Servers — mcpservers.org",
+      "url": "https://mcpservers.org/",
+      "source": "mcpservers.org",
+      "accessed": "2026-05-24",
+      "note": "Curated awesome-list-style directory; manual review; data hosted as flat pages."
+    },
+    {
+      "id": "glama-mcp",
+      "title": "Glama — MCP server registry",
+      "url": "https://glama.ai/mcp/servers",
+      "source": "glama.ai",
+      "accessed": "2026-05-24",
+      "note": "~24,000 servers; deep per-connector scanning (tool names, schemas, licenses, quality scores)."
+    },
+    {
+      "id": "pulsemcp",
+      "title": "PulseMCP server directory",
+      "url": "https://www.pulsemcp.com/servers",
+      "source": "pulsemcp.com",
+      "accessed": "2026-05-24",
+      "note": "~15,000 hand-reviewed servers; daily updates; quality-filtered discovery."
+    },
+    {
+      "id": "modelcontextprotocol-servers-repo",
+      "title": "modelcontextprotocol/servers — reference & community servers",
+      "url": "https://github.com/modelcontextprotocol/servers",
+      "source": "github.com/modelcontextprotocol",
+      "accessed": "2026-05-24",
+      "note": "Reference servers maintained by Anthropic + community submissions list."
+    },
+    {
+      "id": "docker-mcp-catalog",
+      "title": "Docker MCP Catalog & Toolkit",
+      "url": "https://docs.docker.com/ai/mcp-catalog-and-toolkit/catalog/",
+      "source": "docs.docker.com",
+      "accessed": "2026-05-24",
+      "note": "300+ verified servers as signed Docker images; OCI-artifact custom catalogs for orgs."
+    },
+    {
+      "id": "docker-mcp-registry-repo",
+      "title": "docker/mcp-registry — Official Docker MCP registry",
+      "url": "https://github.com/docker/mcp-registry",
+      "source": "github.com/docker",
+      "accessed": "2026-05-24",
+      "note": "PR-based onboarding; servers ship within 24h of approval to Docker Desktop MCP Toolkit."
+    },
+    {
+      "id": "mcp-security-supply-chain",
+      "title": "MCP supply-chain crisis — 40+ CVEs in early 2026",
+      "url": "https://dev.to/piiiico/mcp-security-vulnerabilities-in-2026-40-cves-and-counting-4pco",
+      "source": "dev.to",
+      "accessed": "2026-05-24",
+      "note": "40+ CVEs Jan–Apr 2026 across SDKs/marketplaces; 9 of 11 MCP marketplaces affected. Recommends signed sources + sandboxing."
+    },
+    {
+      "id": "mcp-rce-vuln",
+      "title": "Anthropic MCP design vulnerability enables RCE",
+      "url": "https://thehackernews.com/2026/04/anthropic-mcp-design-vulnerability.html",
+      "source": "thehackernews.com",
+      "accessed": "2026-05-24",
+      "note": "STDIO process-spawn semantics let a malicious command execute even on launch failure; ~200k vulnerable instances."
+    },
+    {
+      "id": "cargo-registries",
+      "title": "Cargo — Alternative Registries",
+      "url": "https://doc.rust-lang.org/cargo/reference/registries.html",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "[registries] table in .cargo/config.toml; --registry flag; auth tokens per registry."
+    },
+    {
+      "id": "cargo-source-replacement",
+      "title": "Cargo — Source Replacement",
+      "url": "https://doc.rust-lang.org/cargo/reference/source-replacement.html",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "[source.crates-io] replace-with = '<name>'; full-registry mirroring pattern."
+    },
+    {
+      "id": "homebrew-taps",
+      "title": "Homebrew — Taps (Third-Party Repositories)",
+      "url": "https://docs.brew.sh/Taps",
+      "source": "docs.brew.sh",
+      "accessed": "2026-05-24",
+      "note": "brew tap <user>/<repo> [URL]; any git repo works; auto-update on brew update."
+    },
+    {
+      "id": "mise-plugins",
+      "title": "mise — Plugins and registries",
+      "url": "https://mise.jdx.dev/plugins.html",
+      "source": "mise.jdx.dev",
+      "accessed": "2026-05-24",
+      "note": "First-party registry + mise-plugins org for community; aqua/github backends preferred over asdf shell scripts for supply-chain reasons."
+    },
+    {
+      "id": "mise-supply-chain",
+      "title": "Supply chain security with mise and asdf plugins",
+      "url": "https://github.com/jdx/mise/discussions/4054",
+      "source": "github.com/jdx/mise",
+      "accessed": "2026-05-24",
+      "note": "Why mise now refuses new asdf-style plugins: arbitrary shell on install. Mirrors MCP's STDIO-command risk."
+    },
+    {
+      "id": "nix-flake-registry",
+      "title": "Nix — flake registry",
+      "url": "https://github.com/NixOS/flake-registry",
+      "source": "github.com/NixOS",
+      "accessed": "2026-05-24",
+      "note": "Global symbolic-name registry; per-user overrides via nix registry add; nixConfig.flake-registry for project-pinned."
+    },
+    {
+      "id": "apt-third-party-signed",
+      "title": "Debian wiki — DebianRepository/UseThirdParty",
+      "url": "https://wiki.debian.org/DebianRepository/UseThirdParty",
+      "source": "wiki.debian.org",
+      "accessed": "2026-05-24",
+      "note": "signed-by= key pinning per repo file; /etc/apt/sources.list.d/ pattern for additive sources."
+    },
+    {
+      "id": "pipx-index-url",
+      "title": "pipx — --index-url support",
+      "url": "https://github.com/pypa/pipx/issues/1009",
+      "source": "github.com/pypa",
+      "accessed": "2026-05-24",
+      "note": "pipx install --index-url for private PyPI mirrors; no --extra-index-url (single-source per invocation)."
+    },
+    {
+      "id": "pip-search-deprecated",
+      "title": "pip search deprecation (PyPI XML-RPC disabled)",
+      "url": "https://github.com/pypa/pip/issues/5216",
+      "source": "github.com/pypa/pip",
+      "accessed": "2026-05-24",
+      "note": "PyPI XML-RPC search permanently disabled March 2021; cautionary tale for unsustainable registry-side search."
+    },
+    {
+      "id": "npm-provenance",
+      "title": "npm package provenance (GitHub Blog)",
+      "url": "https://github.blog/security/supply-chain-security/introducing-npm-package-provenance/",
+      "source": "github.blog",
+      "accessed": "2026-05-24",
+      "note": "Sigstore-keyless provenance attestations on npm; verifiable link from package to source repo + build."
+    },
+    {
+      "id": "sigstore-cosign",
+      "title": "sigstore/cosign — signing & verification",
+      "url": "https://github.com/sigstore/cosign",
+      "source": "github.com/sigstore",
+      "accessed": "2026-05-24",
+      "note": "Keyless signing with Fulcio short-lived certs; Rekor transparency log; signatures stored alongside OCI artifacts."
+    },
+    {
+      "id": "minisign",
+      "title": "jedisct1/minisign — lightweight signing",
+      "url": "https://github.com/jedisct1/minisign",
+      "source": "github.com/jedisct1",
+      "accessed": "2026-05-24",
+      "note": "Single Ed25519 pubkey, single-file signature; signify-compatible; trivial to embed for registry-level signing."
+    },
+    {
+      "id": "nordic-apis-mcp-registry",
+      "title": "Getting Started With the Official MCP Registry API",
+      "url": "https://nordicapis.com/getting-started-with-the-official-mcp-registry-api/",
+      "source": "nordicapis.com",
+      "accessed": "2026-05-24",
+      "note": "Walks through GET /v0.1/servers, pagination, version subresources."
+    },
+    {
+      "id": "truefoundry-mcp-registries",
+      "title": "Best MCP Registries in 2026 — comparison",
+      "url": "https://www.truefoundry.com/blog/best-mcp-registries",
+      "source": "truefoundry.com",
+      "accessed": "2026-05-24",
+      "note": "Side-by-side comparison of official registry, mcp.so, Smithery, Glama, PulseMCP, Docker."
+    },
+    {
+      "id": "mcp-roadmap-2026",
+      "title": "MCP roadmap — enterprise readiness 2026",
+      "url": "https://modelcontextprotocol.io/development/roadmap",
+      "source": "modelcontextprotocol.io",
+      "accessed": "2026-05-24",
+      "note": "Post-Linux-Foundation roadmap prioritizes enterprise readiness, signing, registry hardening."
+    },
+    {
+      "id": "mcp-donation-aaf",
+      "title": "Donating MCP to the Agentic AI Foundation",
+      "url": "https://www.anthropic.com/news/donating-the-model-context-protocol-and-establishing-of-the-agentic-ai-foundation",
+      "source": "anthropic.com",
+      "accessed": "2026-05-24",
+      "note": "December 2025: governance transfer to Linux Foundation; registry now vendor-neutral by charter."
+    },
+    {
+      "id": "github-blog-npm-sigstore",
+      "title": "npm + Sigstore GA — provenance attestations",
+      "url": "https://blog.sigstore.dev/npm-provenance-ga/",
+      "source": "blog.sigstore.dev",
+      "accessed": "2026-05-24",
+      "note": "GA status; >500M downloads of provenance-enabled package versions during beta."
+    }
+  ]
+}

@@ -1,0 +1,116 @@
+{
+  "title": "Versioning-strategy ranking for MCP server pins + spec-version compatibility in mcpm/mcpd",
+  "criteria": [
+    { "key": "reproducibility",  "label": "Reproducibility across machines/users",                "weight": 0.18, "direction": "max" },
+    { "key": "conflict",         "label": "Conflict detection (early failure, not late surprise)", "weight": 0.13, "direction": "max" },
+    { "key": "freshness",        "label": "Freshness — ease of getting upstream bug fixes",        "weight": 0.12, "direction": "max" },
+    { "key": "lockfile_simplicity", "label": "Lockfile simplicity (small, mergeable, readable)",   "weight": 0.13, "direction": "max" },
+    { "key": "team",             "label": "Multi-user / team friendliness",                        "weight": 0.12, "direction": "max" },
+    { "key": "scale",            "label": "Fit for v1.0 scale (10s of MCPs, not 10k)",             "weight": 0.10, "direction": "max" },
+    { "key": "debuggability",    "label": "Debuggability — explain why version X was chosen",      "weight": 0.12, "direction": "max" },
+    { "key": "security",         "label": "Supply-chain integrity (checksums, signed metadata)",   "weight": 0.10, "direction": "max" }
+  ],
+  "options": [
+    "Always-latest (no pinning, no lock)",
+    "Exact pin only (= in manifest, no lock)",
+    "Range in manifest, no lock",
+    "Range in manifest + lockfile (npm/Cargo style) — RECOMMENDED",
+    "Lockfile-only (no manifest, asdf .tool-versions style)",
+    "Content-addressed pinning (Nix flake style)"
+  ],
+  "scores": {
+    "Always-latest (no pinning, no lock)": {
+      "reproducibility": 1,
+      "conflict": 1,
+      "freshness": 5,
+      "lockfile_simplicity": 5,
+      "team": 1,
+      "scale": 5,
+      "debuggability": 1,
+      "security": 1,
+      "_evidence": {
+        "reproducibility": ["#cite-mise-lockfile-reproducibility"],
+        "freshness": ["#cite-npm-update"],
+        "security": ["#cite-cargo-lock-deepwiki"]
+      }
+    },
+    "Exact pin only (= in manifest, no lock)": {
+      "reproducibility": 5,
+      "conflict": 4,
+      "freshness": 1,
+      "lockfile_simplicity": 5,
+      "team": 4,
+      "scale": 4,
+      "debuggability": 4,
+      "security": 3,
+      "_evidence": {
+        "reproducibility": ["#cite-cargo-specifying-deps"],
+        "freshness": ["#cite-renovate-upgrade-best-practices"],
+        "debuggability": ["#cite-cargo-update"]
+      }
+    },
+    "Range in manifest, no lock": {
+      "reproducibility": 2,
+      "conflict": 2,
+      "freshness": 4,
+      "lockfile_simplicity": 5,
+      "team": 2,
+      "scale": 4,
+      "debuggability": 2,
+      "security": 2,
+      "_evidence": {
+        "reproducibility": ["#cite-npm-package-lock"],
+        "team": ["#cite-mise-lockfile-reproducibility"]
+      }
+    },
+    "Range in manifest + lockfile (npm/Cargo style) — RECOMMENDED": {
+      "reproducibility": 5,
+      "conflict": 5,
+      "freshness": 4,
+      "lockfile_simplicity": 4,
+      "team": 5,
+      "scale": 5,
+      "debuggability": 5,
+      "security": 5,
+      "_evidence": {
+        "reproducibility": ["#cite-cargo-toml-vs-lock", "#cite-npm-package-lock"],
+        "conflict": ["#cite-cargo-resolver"],
+        "freshness": ["#cite-cargo-update", "#cite-mise-upgrade"],
+        "team": ["#cite-cargo-toml-vs-lock"],
+        "debuggability": ["#cite-cargo-lock-deepwiki"],
+        "security": ["#cite-mise-lock"]
+      }
+    },
+    "Lockfile-only (no manifest, asdf .tool-versions style)": {
+      "reproducibility": 5,
+      "conflict": 3,
+      "freshness": 2,
+      "lockfile_simplicity": 5,
+      "team": 4,
+      "scale": 4,
+      "debuggability": 3,
+      "security": 3,
+      "_evidence": {
+        "reproducibility": ["#cite-asdf-tool-versions"],
+        "freshness": ["#cite-mise-vs-asdf"],
+        "lockfile_simplicity": ["#cite-asdf-tool-versions"]
+      }
+    },
+    "Content-addressed pinning (Nix flake style)": {
+      "reproducibility": 5,
+      "conflict": 5,
+      "freshness": 3,
+      "lockfile_simplicity": 2,
+      "team": 4,
+      "scale": 3,
+      "debuggability": 4,
+      "security": 5,
+      "_evidence": {
+        "reproducibility": ["#cite-nix-flake-lock"],
+        "conflict": ["#cite-nix-flakes-wiki"],
+        "lockfile_simplicity": ["#cite-nix-flake-lock"],
+        "security": ["#cite-nix-flakes-wiki"]
+      }
+    }
+  }
+}

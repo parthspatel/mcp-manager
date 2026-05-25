@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Versioning recommendation &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">closing-gaps</a> / <a href="./index.html">version-management</a> / recommendation</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Recommendation &mdash; version management for v1.0</h1>
+
+<p class="lede">
+Adopt the <strong>range-in-manifest, exact-in-lockfile</strong> model from Cargo<cite data-ref="cargo-toml-vs-lock"></cite> and npm<cite data-ref="npm-package-lock"></cite>. For spec-version negotiation, advertise an allow-list of MCP spec dates and refuse incompatible servers at install time using the registry's advertised <code>supportedSpecVersions</code>. Classify update diffs with Renovate's vocabulary<cite data-ref="renovate-update-types"></cite>. Wire every version change to the existing <code>audit.config.change</code> event spine, and run the v1.0 health check (<code>mcpm test</code>) automatically after every bump with rollback on failure.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#cli">CLI surface</a></li>
+    <li><a href="#lockfile">Lockfile format (TOML schema)</a></li>
+    <li><a href="#negotiation">Spec-version negotiation algorithm</a></li>
+    <li><a href="#worked-example">Worked example &mdash; server advertises 2025-06-18, daemon supports 2025-06-18 + 2026-04-01</a></li>
+    <li><a href="#update-ux">mcpm update &mdash; classified diff UX</a></li>
+    <li><a href="#audit">Audit-log integration</a></li>
+    <li><a href="#health-check">Health-check integration &amp; rollback</a></li>
+    <li><a href="#open-questions">Open questions</a></li>
+  </ul>
+</nav>
+
+<h2 id="cli">CLI surface</h2>
+
+<table class="compare">
+  <thead><tr><th>Command</th><th>Behaviour</th></tr></thead>
+  <tbody>
+    <tr><td><code>mcpm install github-mcp</code></td><td>No version constraint. Resolves the latest registry version; writes <code>github-mcp = "^X.Y"</code> to manifest using the resolved version's leftmost non-zero digit as the floor (Cargo caret default<cite data-ref="cargo-specifying-deps"></cite>); writes exact <code>{version, checksum, source, advertised_spec}</code> to lockfile.</td></tr>
+    <tr><td><code>mcpm install github-mcp@^0.4</code></td><td>Explicit range. Manifest takes the literal string; lock records the resolved exact version.</td></tr>
+    <tr><td><code>mcpm install github-mcp@=0.4.2</code></td><td>Exact pin. Manifest stores <code>=0.4.2</code>; lock is identical. Future <code>mcpm update</code> ignores this entry unless <code>--include-pinned</code> is passed.</td></tr>
+    <tr><td><code>mcpm update</code></td><td>For every entry, re-resolve within the manifest constraint; classify changes (major/minor/patch/digest/spec-bump); render colored diff; ask for confirmation; on accept, write lock, emit audit event, run health check, roll back on failure.</td></tr>
+    <tr><td><code>mcpm update github-mcp</code></td><td>Same as above, scoped to one server.</td></tr>
+    <tr><td><code>mcpm update --precise github-mcp@0.5.0</code></td><td>Cargo-style precise update<cite data-ref="cargo-update"></cite>. Bumps lock to exactly 0.5.0 even if outside manifest constraint &mdash; in which case the manifest is widened (with explicit prompt).</td></tr>
+    <tr><td><code>mcpm outdated</code></td><td>Read-only preview. No lockfile writes. Lists every server with its current pinned version, the latest available, and the classification of the diff. Equivalent to <code>npm outdated</code><cite data-ref="npm-update"></cite>.</td></tr>
+    <tr><td><code>mcpm lock --strict</code></td><td>Mise-style strict mode<cite data-ref="mise-lock"></cite>. Refuse to fetch anything not pre-recorded in the lockfile. Default for CI environments.</td></tr>
+    <tr><td><code>mcpm lock --refresh</code></td><td>Renovate's <code>lockFileMaintenance</code><cite data-ref="renovate-update-types"></cite>: re-resolve without changing any version pins; useful after a registry migration.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lockfile">Lockfile format (TOML)</h2>
+
+<p>
+Composes with the toolchain-projection lockfile decided by <a href="../../clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge</a>: one file, two top-level tables. Per-user: <code>~/.config/mcp-manager/mcp-manager.lock</code>. Per-project: <code>./mcp-manager.lock</code>. Schema sketch:
+</p>
+
+<pre><code># mcp-manager.lock — sample (10 lines, server-version section)
+version = 1
+metadata = { generated = "2026-05-24T14:33:01Z", mcpm = "1.0.0", spec_versions = ["2025-11-25", "2025-06-18"] }
+
+[[server]]
+name = "io.github.modelcontextprotocol/github-mcp"
+version = "0.4.2"
+source = "registry+https://registry.modelcontextprotocol.io"
+checksum = "sha256:9f4e2d1a8b3c7f6e5d4c3b2a1908f7e6d5c4b3a2"
+advertised_spec = "2025-06-18"
+resolved_at = "2026-05-24T14:33:01Z"
+</code></pre>
+
+<p>
+Notes on this schema, with prior-art links:
+</p>
+
+<ul>
+  <li><strong><code>version</code> at top</strong> &mdash; lockfile schema version, separate from any package version. Cargo and Nix both do this; uv does not and has paid for it. Pin to <code>1</code> for v1.0.</li>
+  <li><strong><code>name</code> is fully namespaced</strong> &mdash; reverse-DNS as the MCP Registry already mandates.<cite data-ref="mcp-registry"></cite></li>
+  <li><strong><code>source</code></strong> &mdash; URL-with-prefix tag, mirroring Cargo.<cite data-ref="cargo-lock-deepwiki"></cite> Acceptable prefixes: <code>registry+&lt;url&gt;</code>, <code>git+&lt;url&gt;#&lt;sha&gt;</code>, <code>path+&lt;abs-path&gt;</code> (local dev).</li>
+  <li><strong><code>checksum</code></strong> &mdash; SHA-256 of the install artifact tarball. Skipped for <code>path+</code> sources.</li>
+  <li><strong><code>advertised_spec</code></strong> &mdash; the MCP spec date the server claims at registry-publish time, used for install-time refusal before runtime negotiation ever happens.</li>
+  <li><strong><code>resolved_at</code></strong> &mdash; helps with debugging "why did this resolve to a different version than my teammate's same date?" &mdash; useful only when the manifest is loose; ignored for pure verification.</li>
+  <li><strong>The projection section</strong> (from clever-fox-bridge) lives under <code>[projection.&lt;tool&gt;]</code> tables, not shown here. Same file, separate concern.</li>
+</ul>
+
+<h2 id="negotiation">Spec-version negotiation algorithm</h2>
+
+<p>
+The algorithm runs in three phases. Phase 1 is install-time (read registry metadata), phase 2 is initialize-time (MCP lifecycle handshake<cite data-ref="mcp-version-negotiation"></cite>), phase 3 is wire-time (every subsequent HTTP call must carry the negotiated <code>MCP-Protocol-Version</code> header to avoid the @ai-sdk/mcp regression<cite data-ref="mcp-protocol-version-header-bug"></cite>):
+</p>
+
+<ol>
+  <li><strong>Phase 1 &mdash; install-time refusal.</strong> mcpd config holds <code>spec_versions</code>: an allow-list of MCP spec dates ordered newest-first. Default: <code>["2025-11-25", "2025-06-18"]</code>. When <code>mcpm install &lt;server&gt;</code> reads the registry entry, it computes <code>intersect(registry.supportedSpecVersions, daemon.spec_versions)</code>. Empty intersection &rArr; install refused with structured error <code>SpecVersionUnsupported</code> listing both sides. Non-empty &rArr; the lockfile records the newest common version in <code>advertised_spec</code>.</li>
+  <li><strong>Phase 2 &mdash; initialize-time negotiation.</strong> When mcpd spawns the server and sends <code>initialize</code>, it advertises its newest supported version (matching the MCP spec contract<cite data-ref="mcp-version-negotiation"></cite>). The server responds with either (a) the same version &mdash; happy path, or (b) a different supported version. mcpd checks the response against its allow-list: if in-list, accept and proceed; if out-of-list, log <code>audit.session.refused</code> and disconnect per the spec's SHOULD.</li>
+  <li><strong>Phase 3 &mdash; wire-time consistency.</strong> The negotiated version is stored on the per-session connection object and re-emitted as the <code>MCP-Protocol-Version</code> request header on every Streamable HTTP call. Stdio sessions don't need this (the framing is in-band) but the same state machine guards against accidentally upgrading mid-session.</li>
+</ol>
+
+<h2 id="worked-example">Worked example</h2>
+
+<p>
+<strong>Scenario:</strong> A user installs <code>github-mcp</code> (which advertises <code>supportedSpecVersions: ["2025-06-18"]</code>) on a daemon configured with <code>spec_versions = ["2026-04-01", "2025-06-18"]</code>.
+</p>
+
+<ol>
+  <li><strong>Install (phase 1).</strong> Registry metadata for <code>io.github.modelcontextprotocol/github-mcp@0.4.2</code> declares <code>supportedSpecVersions: ["2025-06-18"]</code>. Daemon allow-list is <code>["2026-04-01", "2025-06-18"]</code>. Intersection is <code>["2025-06-18"]</code>. Install proceeds. Lockfile records <code>advertised_spec = "2025-06-18"</code>.</li>
+  <li><strong>Initialize (phase 2).</strong> mcpd opens the server process and sends <code>initialize</code> with <code>protocolVersion: "2026-04-01"</code> (newest supported). The server responds with <code>protocolVersion: "2025-06-18"</code>. <code>2025-06-18</code> is in the allow-list. Accept.</li>
+  <li><strong>Wire (phase 3).</strong> If the server uses Streamable HTTP, the connection object stores <code>negotiated_version = "2025-06-18"</code>; every subsequent tool-call request emits <code>MCP-Protocol-Version: 2025-06-18</code>. Stdio servers skip this.</li>
+  <li><strong>Audit.</strong> Log <code>audit.session.opened {server: "github-mcp", negotiated_spec: "2025-06-18", advertised: "2026-04-01"}</code>. The fact that a downgrade happened is recorded so a team lead can ask "why are we still on the old spec for this server" without spelunking through process logs.</li>
+  <li><strong>Counter-scenario.</strong> If instead the server advertised <em>only</em> <code>2025-03-26</code> and the daemon allow-list was <code>["2026-04-01", "2025-06-18"]</code>, phase 1 would refuse the install with: <pre><code>error[E.SpecVersionUnsupported]: github-mcp@0.4.2 advertises MCP spec [2025-03-26]
+which is not in the daemon's allow-list [2026-04-01, 2025-06-18].
+Hint: add "2025-03-26" to spec_versions in ~/.config/mcp-manager/config.toml,
+or upgrade the server with `mcpm update github-mcp`.</code></pre></li>
+</ol>
+
+<h2 id="update-ux">mcpm update &mdash; classified diff UX</h2>
+
+<p>
+The terminal output uses Renovate's class names<cite data-ref="renovate-update-types"></cite> so users with prior dependency-management experience pattern-match instantly. Best-practice defaults follow Renovate's recommendation:<cite data-ref="renovate-upgrade-best-practices"></cite> auto-apply patch + digest-after-confirmation, prompt for minor, refuse major without an explicit flag.
+</p>
+
+<pre><code>$ mcpm update
+Resolving updates for 5 servers...
+
+  [PATCH]  github-mcp           0.4.2 -> 0.4.3       (mcp-spec unchanged: 2025-06-18)
+  [MINOR]  fetch-mcp            1.2.0 -> 1.3.0       (mcp-spec unchanged: 2025-11-25)
+  [MAJOR]  postgres-mcp         0.9.4 -> 1.0.0       REFUSED - pass --accept-breaking
+  [SPEC]   filesystem-mcp       0.6.1 (now advertises 2025-11-25, was 2025-06-18)
+  [MAINT]  slack-mcp            checksum refresh, no version change
+
+Apply 3 changes (1 patch, 1 minor, 1 spec-bump)? [y/N/d=diff]
+
+  > y
+Updating lockfile...
+Running health checks (mcpm test) on changed servers...
+  github-mcp       initialize OK, tools/list OK (12 tools)
+  fetch-mcp        initialize OK, tools/list OK (4 tools)
+  filesystem-mcp   initialize FAILED: server crashed during initialize.
+                   Rolling back to 0.6.0 in lockfile.
+Audit log entries written: audit.config.change x4, audit.session.refused x1.</code></pre>
+
+<p>
+The interactive prompt accepts <code>d</code> to drop into a detailed per-server diff view (changelog link if registry provides one, full version metadata, the previous and new checksums, a list of which tools the server now exposes vs before via cached <code>tools/list</code> output). All without leaving the terminal &mdash; works equally in <code>mcpm</code> (CLI) and the TUI surface.
+</p>
+
+<h2 id="audit">Audit-log integration</h2>
+
+<p>
+Every write to the version section of the lockfile emits exactly one event with the existing <code>audit.config.change</code> schema:
+</p>
+
+<pre><code>{
+  "type": "audit.config.change",
+  "ts": "2026-05-24T14:35:00Z",
+  "actor": { "kind": "cli", "user": "parth" },
+  "subject": { "kind": "lockfile.server_pin",
+               "name": "io.github.modelcontextprotocol/github-mcp" },
+  "before": { "version": "0.4.2", "checksum": "sha256:9f4e..." },
+  "after":  { "version": "0.4.3", "checksum": "sha256:1a2b..." },
+  "classification": "patch",
+  "trigger": "mcpm update"
+}</code></pre>
+
+<p>
+Spec-version refusals get their own event type (<code>audit.session.refused</code>) since they happen at runtime, not config-change time. Digest anomalies (same version, different checksum) emit both <code>audit.config.change</code> and <code>audit.security.anomaly</code>.
+</p>
+
+<h2 id="health-check">Health-check integration &amp; rollback</h2>
+
+<ol>
+  <li>For each server whose lockfile entry changed, run <code>mcpm test &lt;server&gt;</code> &mdash; the v1.0 health check that runs <code>initialize</code> + <code>tools/list</code> and reports.</li>
+  <li>If the test passes, the new lockfile entry is committed in place.</li>
+  <li>If the test fails, the lockfile is restored to the previous entry (atomic file replace via tempfile + rename), an <code>audit.config.change</code> reversal event is emitted, and the user sees a "rolled back" line in the update output.</li>
+  <li>This pattern means <code>mcpm update</code> is always safe to run blind &mdash; the worst case is "no changes applied because health check refused them."</li>
+</ol>
+
+<h2 id="open-questions">Open questions for orchestrator synthesis</h2>
+
+<ul>
+  <li><strong>Default <code>spec_versions</code> allow-list.</strong> Recommend <code>["2025-11-25", "2025-06-18"]</code> at v1.0 ship. When <code>2026-07-28</code> goes stable, do we (a) auto-roll the default in the next mcpm point release, (b) require the user to opt-in via <code>mcpm config spec-versions add 2026-07-28</code>, or (c) auto-add the newest but never auto-drop the oldest? Suggest (c) &mdash; never break running setups.</li>
+  <li><strong>SDK version coupling.</strong> The Rust SDK we use<cite data-ref="mcp-rust-sdk"></cite> advertises spec-version support at compile time. Should mcpd refuse to load if its SDK can't speak a version in the user's allow-list? Yes &mdash; refuse loudly at daemon start, not later.</li>
+  <li><strong>Registry trust.</strong> The MCP Registry is metadata-only &mdash; the actual checksums live in npm / PyPI / Docker. Do we verify checksums against the registry's published value or refetch from upstream and trust whatever upstream says? Recommend: trust the registry's value as the canonical record and refuse if upstream returns something different. (This is also where the <code>digest</code> classification fires.)</li>
+  <li><strong>Per-server spec override.</strong> Should we expose <code>manifest.servers.github-mcp.spec = "2025-06-18"</code> as a per-server allow-list override? Useful for shimming a server that lies in its registry metadata. Recommend: ship it, but document it as escape-hatch, not idiomatic.</li>
+  <li><strong>Lockfile commit policy when per-project.</strong> Following Cargo<cite data-ref="cargo-toml-vs-lock"></cite>: yes, commit the per-project lockfile. The per-user lockfile stays in <code>~/.config/</code> and is git-ignored.</li>
+</ul>
+</main>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Secrets lifecycle &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">closing-gaps</a> / secrets-lifecycle</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Closing gap &middot; Secrets lifecycle</h1>
+
+<p class="lede">
+Every MCP server worth running needs a token: a GitHub PAT, a Linear API key, an Anthropic key, a database URL.
+Today those tokens get pasted into editor config files in plaintext &mdash; <a href="https://owasp.org/www-project-mcp-top-10/2025/MCP01-2025-Token-Mismanagement-and-Secret-Exposure">OWASP MCP01:2025</a> calls this the
+<em>most common</em> MCP failure mode. This stream designs the minimal v1.0 secrets surface (CLI write to OS keychain,
+daemon read-and-inject at spawn, audit-logged) and &mdash; more importantly &mdash; the Rust trait that lets v1.1+ plug
+in 1Password, Vault, Doppler, Infisical, AWS/GCP/Azure secret managers without re-architecting anything.
+<span class="evidence-badge">32 citations</span>
+<span class="pill">2 v1.0 stores</span>
+<span class="pill">6 v1.1+ stub stores sketched</span>
+</p>
+
+<nav class="toc">
+  <h4>Pages</h4>
+  <div class="group-label">Research</div>
+  <ul>
+    <li><a href="./research-secrets-prior-art.html">research-secrets-prior-art.html</a> &mdash; OS keychain backends (Keychain Services, libsecret), Rust crates (keyring, secrecy, rpassword), and a CLI surface survey of every major vault provider (op, bw, vault, doppler, infisical, AWS SM, GCP SM, Azure KV).</li>
+  </ul>
+  <div class="group-label">Recommendation</div>
+  <ul>
+    <li><a href="./recommendation-secrets-summary.html">recommendation-secrets-summary.html</a> &mdash; the v1.0 design: <code>SecretStore</code> trait, two ship-this-week implementations (<code>OsKeyringStore</code>, <code>EnvVarPassthroughStore</code>), six v1.1+ stub backends, full CLI transcripts, the daemon-side injection flow, and failure modes.</li>
+  </ul>
+</nav>
+
+<section class="section">
+  <h2>Sibling closing-gap streams</h2>
+  <div class="card-grid">
+    <a class="card" href="../server-registry/">
+      <h3>server-registry</h3>
+      <p>Discovery + install of MCP servers. The registry decides <em>which</em> servers exist; this stream decides <em>how their credentials live</em>.</p>
+    </a>
+    <a class="card" href="../onboarding/">
+      <h3>onboarding</h3>
+      <p>First-run experience. The onboarding flow is where users hit their first <code>mcpm secret set</code> prompt &mdash; the UX has to be self-explanatory.</p>
+    </a>
+    <a class="card" href="../version-management/">
+      <h3>version-management</h3>
+      <p>Server-binary versioning. Orthogonal to secrets, but shares the daemon-spawn code path that this stream's injection logic plugs into.</p>
+    </a>
+  </div>
+</section>
+
+<section class="section">
+  <h2>One-paragraph summary</h2>
+  <p>
+    v1.0 ships a single hard-coded <code>SecretStore</code> impl: <code>OsKeyringStore</code>, backed by macOS Keychain Services and Linux Secret Service (via libsecret) through the <a href="https://github.com/open-source-cooperative/keyring-rs">keyring-rs</a> crate. A second built-in impl, <code>EnvVarPassthroughStore</code>, is a read-only escape hatch: if the user has already exported <code>GITHUB_TOKEN</code> in their shell, mcpd uses that without touching the keychain. The two are composed into a <code>LayeredSecretStore</code> that the daemon consults at server-spawn time. The <code>SecretStore</code> trait is the v1.1+ extension point &mdash; later we plug in <code>OnePasswordStore</code> (shells out to <code>op read</code>), <code>VaultStore</code> (HTTP API), <code>DopplerStore</code>, <code>InfisicalStore</code>, and the three cloud vault stores, all behind the same trait. Every read and write emits a structured <code>secret.read</code> or <code>secret.write</code> audit event through mcp-core's audit channel; values never appear. The CLI accepts secrets only via interactive prompt (<code>rpassword</code>, hidden input, reads from <code>/dev/tty</code>) or <code>--from-file</code> / <code>--from-env</code> &mdash; never via <code>--value</code>, which would land in shell history <cite data-ref="smallstep-cli-secrets"></cite>.
+  </p>
+</section>
+
+<section class="section">
+  <h2>What's locked in (do not relitigate)</h2>
+  <ul>
+    <li>macOS + Linux only; no Windows ever.</li>
+    <li>OS keychain only in v1.0 &mdash; no file-based fallback. If the platform secret service is unreachable, fail loudly.</li>
+    <li>Pre-existing env-var secrets are honored without re-storing (escape hatch for users who manage their own).</li>
+    <li>Secret values are injected as env vars into MCP server child processes by mcpd. The <code>mcpm exec</code> wrapper never sees plaintext.</li>
+    <li>Audit events: <code>secret.read</code>, <code>secret.write</code>, <code>secret.unset</code>. Names + actors, never values.</li>
+    <li>No GUI. CLI prompt is terminal-based (getpass-style).</li>
+    <li>Apache 2.0 throughout; copyleft-only vault providers (none of the listed ones qualify) would be flagged here.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

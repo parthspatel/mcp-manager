@@ -1,0 +1,260 @@
+{
+  "entries": [
+    {
+      "id": "keyring-rs",
+      "title": "keyring-rs — cross-platform credential storage library",
+      "url": "https://github.com/open-source-cooperative/keyring-rs",
+      "source": "github.com/open-source-cooperative",
+      "accessed": "2026-05-24",
+      "note": "Maintained by open-source-cooperative (originally hwchen); now factored into keyring-core (API) and per-store crates. Supported platforms: macOS, iOS, Linux/BSD via Secret Service, Windows."
+    },
+    {
+      "id": "keyring-docs",
+      "title": "keyring — Rust API docs",
+      "url": "https://docs.rs/keyring/latest/keyring/index.html",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "Entry::new(service, user) is the canonical constructor; set_password/get_password/delete_credential are the core operations. apple-native and linux-native-sync-persistent features select platform backends."
+    },
+    {
+      "id": "keyring-core",
+      "title": "keyring-core — Cross-platform library for managing secrets",
+      "url": "https://github.com/open-source-cooperative/keyring-core",
+      "source": "github.com/open-source-cooperative",
+      "accessed": "2026-05-24",
+      "note": "Pure trait/error definitions split out from the keyring sample crate. Lets downstream callers depend on the abstraction without pulling all credential-store implementations."
+    },
+    {
+      "id": "keychain-services-rs",
+      "title": "keychain-services.rs — Rust binding for macOS Keychain Services (experimental)",
+      "url": "https://github.com/iqlusioninc/keychain-services.rs",
+      "source": "github.com/iqlusioninc",
+      "accessed": "2026-05-24",
+      "note": "Lower-level than keyring; exposes Secure Enclave / TouchID-gated keys. Warns that the macOS Keychain API requires signed code for many entitlements — apps without code-signing get MissingEntitlement errors."
+    },
+    {
+      "id": "apple-secitemadd",
+      "title": "SecItemAdd(_:_:) — Apple Developer Documentation",
+      "url": "https://developer.apple.com/documentation/security/secitemadd(_:_:)",
+      "source": "developer.apple.com",
+      "accessed": "2026-05-24",
+      "note": "Primitive used by every macOS keychain wrapper; takes a CFDictionary of attributes (kSecClass, kSecAttrService, kSecAttrAccount, kSecValueData, kSecAttrAccessible)."
+    },
+    {
+      "id": "apple-ksecattraccessible",
+      "title": "kSecAttrAccessible — Apple Developer Documentation",
+      "url": "https://developer.apple.com/documentation/security/ksecattraccessible",
+      "source": "developer.apple.com",
+      "accessed": "2026-05-24",
+      "note": "Accessibility policy attribute on a keychain item. kSecAttrAccessibleWhenUnlocked is the default; AfterFirstUnlock and similar variants gate access on device state."
+    },
+    {
+      "id": "freedesktop-secret-service",
+      "title": "Secret Service API Draft (org.freedesktop.Secret.*)",
+      "url": "https://specifications.freedesktop.org/secret-service/latest/ref-dbus-api.html",
+      "source": "specifications.freedesktop.org",
+      "accessed": "2026-05-24",
+      "note": "Cross-desktop D-Bus protocol for password storage. Defines Service / Collection / Item / Session interfaces, OpenSession, default collection, lookup-attribute model."
+    },
+    {
+      "id": "libsecret-overview",
+      "title": "libsecret — GNOME secret storage client library",
+      "url": "https://gnome.pages.gitlab.gnome.org/libsecret/",
+      "source": "gnome.pages.gitlab.gnome.org",
+      "accessed": "2026-05-24",
+      "note": "Reference C client for the Secret Service D-Bus API; gnome-keyring and KWallet both implement the server side. Used (via FFI) by Rust's keyring crate on Linux/BSD."
+    },
+    {
+      "id": "1password-cli-secret-refs",
+      "title": "Use secret references with 1Password CLI",
+      "url": "https://developer.1password.com/docs/cli/secret-references/",
+      "source": "developer.1password.com",
+      "accessed": "2026-05-24",
+      "note": "Secret references take the form op://<vault>/<item>/[section/]<field>. op read, op inject, and op run all resolve them; op run injects into env vars for a subprocess."
+    },
+    {
+      "id": "1password-cli-overview",
+      "title": "1Password CLI (op) — overview",
+      "url": "https://developer.1password.com/docs/cli/",
+      "source": "developer.1password.com",
+      "accessed": "2026-05-24",
+      "note": "op CLI commands: read, inject, run, item get. Reads gated by the desktop-app session (biometric unlock) or service account token."
+    },
+    {
+      "id": "1password-mcp-blog",
+      "title": "Securing MCP servers with 1Password: stop credential exposure",
+      "url": "https://1password.com/blog/securing-mcp-servers-with-1password-stop-credential-exposure-in-your-agent",
+      "source": "1password.com",
+      "accessed": "2026-05-24",
+      "note": "Argues for runtime injection of MCP server secrets via op run instead of inlining in agent config. Aligned with our v1.1 OnePasswordStore design."
+    },
+    {
+      "id": "bitwarden-cli",
+      "title": "Bitwarden CLI (bw) — Password Manager CLI documentation",
+      "url": "https://bitwarden.com/help/cli/",
+      "source": "bitwarden.com",
+      "accessed": "2026-05-24",
+      "note": "bw login + bw unlock yield a BW_SESSION env var; bw get password <name> and bw get item <id> return values/JSON. Session is required for every subsequent read."
+    },
+    {
+      "id": "vault-kv-get",
+      "title": "vault kv get — HashiCorp Vault CLI",
+      "url": "https://developer.hashicorp.com/vault/docs/commands/kv/get",
+      "source": "developer.hashicorp.com",
+      "accessed": "2026-05-24",
+      "note": "vault kv get -mount=secret -field=password <path> is the script-friendly form. KV v2 adds -version and metadata."
+    },
+    {
+      "id": "vault-kv-v2",
+      "title": "Key/Value v2 — HashiCorp Vault secrets engine",
+      "url": "https://developer.hashicorp.com/vault/docs/secrets/kv/kv-v2",
+      "source": "developer.hashicorp.com",
+      "accessed": "2026-05-24",
+      "note": "Versioned KV engine: versioning, soft delete, metadata, check-and-set. Critical prior art for any leased/TTL backend in v1.1+."
+    },
+    {
+      "id": "doppler-run",
+      "title": "doppler run — inject secrets as env vars",
+      "url": "https://docs.doppler.com/docs/cli",
+      "source": "docs.doppler.com",
+      "accessed": "2026-05-24",
+      "note": "doppler run -- <command> fetches the latest secrets for the configured project/environment and execs the command with them in env. Works across shells; multi-line supported."
+    },
+    {
+      "id": "doppler-mcp-best-practices",
+      "title": "MCP security best practices for credentials, tokens, and secrets — Doppler",
+      "url": "https://www.doppler.com/blog/mcp-server-credential-security-best-practices",
+      "source": "doppler.com",
+      "accessed": "2026-05-24",
+      "note": "Recommends runtime injection over .env, environment isolation per MCP server, and centralized rotation. Aligns with our daemon-injected env-var model."
+    },
+    {
+      "id": "infisical-cli-run",
+      "title": "Infisical CLI run — inject secrets into subprocess",
+      "url": "https://infisical.com/docs/cli/commands/secrets",
+      "source": "infisical.com",
+      "accessed": "2026-05-24",
+      "note": "infisical run --env=<env> --path=<path> -- <command> fetches and injects. Adds --prefix and multi --path flags for namespacing."
+    },
+    {
+      "id": "aws-secretsmanager-get",
+      "title": "aws secretsmanager get-secret-value — AWS CLI Reference",
+      "url": "https://docs.aws.amazon.com/cli/latest/reference/secretsmanager/get-secret-value.html",
+      "source": "docs.aws.amazon.com",
+      "accessed": "2026-05-24",
+      "note": "Canonical API: aws secretsmanager get-secret-value --secret-id <arn-or-name> --query SecretString --output text. Identity sourced from the AWS_PROFILE / IAM role of the caller."
+    },
+    {
+      "id": "gcp-secret-access",
+      "title": "gcloud secrets versions access — Google Cloud Secret Manager",
+      "url": "https://cloud.google.com/secret-manager/docs/access-secret-version",
+      "source": "cloud.google.com",
+      "accessed": "2026-05-24",
+      "note": "gcloud secrets versions access latest --secret=<name> prints the secret. Uses ADC for auth; regional secrets require --location."
+    },
+    {
+      "id": "azure-keyvault-show",
+      "title": "az keyvault secret show — Azure CLI Reference",
+      "url": "https://learn.microsoft.com/en-us/cli/azure/keyvault/secret?view=azure-cli-latest",
+      "source": "learn.microsoft.com",
+      "accessed": "2026-05-24",
+      "note": "az keyvault secret show --vault-name <vault> --name <secret> --query value -o tsv. Backed by Azure AD identity of the signed-in user or managed identity."
+    },
+    {
+      "id": "secretspec",
+      "title": "SecretSpec — declarative secrets manifest, multiple providers",
+      "url": "https://crates.io/crates/secretspec",
+      "source": "crates.io",
+      "accessed": "2026-05-24",
+      "note": "Separates declaration (secretspec.toml) from storage backend. Providers: OnePassword, .env, env, GCP Secret Manager, system keyring, LastPass, pass(1). Architecture mirrors what we want for the SecretStore trait."
+    },
+    {
+      "id": "secrecy-crate",
+      "title": "secrecy — wrapper types that prevent accidental secret exposure",
+      "url": "https://docs.rs/secrecy/latest/secrecy/",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "SecretBox/SecretString/SecretVec — implements Debug as [REDACTED], drops via zeroize. Use as the in-process carrier for all secret values."
+    },
+    {
+      "id": "zeroize-crate",
+      "title": "zeroize — secure memory wipe primitive",
+      "url": "https://docs.rs/zeroize/latest/zeroize/",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "core::ptr::write_volatile + atomic fences. Pure Rust, no FFI. Backbone of secrecy."
+    },
+    {
+      "id": "rpassword-crate",
+      "title": "rpassword — getpass()-style password prompt for Rust",
+      "url": "https://docs.rs/rpassword/",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "Cross-platform terminal input with echo disabled. Defaults to reading from /dev/tty, not stdin, so it works correctly when stdin is redirected."
+    },
+    {
+      "id": "smallstep-cli-secrets",
+      "title": "How to Handle Secrets on the Command Line — smallstep",
+      "url": "https://smallstep.com/blog/command-line-secrets/",
+      "source": "smallstep.com",
+      "accessed": "2026-05-24",
+      "note": "Survey of why argv is the wrong place for secrets (process list, shell history, CI logs), and the safe alternatives: stdin, file paths, env-by-reference."
+    },
+    {
+      "id": "gitguardian-cli-secrets",
+      "title": "How to Handle Secrets at the Command Line — GitGuardian",
+      "url": "https://blog.gitguardian.com/secrets-at-the-command-line/",
+      "source": "blog.gitguardian.com",
+      "accessed": "2026-05-24",
+      "note": "Cheat sheet of safe vs unsafe CLI patterns; identifies --password-stdin and credential files as canonical safe forms."
+    },
+    {
+      "id": "vscode-secretstorage",
+      "title": "VS Code SecretStorage API",
+      "url": "https://code.visualstudio.com/api/references/vscode-api#SecretStorage",
+      "source": "code.visualstudio.com",
+      "accessed": "2026-05-24",
+      "note": "Per-extension secret storage. Backed by Keychain on macOS, libsecret on Linux, Credential Manager on Windows (via Electron safeStorage). Precedent for what an editor expects."
+    },
+    {
+      "id": "sops",
+      "title": "SOPS — Secrets OPerationS",
+      "url": "https://github.com/getsops/sops",
+      "source": "github.com/getsops",
+      "accessed": "2026-05-24",
+      "note": "File-based encrypted secrets — YAML/JSON/ENV/INI. Backends: AWS/GCP/Azure KMS, age, PGP. Not a runtime fetcher; an at-rest format."
+    },
+    {
+      "id": "agenix",
+      "title": "agenix — age-encrypted secrets for NixOS",
+      "url": "https://github.com/ryantm/agenix",
+      "source": "github.com/ryantm",
+      "accessed": "2026-05-24",
+      "note": "NixOS-native pattern: encrypt at rest with age, decrypt on activation, mount under /run/agenix with restrictive perms. Inspiration for the file-mount form a future store could adopt."
+    },
+    {
+      "id": "owasp-mcp-top-10",
+      "title": "MCP01:2025 — Token Mismanagement and Secret Exposure (OWASP)",
+      "url": "https://owasp.org/www-project-mcp-top-10/2025/MCP01-2025-Token-Mismanagement-and-Secret-Exposure",
+      "source": "owasp.org",
+      "accessed": "2026-05-24",
+      "note": "Top entry in the OWASP MCP Top 10 for 2025. Lists the failure modes our threat model must defend against: argv leakage, .env commits, oversharing tokens between servers."
+    },
+    {
+      "id": "goose-keyring",
+      "title": "Goose — config and OS keyring integration",
+      "url": "https://block.github.io/goose/docs/guides/config-file",
+      "source": "block.github.io",
+      "accessed": "2026-05-24",
+      "note": "Goose stores LLM provider keys in the OS keyring by default; GOOSE_DISABLE_KEYRING falls back to env vars. Closest prior art in the MCP-host space to our approach."
+    },
+    {
+      "id": "doppler-mcp-architecture",
+      "title": "MCP server security: secrets management and architecture — Doppler",
+      "url": "https://www.doppler.com/blog/secure-mcp-servers-secrets-architecture",
+      "source": "doppler.com",
+      "accessed": "2026-05-24",
+      "note": "Argues for environment-variable isolation per MCP server and for fetching at server-spawn rather than agent-launch. Validates our daemon-injected model."
+    }
+  ]
+}

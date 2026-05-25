@@ -25,10 +25,10 @@
   </p>
 
   <p>
-    <span class="evidence-badge">366 citations</span>
-    <span class="evidence-badge">68 HTML pages</span>
-    <span class="evidence-badge">9 ranking matrices</span>
-    <span class="pill success">All 6 streams + GUI shootout complete</span>
+    <span class="evidence-badge">518 citations</span>
+    <span class="evidence-badge">83 HTML pages</span>
+    <span class="evidence-badge">11 ranking matrices</span>
+    <span class="pill success">6 streams + shootout + 4 closing-gap agents complete</span>
   </p>
 
   <aside class="card" style="border-left:4px solid var(--accent);background:var(--bg-faint);margin-block:1.5rem">
@@ -38,16 +38,26 @@
   </aside>
 
   <aside class="card" style="border-left:4px solid var(--success);background:var(--bg-faint);margin-block:1.5rem">
-    <h4 style="margin-top:0">v1.0 lockdown — 2026-05-24 decisions</h4>
-    <p style="margin-bottom:0.5rem">The product owner reviewed all 6 streams and resolved the following decisions. These are now <strong>committed for v1.0</strong> and supersede any contradicting language in the original stream pages (kept as authored snapshots).</p>
+    <h4 style="margin-top:0">v1.0 lockdown — 2026-05-24 (latest)</h4>
+    <p style="margin-bottom:0.5rem">The product owner reviewed all 6 streams + the GUI shootout + the gap analysis, and committed the following for v1.0. These supersede contradicting language in the original stream pages (kept as authored snapshots).</p>
     <ol style="margin-top:0">
-      <li><strong>Drop Windows.</strong> v1.0 ships macOS + Linux only. Removes named-pipes / SDDL / AppContainer complexity from <a href="./precise-crane-conduit/">S4</a> and <a href="./stoic-badger-sandbox/">S2</a>. Windows installer story deferred indefinitely.</li>
-      <li><strong>Auto-spawn the daemon.</strong> <code>mcpm exec</code> auto-spawns <code>mcpd</code> on first call (~200ms one-time). On first GUI launch, if the OS has a service manager (systemd-user on Linux, launchd on macOS), prompt the user once: "register mcpd as a background service?" — opt-in, not default. Obsoletes the proposed "mcpd-lite" from <a href="./clever-fox-bridge/">S6</a> entirely.</li>
-      <li><strong>Toolchain scope is user-configurable per registered project.</strong> Both per-user and per-project canonical scopes supported; the user picks when registering a project. Lockfile location follows the scope: per-user → centralized at <code>~/.config/mcp-manager/projection.lock</code>; per-project → sidecar at the project root (<code>.mcp-manager.lock</code>). Clients can also initialize/update via <code>mcpm</code> CLI to register a project + toolchain set.</li>
-      <li><strong>JetBrains XML projection ships in v1.0.</strong> Despite the higher implementation risk flagged by <a href="./clever-fox-bridge/">S6</a>, JetBrains IDE support (IntelliJ / PyCharm / RustRover / WebStorm / CLion / GoLand) is non-negotiable for v1.0.</li>
-      <li><strong>Curated community toolchain registry deferred to v1.1.</strong> See <a href="./future-features-v1.1.html">future features (v1.1)</a>.</li>
-      <li><strong>GUI stack: Actix-Web + Askama, served from inside <code>mcpd</code>.</strong> All 3 UI research agents reported back; <a href="./ui-shootout/">the shootout</a> ranks Actix at 8.57 / Dioxus-desktop at 8.13 / Tauri+Leptos at 6.71 on a 13-criterion UX-weighted matrix. Localhost SSR web app (Pi-hole / Sonarr pattern) with tray-icon helper + PWA manifest for "feels like an app". S5's earlier Tauri+Leptos recommendation is superseded.</li>
-      <li><strong>Daemon supervision surface is broad, not narrow.</strong> mcpd is a real process supervisor, not just a launcher: restart-on-crash with jittered exponential backoff + max-attempts within a sliding window, OOM detection (cgroupv2 on Linux; jetsam-inferred on macOS), append-only audit log of every state change, and tail-API access to three log streams (mcpd itself, each MCP server's stdout/stderr, and the audit log). See the "Daemon supervision surface" convergent card below for the full enumeration.</li>
+      <li><strong>Platforms: macOS + Linux only — permanently.</strong> Windows is dropped, never to return. Removes named-pipes / SDDL / AppContainer complexity from <a href="./precise-crane-conduit/">S4</a> and <a href="./stoic-badger-sandbox/">S2</a>.</li>
+      <li><strong>Auto-spawn the daemon.</strong> <code>mcpm exec</code> auto-spawns <code>mcpd</code> on first call (~200ms one-time). On first launch, if the OS has a service manager (systemd-user on Linux, launchd on macOS), prompt the user once: "register mcpd as a background service?" — opt-in, not default. Obsoletes the proposed "mcpd-lite" from <a href="./clever-fox-bridge/">S6</a> entirely.</li>
+      <li><strong>Toolchain scope is user-configurable per registered project.</strong> Both per-user and per-project canonical scopes supported; the user picks when registering a project. Lockfile location follows the scope (per-user → <code>~/.config/mcp-manager/projection.lock</code>; per-project → <code>.mcp-manager.lock</code>).</li>
+      <li><strong>JetBrains XML projection ships in v1.0.</strong> IntelliJ / PyCharm / RustRover / WebStorm / CLion / GoLand all Tier-1.</li>
+      <li><strong>Daemon supervision: full process supervisor.</strong> Restart-on-crash with jittered backoff + max-attempts; cgroupv2-based OOM handling on Linux + jetsam-inferred on macOS; append-only JSONL audit log; ring-buffered tail API for 3 log streams (mcpd / each MCP server / audit). See the "Daemon supervision surface" card below.</li>
+      <li><strong>Distribution: curl-installer + Nix flake.</strong> Two paths for installing mcpd itself: a curl-piped install script (familiar UX) and a Nix flake (reproducible, the source-of-truth path). No Homebrew formula or App Store distribution in v1.0.</li>
+      <li><strong>GUI deferred to a future version.</strong> v1.0 surfaces are <strong>CLI + TUI + config files only</strong>. The <a href="./ui-shootout/">GUI shootout</a> is preserved as research for whenever the GUI ships (recommendation stands: Actix + Askama inside mcpd). Falls out: no Actix-Web in v1.0, no HTTP server in mcpd, no HTTP/SSE bridge — the wire is just JSON-RPC over UDS. See <a href="./future-features-v1.1.html#gui">future features</a>.</li>
+      <li><strong>Server discovery + install:</strong> multi-source federation. v1.0 ships with 3 default registries baked in (<code>official</code> = LF-stewarded MCP Registry, <code>github</code> = GitHub MCP Registry, <code>docker</code> = Docker MCP Catalog when Docker is present). Minisign on the index, cosign-when-present on packages. Users add private/corp sources via apt-style <code>--signed-by</code>. See <a href="./closing-gaps/server-registry/">closing-gaps/server-registry</a>.</li>
+      <li><strong>Onboarding:</strong> <code>mcpm init</code> as a thin scaffolder (NOT a doctor). Interactive default + full non-interactive via <code>--defaults -y</code>. Idempotent (re-runs are no-ops). Direnv-style trust gate for project configs cloned from elsewhere. Service-manager prompt defaults to <em>no</em> because the daemon auto-spawns from <code>mcpm exec</code> anyway. See <a href="./closing-gaps/onboarding/">closing-gaps/onboarding</a>.</li>
+      <li><strong>Secrets v1.0:</strong> one <code>SecretStore</code> Rust trait, two backends (<code>OsKeyringStore</code> via macOS Keychain / Linux libsecret + <code>EnvVarPassthroughStore</code> read-only escape hatch), composed via <code>LayeredSecretStore</code>. Values never on argv (<code>rpassword</code>-prompted). <code>#[non_exhaustive]</code> + opt-in subtraits leave room for v1.1 vault providers / rotation / leasing with zero re-architecture. See <a href="./closing-gaps/secrets-lifecycle/">closing-gaps/secrets-lifecycle</a>.</li>
+      <li><strong>Version management:</strong> range-in-manifest + exact-in-lockfile (Cargo/npm model). Three-phase MCP-spec-version negotiation (install-time allow-list check, initialize-time advertisement, wire-time re-check). Renovate vocabulary for <code>mcpm update</code> classification (PATCH / MINOR / MAJOR / DIGEST / PIN / MAINT + SPEC). Auto-runs <code>mcpm test</code> after every classified change. See <a href="./closing-gaps/version-management/">closing-gaps/version-management</a>.</li>
+      <li><strong>Health check.</strong> v1.0 ships <code>mcpm test &lt;server&gt;</code> — spawns the server, runs <code>initialize</code> + <code>tools/list</code>, reports status. CI-friendly.</li>
+      <li><strong>Documentation: <code>mcpm help</code> + mdbook in repo.</strong> CLI help text rich enough to be self-sufficient for power users; mdbook (<code>docs/</code>) for the docs site, built and deployed alongside the project.</li>
+      <li><strong>Curated community toolchain registry deferred to v1.1.</strong> v1.0's TOML escape hatch covers the immediate need. See <a href="./future-features-v1.1.html">future features (v1.1)</a>.</li>
+      <li><strong>No telemetry, ever.</strong> No phone-home, no anonymous metrics, no opt-in pings. This is a permanent project commitment, not a v1.0 deferral.</li>
+      <li><strong>License: Apache 2.0.</strong></li>
+      <li><strong>Scale target: 10s of MCPs per user</strong>, not thousands. v1.0 optimizes for a few dozen managed servers; the daemon's memory/process budget reflects that.</li>
     </ol>
   </aside>
 
@@ -80,30 +90,23 @@
         <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./steady-bear-foundation/research-core-architecture-runtime.html">S3</a> · Constraint type: upstream dependency.</p>
       </article>
 
-      <article class="card">
-        <h4>CLI</h4>
-        <p><code>clap</code> with derive macros. Consensus pick across the Rust ecosystem (Cargo, ripgrep, uv).</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>.</p>
-      </article>
-
-      <article class="card">
-        <h4>TUI</h4>
-        <p><code>ratatui</code> + <code>crossterm</code>. Consensus pick (bottom, gitui, yazi, atuin, trippy).</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>.</p>
-      </article>
-
       <article class="card" style="border-color:var(--success)">
-        <h4>GUI</h4>
-        <p><strong>Actix-Web + Askama, served from inside <code>mcpd</code></strong> on <code>localhost:NNNN</code>. Server-rendered Rust HTML + SSE for live updates + HTMX for interactivity. Zero IPC, single binary, single auth surface. The user visits a URL in their existing browser — Pi-hole / Sonarr / Jellyfin pattern. A small <code>mcpd-tray</code> helper + PWA manifest restore most of the "feels like an app" UX.</p>
-        <p>Free wins: browser-grade accessibility (the most accessible runtime ever shipped), 60ms first paint (vs. 350–450ms for Tauri options), opt-in <code>--bind 0.0.0.0</code> unlocks LAN/mobile management on day one.</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./ui-shootout/">ui-shootout</a> (3-agent comparison, 2026-05-24). Supersedes <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>'s earlier Tauri+Leptos pick.</p>
+        <h4>Client surfaces: TUI + CLI + config files</h4>
+        <p>v1.0 ships <strong>three interactive surfaces — no GUI</strong>:</p>
+        <ul>
+          <li><strong>CLI</strong> — <code>clap</code> with derive macros. Primary surface for scripting, automation, and power users.</li>
+          <li><strong>TUI</strong> — <code>ratatui</code> + <code>crossterm</code>. The interactive surface for browsing servers, tailing logs, editing canonical config, viewing audit log. Runs entirely in the terminal — no localhost server, no browser.</li>
+          <li><strong>Config files</strong> — TOML (mcpd's canonical state). Hand-editable. <code>mcpm config edit</code> opens the user's <code>$EDITOR</code>.</li>
+        </ul>
+        <p>GUI is deferred. The <a href="./ui-shootout/">GUI shootout</a> remains as pre-decided research (Actix+Askama inside mcpd) for whenever a GUI is added; see <a href="./future-features-v1.1.html#gui">future features</a>.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a> + 2026-05-24 lockdown (GUI deferred).</p>
       </article>
 
       <article class="card">
         <h4>Client ↔ daemon wire</h4>
-        <p><strong>JSON-RPC 2.0 over Unix domain socket / Windows named pipe</strong>. JSON-RPC affinity is decisive — MCP itself uses JSON-RPC, so the daemon shares its parser/encoder between client-facing and MCP-server-facing code.</p>
-        <p>Auxiliary <strong>HTTP/SSE bridge</strong> is <strong>mandatory in v1.0</strong> because the Tauri GUI's WebView cannot dial UDS.</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./precise-crane-conduit/recommendation-client-api-summary.html">S4</a> · Constraint resolved by <a href="./nimble-raven-toolkit/">S5</a>'s Tauri choice.</p>
+        <p><strong>JSON-RPC 2.0 over Unix domain socket</strong>. JSON-RPC affinity is decisive — MCP itself uses JSON-RPC, so the daemon shares its parser/encoder between client-facing and MCP-server-facing code.</p>
+        <p>The previously-mandatory <em>HTTP/SSE bridge</em> is no longer in v1.0 — it was required only to feed the Tauri GUI's WebView, and the GUI is now deferred. v1.0 is UDS-only; streaming (e.g. log tails) is JSON-RPC streaming over UDS.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./precise-crane-conduit/recommendation-client-api-summary.html">S4</a> · Simplified by 2026-05-24 GUI deferral.</p>
       </article>
 
       <article class="card">
@@ -142,7 +145,7 @@
       <article class="card" style="border-color:var(--success)">
         <h4>Daemon UX: auto-spawn</h4>
         <p>The CLI <code>mcpm exec</code> wrapper auto-spawns <code>mcpd</code> if it isn't running (~200ms one-time, then a UDS connection). Subsequent clients (Zed, Claude Code, Cursor, …) get the already-running daemon for free. The proposed "mcpd-lite" alternative is obsolete.</p>
-        <p>On <em>first GUI launch only</em>, the GUI detects the OS's service manager (systemd-user on Linux, launchd on macOS) and prompts the user once: "register mcpd as a background service?". Opt-in, not default.</p>
+        <p>On <em>first launch</em> (the first time <code>mcpm</code> runs at all), the CLI detects the OS's service manager (systemd-user on Linux, launchd on macOS) and prompts the user once: "register mcpd as a background service?". Opt-in, not default. The full first-launch UX is owned by closing-gap agent B (onboarding).</p>
         <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./steady-bear-foundation/recommendation-core-architecture-summary.html">S3</a> + v1.0 lockdown.</p>
       </article>
 
@@ -157,6 +160,67 @@
         <h4>Platforms: macOS + Linux only</h4>
         <p>v1.0 ships macOS + Linux. Windows support is <strong>not in v1.0</strong>. Removes named-pipes / SDDL / AppContainer / Docker-Desktop-on-Windows complexity from the design space. UDS is the only IPC primitive; sandbox runtime is the macOS Sandbox + bubblewrap on Linux; service-manager integration is launchd + systemd-user.</p>
         <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: v1.0 lockdown (2026-05-24).</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Distribution: curl + Nix flake</h4>
+        <p>v1.0 ships <strong>two install paths</strong>: a <code>curl -sSf https://… | sh</code> installer (familiar UX, downloads a signed prebuilt binary), and a <strong>Nix flake</strong> (<code>nix run github:user/mcp-manager</code>; reproducible, the source-of-truth path). No Homebrew formula, no App Store, no AppImage in v1.0.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: 2026-05-24 lockdown.</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Health check: <code>mcpm test &lt;server&gt;</code></h4>
+        <p>First-class CI-friendly command. Spawns the server in isolation, runs MCP <code>initialize</code> + <code>tools/list</code>, verifies a valid JSON-RPC handshake, reports tools/resources/prompts the server advertises, and exits with appropriate exit code. The TUI surfaces the same check as a per-server "verify" action.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: 2026-05-24 lockdown.</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Documentation: <code>mcpm help</code> + mdbook</h4>
+        <p>CLI help text rich enough to be self-sufficient (every subcommand has full examples, not just flag descriptions). Docs site is an <a href="https://rust-lang.github.io/mdBook/">mdbook</a> under <code>docs/</code> in the repo, built and deployed alongside the project. No separate docs-site repo.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: 2026-05-24 lockdown.</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Project commitments (permanent, not v1.0-only)</h4>
+        <ul>
+          <li><strong>License:</strong> Apache 2.0.</li>
+          <li><strong>Platforms:</strong> macOS + Linux. <strong>Windows is never supported.</strong> Not a v1.0 deferral — a permanent project decision.</li>
+          <li><strong>Telemetry:</strong> none, ever. No phone-home, no anonymous metrics, no opt-in pings. Permanent project commitment.</li>
+          <li><strong>Scale target:</strong> 10s of MCPs per user, not thousands. Architecture optimizes for "a few dozen managed servers" — not a global package index.</li>
+        </ul>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: 2026-05-24 lockdown (permanent).</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Server discovery + install</h4>
+        <p><strong>Multi-source federation</strong>. 3 default registries baked into the binary: <code>official</code> (LF-stewarded MCP Registry), <code>github</code> (GitHub MCP Registry), <code>docker</code> (Docker MCP Catalog, auto-enabled when Docker is present). Users add private/corp registries with <code>mcpm registry add &lt;name&gt; &lt;url&gt; --signed-by &lt;pubkey&gt;</code>.</p>
+        <p><strong>Trust split</strong>: minisign Ed25519 on the index (required for defaults); Sigstore/PEP 740 verify-when-present on the underlying npm/PyPI package; cosign required for OCI images from the <code>docker</code> source. Pubkeys baked into mcpd binary; rotation via hotfix release.</p>
+        <p>Search is local (BM25 over cached indexes); queries never leave the machine on default sources.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/server-registry/">closing-gaps/server-registry</a> (Agent A, 38 citations).</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Onboarding: <code>mcpm init</code></h4>
+        <p><strong>Thin scaffolder, not a doctor.</strong> Models on <code>aws configure</code> + <code>terraform init</code> + <code>npm init -y</code>. All choices have bracketed defaults; <code>-y</code> skips confirmations; <code>--defaults</code> accepts every default.</p>
+        <p>Five canonical transcripts documented: lucky-day interactive (~30s), full non-interactive (Nix/CI), project-scope with import-from stub, freshly-cloned-repo with direnv-style trust gate, and the service-manager prompt (declines by default since daemon auto-spawns from <code>mcpm exec</code>).</p>
+        <p>Idempotent by construction; re-running is a no-op + summary.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/onboarding/">closing-gaps/onboarding</a> (Agent B, 37 citations).</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Secrets lifecycle (v1.0 + extension surface)</h4>
+        <p><strong>One trait, two backends.</strong> <code>SecretStore</code> trait with <code>OsKeyringStore</code> (macOS Keychain + Linux libsecret via the <code>keyring</code> crate) and <code>EnvVarPassthroughStore</code> (read-only env-var escape hatch), composed via <code>LayeredSecretStore</code>.</p>
+        <p>v1.0 CLI: <code>mcpm secret set/list/unset</code>. Values never on argv (<code>rpassword</code> TTY-only). Audit-logged as <code>secret.{read,write,unset,list}</code>; values never appear in events.</p>
+        <p><code>#[non_exhaustive] SecretRef</code> + opt-in subtraits <code>RotatableSecretStore</code> / <code>LeasedSecretStore</code> mean v1.1+ vault providers (1Password, Bitwarden, Vault, Doppler, Infisical, AWS/GCP/Azure SM) plug in without re-architecture.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/secrets-lifecycle/">closing-gaps/secrets-lifecycle</a> (Agent C, 32 citations).</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Version management + MCP spec negotiation</h4>
+        <p><strong>Range-in-manifest, exact-in-lockfile</strong> (Cargo/npm model). Lockfile (TOML) co-located with the projection lockfile per scope.</p>
+        <p><strong>3-phase MCP-spec-version negotiation</strong>: (1) install-time check against mcpd's spec allow-list (baked into binary); (2) initialize-time advertise-and-pick per the MCP lifecycle contract; (3) wire-time re-emission as <code>MCP-Protocol-Version</code> header on every Streamable HTTP request.</p>
+        <p><code>mcpm update</code> classifies changes with Renovate's vocabulary: <code>[PATCH]</code> auto-apply, <code>[MINOR]</code> confirm-once, <code>[MAJOR]</code> refused without <code>--accept-breaking</code>, <code>[DIGEST]</code> refused as supply-chain anomaly, plus a new <code>[SPEC]</code> class for spec-version bumps. Health check (<code>mcpm test</code>) auto-runs after each change; on failure, lockfile entry rolls back atomically.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/version-management/">closing-gaps/version-management</a> (Agent D, 45 citations).</p>
       </article>
 
       <article class="card" style="border-color:var(--success);grid-column:1/-1">
@@ -201,11 +265,11 @@
     <h2>Architecture sketch</h2>
     <p>Composing the convergent decisions above. Each layer links to the stream that owns it.</p>
     <pre><code>┌─────────────────────────────────────────────────────────────────────┐
-│ Clients                                            ← Stream 5 owns  │
+│ Clients (v1.0)                                     ← Stream 5 owns  │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐    │
-│  │  CLI         │  │  TUI         │  │  GUI                   │    │
-│  │  clap derive │  │  ratatui +   │  │  Tauri 2 + Leptos      │    │
-│  │              │  │  crossterm   │  │  (Rust-WASM frontend)  │    │
+│  │  CLI         │  │  TUI         │  │  Config files          │    │
+│  │  clap derive │  │  ratatui +   │  │  TOML, hand-editable   │    │
+│  │              │  │  crossterm   │  │  `mcpm config edit`    │    │
 │  └───────┬──────┘  └───────┬──────┘  └───────────┬────────────┘    │
 │          │                 │                     │                  │
 │          └─────────────────┼─────────────────────┘                  │
@@ -218,11 +282,12 @@
 │                            │                                        │
 │   ┌────────────────────────┼─────────────────────────────────┐      │
 │   │  Wire protocol                                ← Stream 4 │      │
-│   │  JSON-RPC 2.0 over UDS / named pipe                     │      │
-│   │  + HTTP/SSE bridge (for Tauri WebView)                  │      │
-│   │  + SO_PEERCRED / SDDL auth (UDS)                        │      │
-│   │  + bearer token (HTTP)                                  │      │
+│   │  JSON-RPC 2.0 over Unix domain socket only              │      │
+│   │  Streaming (log tails) via JSON-RPC streaming responses │      │
+│   │  SO_PEERCRED auth (kernel-enforced, no token in v1.0)   │      │
 │   └────────────────────────┬─────────────────────────────────┘      │
+│                            │                                        │
+│   GUI is DEFERRED to a future version; see ui-shootout/.            │
 │                            │                                        │
 │   ┌────────────────────────▼─────────────────────────────────┐      │
 │   │  mcpd (tokio-based daemon)                  ← Stream 3   │      │
@@ -427,15 +492,18 @@
 
   <p style="margin-block:2rem;padding:1rem;background:var(--bg-elev);border-radius:var(--radius);font-size:0.9rem;color:var(--fg-muted)">
     <strong>Resolved decisions</strong> (originally open, now committed):
-    Windows isolation strategy (dropped, no Windows in v1.0) ·
-    Auto-spawn daemon (yes, with optional service-manager registration) ·
-    Wrapper-command secrets fallback / mcpd-lite (obsoleted by auto-spawn) ·
-    Canonical scope per-user vs per-project (user-configurable; both supported) ·
-    Sidecar vs centralised lock file (follows scope choice) ·
-    JetBrains XML projection (ships in v1.0) ·
-    Curated community registry (deferred to v1.1) ·
-    GUI stack: Actix + Askama (GUI inside mcpd), see <a href="./ui-shootout/">ui-shootout</a> ·
-    <strong>Daemon supervision surface (restart+backoff, OOM, audit log, 3-stream log tail)</strong>.
+    Windows is never supported (permanent) ·
+    Auto-spawn daemon + optional service-manager registration ·
+    mcpd-lite obsoleted by auto-spawn ·
+    Toolchain scope user-configurable per project (lockfile follows) ·
+    JetBrains XML projection in v1.0 ·
+    Curated community registry deferred to v1.1 ·
+    <strong>GUI deferred to a future version</strong> (Actix+Askama pre-decided for whenever it ships) ·
+    Daemon supervision surface (restart+backoff, OOM, audit, 3-stream tail) ·
+    Distribution: curl + Nix flake ·
+    Health-check command (<code>mcpm test</code>) ·
+    Docs in repo as mdbook ·
+    License Apache 2.0, no telemetry ever, scale 10s of MCPs.
     See <a href="#convergent">convergent v1.0 design</a> above for the locked-in choices.
   </p>
 

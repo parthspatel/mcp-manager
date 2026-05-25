@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>First-run onboarding flow &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+    <div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">closing-gaps</a> / onboarding</div>
+    <button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+  </div>
+</header>
+
+<main class="container">
+<h1>Closing gap &middot; First-run / onboarding flow</h1>
+
+<p class="lede">
+The six original v1.0 streams catalogued <em>what</em> MCP Manager must do but did not specify the moment a user crosses the threshold from "I just installed this" to "<code>mcpm exec</code> works the way I expect." This page closes that gap. The onboarding flow ties together four things that have to land in one ceremony: <strong>(1)</strong> a service-manager opt-in (launchd or systemd-user), <strong>(2)</strong> which editors to project into (tier-1 toolchains), <strong>(3)</strong> which upstream registries to subscribe to, and <strong>(4)</strong> an optional first secret. <span class="evidence-badge">37 citations</span> <span class="pill">3 pages</span> <span class="pill">5 worked transcripts</span>
+</p>
+
+<nav class="toc">
+  <h4>Pages</h4>
+  <div class="group-label">Research</div>
+  <ul>
+    <li><a href="./research-onboarding-prior-art.html">research-onboarding-prior-art.html</a> &mdash; concrete walkthroughs of 13 comparable bootstrap flows (<code>gh auth login</code>, <code>aws configure</code>, <code>mise activate</code>, <code>terraform init</code>, etc.) with what worked, what hurt, and what mcpm should steal.</li>
+  </ul>
+  <div class="group-label">Recommendation</div>
+  <ul>
+    <li><a href="./recommendation-onboarding-flow-summary.html">recommendation-onboarding-flow-summary.html</a> &mdash; the opinionated <code>mcpm init</code> design with five end-to-end transcripts, exact prompt wording, idempotency rules, and the service-manager opt-in script.</li>
+  </ul>
+</nav>
+
+<section class="section">
+  <h2>Sibling closing-gap streams</h2>
+  <div class="card-grid">
+    <a class="card" href="../server-registry/">
+      <h3>server-registry</h3>
+      <p>How a user finds and installs an MCP server (<code>mcpm search</code> / <code>mcpm install</code>). Our <code>mcpm init</code> can invite the user to install a starter server from a curated registry but defers the actual install UX to this stream.</p>
+    </a>
+    <a class="card" href="../secrets-lifecycle/">
+      <h3>secrets-lifecycle</h3>
+      <p>Keychain-backed secrets via <code>mcpm secret set</code>. Our flow can prompt the user to set <em>one</em> secret on first run to demonstrate the round-trip, but never owns the entry UX.</p>
+    </a>
+    <a class="card" href="../version-management/">
+      <h3>version-management</h3>
+      <p>How <code>mcpd</code> itself is upgraded post-install. The handshake on first run records the installed version and the auto-update policy; this stream owns the policy semantics.</p>
+    </a>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Headline recommendation in one paragraph</h2>
+  <p>
+    <code>mcpm init</code> is a <strong>thin scaffolder, not a doctor</strong> &mdash; modelled directly on <code>aws configure</code> for default-handling, <code>terraform init</code> for project-scoped staged output, and <code>npm init -y</code> for the non-interactive escape hatch. It writes <em>exactly</em> three things on a default run: a per-user TOML config under <code>$XDG_CONFIG_HOME/mcp-manager/config.toml</code> (or the macOS equivalent), an empty <code>servers.lock</code>, and an audit-log entry recording what was created and by which mcpm version. Every prompt has a visible default in <code>[brackets]</code>, every prompt is accepted with ENTER, and every prompt maps to a long-form CLI flag so <code>mcpm init --defaults -y</code> produces an identical end state with zero stdin reads. The service-manager opt-in (launchd / systemd-user) is a <em>separate</em> prompt with its own non-interactive flag (<code>--register-service / --no-register-service</code>) and always defaults to <em>no</em>, because the daemon auto-spawns from <code>mcpm exec</code> anyway. Project-scope init (<code>mcpm project init</code> or <code>mcpm init --scope project</code>) writes a <code>.mcp-manager/</code> directory in the current repo following the same layout but never touches the user-scope config. The flow is fully <strong>idempotent</strong>: re-running prints a diff of what would change and exits zero if nothing would.
+  </p>
+</section>
+
+<section class="section">
+  <h2>What this page owns vs. what it defers</h2>
+  <table class="compare">
+    <thead><tr><th>Concern</th><th>Owned here?</th><th>If deferred, to which stream?</th></tr></thead>
+    <tbody>
+      <tr><td>The <code>mcpm init</code> command surface (args, flags, prompt sequence, defaults)</td><td><span class="pill success">Yes</span></td><td>&mdash;</td></tr>
+      <tr><td>Idempotency / re-run semantics</td><td><span class="pill success">Yes</span></td><td>&mdash;</td></tr>
+      <tr><td>Service-manager opt-in prompt UX (launchd / systemd-user)</td><td><span class="pill success">Yes</span></td><td>&mdash;</td></tr>
+      <tr><td>Toolchain auto-detection &amp; which tools to project into by default</td><td><span class="pill warn">Selection only</span></td><td>Mechanics &amp; safety: <a href="../../clever-fox-bridge/">clever-fox-bridge</a></td></tr>
+      <tr><td>Project-scope vs user-scope boundary (lockfile location)</td><td><span class="pill success">Yes</span></td><td>&mdash;</td></tr>
+      <tr><td>Where the registry list comes from</td><td><span class="pill warn">Prompt only</span></td><td>Catalog &amp; install UX: <a href="../server-registry/">server-registry</a></td></tr>
+      <tr><td>Secret entry UX (typing the value)</td><td><span class="pill">No</span></td><td><a href="../secrets-lifecycle/">secrets-lifecycle</a></td></tr>
+      <tr><td>Upgrade policy after install</td><td><span class="pill">No</span></td><td><a href="../version-management/">version-management</a></td></tr>
+      <tr><td>What happens when the daemon is already running</td><td><span class="pill warn">Detection only</span></td><td>Supervisor model: <a href="../../steady-bear-foundation/">steady-bear-foundation</a></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="section">
+  <h2>v1.0 locked constraints this design honours</h2>
+  <ul>
+    <li><strong>No browser pop-ups.</strong> Pure CLI/TUI; the device-flow pattern surveyed in <a href="./research-onboarding-prior-art.html#stripe">Stripe</a> is rejected for v1.0 because every comparable host (Claude Code, Cursor, Codex) already handles its own auth &mdash; mcpm has no central server to auth against.</li>
+    <li><strong>macOS + Linux only.</strong> Service-manager prompt branches on which manager exists; falls through quietly if neither does (rare; running inside a container).</li>
+    <li><strong>No telemetry, ever.</strong> The init flow does not phone home; the "registered servers" prompt only lists registries the user explicitly opts into.</li>
+    <li><strong>Daemon auto-spawns.</strong> The service-manager opt-in is genuinely opt-in &mdash; declining it does not break <code>mcpm exec</code>, which spawns its own daemon on demand.</li>
+    <li><strong>TUI is ratatui-based <cite data-ref="ratatui"></cite>.</strong> The interactive walk uses a small ratatui wizard for multi-select (toolchains, registries) but falls back to line-based prompts (à la <code>aws configure</code>) when stdout isn't a TTY.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer class="page-footer">
+  <div class="container">
+    <p><a href="../../index.html">&larr; v1.0 ideation hub</a> &middot; <a href="../">closing-gaps index</a></p>
+  </div>
+</footer>
+</body>
+</html>

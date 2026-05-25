@@ -1,0 +1,300 @@
+{
+  "entries": [
+    {
+      "id": "gh-auth-login",
+      "title": "gh auth login — GitHub CLI manual",
+      "url": "https://cli.github.com/manual/gh_auth_login",
+      "source": "cli.github.com",
+      "accessed": "2026-05-24",
+      "note": "Documents the interactive web-flow and the --with-token non-interactive variant, plus the prompt sequence (host, protocol, auth method)."
+    },
+    {
+      "id": "gh-auth-overview",
+      "title": "gh auth — Authenticate with GitHub",
+      "url": "https://cli.github.com/manual/gh_auth",
+      "source": "cli.github.com",
+      "accessed": "2026-05-24",
+      "note": "Top-level auth command surface; shows how login is the bootstrap entry point separate from configuration."
+    },
+    {
+      "id": "aws-configure",
+      "title": "aws configure — AWS CLI Command Reference",
+      "url": "https://docs.aws.amazon.com/cli/latest/reference/configure/",
+      "source": "docs.aws.amazon.com",
+      "accessed": "2026-05-24",
+      "note": "Bracketed-default prompt convention ([None] / [us-east-1]); ENTER preserves existing value; idempotent re-run pattern."
+    },
+    {
+      "id": "aws-configure-quickstart",
+      "title": "Setting up the AWS CLI",
+      "url": "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-quickstart.html",
+      "source": "docs.aws.amazon.com",
+      "accessed": "2026-05-24",
+      "note": "End-to-end onboarding walkthrough: key, region, output format. Configuration file written to ~/.aws/config."
+    },
+    {
+      "id": "aws-config-files",
+      "title": "Configuration and credential file settings — AWS CLI",
+      "url": "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html",
+      "source": "docs.aws.amazon.com",
+      "accessed": "2026-05-24",
+      "note": "Defines how the configure command writes to ~/.aws/config and ~/.aws/credentials; precedence rules for env vs file."
+    },
+    {
+      "id": "mise-activate",
+      "title": "mise activate — mise-en-place CLI reference",
+      "url": "https://mise.jdx.dev/cli/activate.html",
+      "source": "mise.jdx.dev",
+      "accessed": "2026-05-24",
+      "note": "Activation hook command; `eval \"$(mise activate zsh)\"` pattern is the model we borrow for `mcpm shell-init`."
+    },
+    {
+      "id": "mise-getting-started",
+      "title": "Getting Started — mise",
+      "url": "https://mise.jdx.dev/getting-started.html",
+      "source": "mise.jdx.dev",
+      "accessed": "2026-05-24",
+      "note": "Per-shell install snippets (bash/zsh/fish/powershell); echoes the exact line to append; idempotent guidance."
+    },
+    {
+      "id": "mise-use",
+      "title": "mise use — pin tools to a project",
+      "url": "https://mise.jdx.dev/cli/use.html",
+      "source": "mise.jdx.dev",
+      "accessed": "2026-05-24",
+      "note": "Creates a `mise.toml` on first use; --pin flag; project-vs-global scope distinction parallels mcpm scope flag."
+    },
+    {
+      "id": "direnv-hook",
+      "title": "Setup / Hook into your shell — direnv",
+      "url": "https://direnv.net/docs/hook.html",
+      "source": "direnv.net",
+      "accessed": "2026-05-24",
+      "note": "`eval \"$(direnv hook bash)\"` install line. Notes the importance of hooking AFTER other prompt-mutating tools."
+    },
+    {
+      "id": "direnv-allow",
+      "title": "direnv — unclutter your .profile",
+      "url": "https://direnv.net/",
+      "source": "direnv.net",
+      "accessed": "2026-05-24",
+      "note": "Explains the `direnv allow` consent gate after a .envrc appears in a new directory — security pattern mcpm borrows for project trust."
+    },
+    {
+      "id": "terraform-init",
+      "title": "terraform init command reference",
+      "url": "https://developer.hashicorp.com/terraform/cli/commands/init",
+      "source": "developer.hashicorp.com",
+      "accessed": "2026-05-24",
+      "note": "Project-scoped init that is idempotent: writes a .terraform/ dir, a .terraform.lock.hcl, and prints staged sections (Initializing the backend... / providers... / modules)."
+    },
+    {
+      "id": "terraform-init-tutorial",
+      "title": "Initialize Terraform configuration — HashiCorp Developer",
+      "url": "https://developer.hashicorp.com/terraform/tutorials/cli/init",
+      "source": "developer.hashicorp.com",
+      "accessed": "2026-05-24",
+      "note": "Worked transcript of `terraform init` for a fresh project — staged output, success summary, what to run next."
+    },
+    {
+      "id": "cargo-new",
+      "title": "cargo new — The Cargo Book",
+      "url": "https://doc.rust-lang.org/cargo/commands/cargo-new.html",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "Scaffolds a new package with a Cargo.toml, src/, and a git repo; `--vcs none` and `--quiet` suppress side effects."
+    },
+    {
+      "id": "cargo-init",
+      "title": "cargo init — The Cargo Book",
+      "url": "https://doc.rust-lang.org/cargo/commands/cargo-init.html",
+      "source": "doc.rust-lang.org",
+      "accessed": "2026-05-24",
+      "note": "Init-in-existing-directory variant; respects pre-existing files; refuses to clobber. Model for our --scope project case."
+    },
+    {
+      "id": "pipx-ensurepath",
+      "title": "pipx ensurepath — pipx docs",
+      "url": "https://pipx.pypa.io/latest/how-to/configure-paths/",
+      "source": "pipx.pypa.io",
+      "accessed": "2026-05-24",
+      "note": "Shell-config-mutating onboarding step. Edits ~/.bashrc / ~/.zprofile / ~/.zshrc. --prepend / --all-shells options. Idempotent."
+    },
+    {
+      "id": "pipx-ensurepath-fig",
+      "title": "pipx ensurepath flag reference (Fig.io)",
+      "url": "https://fig.io/manual/pipx/ensurepath",
+      "source": "fig.io",
+      "accessed": "2026-05-24",
+      "note": "Concise enumeration of ensurepath flags including --force; useful contrast for our `mcpm shell-init` design."
+    },
+    {
+      "id": "op-signin",
+      "title": "Sign in to your 1Password account manually — 1Password Developer",
+      "url": "https://developer.1password.com/docs/cli/sign-in-manually/",
+      "source": "developer.1password.com",
+      "accessed": "2026-05-24",
+      "note": "`op account add` interactive prompts (sign-in address, email, secret key, password); --account shorthand for non-interactive use."
+    },
+    {
+      "id": "op-multi-account",
+      "title": "Use 1Password CLI with multiple accounts",
+      "url": "https://developer.1password.com/docs/cli/use-multiple-accounts/",
+      "source": "developer.1password.com",
+      "accessed": "2026-05-24",
+      "note": "Arrow-key account selector at signin time; pattern for choosing among many possible default values."
+    },
+    {
+      "id": "npm-init",
+      "title": "npm-init — npm Docs",
+      "url": "https://docs.npmjs.com/cli/v11/commands/npm-init/",
+      "source": "docs.npmjs.com",
+      "accessed": "2026-05-24",
+      "note": "Defines the canonical `-y` / `--yes` flag: skip the questionnaire and accept defaults; we adopt the same flag semantics verbatim."
+    },
+    {
+      "id": "pnpm-init",
+      "title": "pnpm init — pnpm",
+      "url": "https://pnpm.io/cli/init",
+      "source": "pnpm.io",
+      "accessed": "2026-05-24",
+      "note": "Deliberately non-interactive by default; pnpm chose `-y` is implicit. Argument for mcpm: don't force prompts when defaults are fine."
+    },
+    {
+      "id": "kubectl-set-context",
+      "title": "kubectl config set-context — Kubernetes",
+      "url": "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_config/kubectl_config_set-context/",
+      "source": "kubernetes.io",
+      "accessed": "2026-05-24",
+      "note": "Per-flag setup (no single interactive `init`); model for the `mcpm config set` non-interactive escape hatch."
+    },
+    {
+      "id": "kubectl-use-context",
+      "title": "kubectl config use-context — Kubernetes",
+      "url": "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_config/kubectl_config_use-context/",
+      "source": "kubernetes.io",
+      "accessed": "2026-05-24",
+      "note": "How kubectl picks which context to use — file-based, no per-command prompt. Lesson: cache the choice, don't ask twice."
+    },
+    {
+      "id": "poetry-init",
+      "title": "Poetry — Basic usage / poetry init",
+      "url": "https://python-poetry.org/docs/basic-usage/",
+      "source": "python-poetry.org",
+      "accessed": "2026-05-24",
+      "note": "Interactive pyproject.toml builder; bracketed defaults; every prompt is skippable. Mid-2020s gold standard for project-scaffolding TUIs."
+    },
+    {
+      "id": "stripe-login",
+      "title": "stripe login command — Stripe CLI Wiki",
+      "url": "https://github.com/stripe/stripe-cli/wiki/login-command",
+      "source": "github.com/stripe/stripe-cli",
+      "accessed": "2026-05-24",
+      "note": "Device-flow pairing-code pattern and `--interactive` flag for no-browser key entry — directly applicable to a CLI-only auth UX."
+    },
+    {
+      "id": "stripe-cli-docs",
+      "title": "Stripe CLI Reference",
+      "url": "https://docs.stripe.com/cli",
+      "source": "docs.stripe.com",
+      "accessed": "2026-05-24",
+      "note": "Overview of the Stripe CLI's bootstrap commands; pairs with login to set up local state."
+    },
+    {
+      "id": "clig-dev",
+      "title": "Command Line Interface Guidelines",
+      "url": "https://clig.dev/",
+      "source": "clig.dev",
+      "accessed": "2026-05-24",
+      "note": "Source for: idempotence (\"running twice is safe\"), confirm-before-destructive, --force escape hatch, conversational > inquisitive prompts."
+    },
+    {
+      "id": "clig-github",
+      "title": "cli-guidelines/cli-guidelines on GitHub",
+      "url": "https://github.com/cli-guidelines/cli-guidelines",
+      "source": "github.com/cli-guidelines",
+      "accessed": "2026-05-24",
+      "note": "Canonical source repo for clig.dev; community-maintained CLI design principles."
+    },
+    {
+      "id": "xdg-basedir",
+      "title": "XDG Base Directory Specification (freedesktop.org)",
+      "url": "https://specifications.freedesktop.org/basedir/latest/",
+      "source": "specifications.freedesktop.org",
+      "accessed": "2026-05-24",
+      "note": "$XDG_CONFIG_HOME / $XDG_STATE_HOME / $XDG_CACHE_HOME — where mcpm writes config (config), service state (state), and download cache (cache)."
+    },
+    {
+      "id": "xdg-archwiki",
+      "title": "XDG Base Directory — ArchWiki",
+      "url": "https://wiki.archlinux.org/title/XDG_Base_Directory",
+      "source": "wiki.archlinux.org",
+      "accessed": "2026-05-24",
+      "note": "Application-author-facing summary with macOS deviation notes (apps frequently fall back to ~/.config on macOS by convention)."
+    },
+    {
+      "id": "ratatui",
+      "title": "Ratatui — Rust crate for terminal user interfaces",
+      "url": "https://ratatui.rs/",
+      "source": "ratatui.rs",
+      "accessed": "2026-05-24",
+      "note": "The TUI library underlying the mcpm wizard; widget composition, event loop, theme handling."
+    },
+    {
+      "id": "tui-prompts",
+      "title": "tui-prompts — beautiful prompts for ratatui",
+      "url": "https://crates.io/crates/tui-prompts",
+      "source": "crates.io",
+      "accessed": "2026-05-24",
+      "note": "Drop-in prompt widgets (text input, password, select) for ratatui; candidate library for the mcpm init wizard."
+    },
+    {
+      "id": "cliclack-comparison",
+      "title": "Comparison of Rust CLI Prompts: cliclack, dialoguer, promptly, inquire",
+      "url": "https://fadeevab.com/comparison-of-rust-cli-prompts/",
+      "source": "fadeevab.com",
+      "accessed": "2026-05-24",
+      "note": "Survey of Rust prompt libraries with screenshots. Useful for picking the non-ratatui fallback path (when stdout isn't a TTY)."
+    },
+    {
+      "id": "clack-design",
+      "title": "Elevate Your CLI Tools with @clack/prompts",
+      "url": "https://www.blacksrc.com/blog/elevate-your-cli-tools-with-clack-prompts",
+      "source": "blacksrc.com",
+      "accessed": "2026-05-24",
+      "note": "Modern prompt-UX patterns: conservative escapes, intro/outro framing, cancel handling. We borrow the intro/outro framing for mcpm init."
+    },
+    {
+      "id": "launchd-info",
+      "title": "A launchd Tutorial",
+      "url": "https://www.launchd.info/",
+      "source": "launchd.info",
+      "accessed": "2026-05-24",
+      "note": "LaunchAgent vs LaunchDaemon distinction; `launchctl bootstrap gui/$(id -u)` modern command; per-user plist location."
+    },
+    {
+      "id": "systemd-user",
+      "title": "systemd user — Arch Linux Wiki",
+      "url": "https://wiki.archlinux.org/title/Systemd/User",
+      "source": "wiki.archlinux.org",
+      "accessed": "2026-05-24",
+      "note": "`systemctl --user enable --now mcpd.service` pattern; lingering for headless persistence; XDG_RUNTIME_DIR socket binding."
+    },
+    {
+      "id": "react-deprecate-cra",
+      "title": "Sunsetting Create React App — React Blog",
+      "url": "https://react.dev/blog/2025/02/14/sunsetting-create-react-app",
+      "source": "react.dev",
+      "accessed": "2026-05-24",
+      "note": "Cautionary tale: a `create-*` scaffolder loses momentum if init becomes a maintenance burden. Argues for thin-init, fat-doctor."
+    },
+    {
+      "id": "create-next-app",
+      "title": "CLI: create-next-app — Next.js Docs",
+      "url": "https://nextjs.org/docs/app/api-reference/cli/create-next-app",
+      "source": "nextjs.org",
+      "accessed": "2026-05-24",
+      "note": "Modern interactive scaffolder; \"use defaults?\" yes/no shortcut before per-question prompts. Pattern: one umbrella default-accept before per-item prompts."
+    }
+  ]
+}
