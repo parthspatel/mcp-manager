@@ -66,10 +66,17 @@
     <ul>
       <li><a href="#convergent">Convergent v1.0 design</a></li>
       <li><a href="#sketch">Architecture sketch</a></li>
-      <li><a href="#streams">Stream outputs</a></li>
+      <li><a href="#streams">Stream outputs</a> — 6 main streams + GUI shootout + closing-gaps</li>
       <li><a href="#cross-stream">Cross-stream dependency map</a></li>
       <li><a href="#open-questions">Open questions for v1.0 scoping</a></li>
       <li><a href="#how-to-read">How to read each stream</a></li>
+    </ul>
+    <h4 style="margin-top:1rem">Cross-cutting artifacts</h4>
+    <ul>
+      <li><a href="./ux-design-tui-config.html">★ UX design — TUI + config files</a> (locks in the interactive surface)</li>
+      <li><a href="./closing-gaps/">Closing-gaps hub</a> — 4 focused-design agents (registry, onboarding, secrets, versioning)</li>
+      <li><a href="./ui-shootout/">GUI shootout</a> (deferred — preserved as v1.x research)</li>
+      <li><a href="./future-features-v1.1.html">Future features (v1.1)</a></li>
     </ul>
   </nav>
 
@@ -390,6 +397,27 @@
         <h3>Toolchain configuration projection</h3>
         <p><strong>Headline:</strong> Managed-block sync wins under every realistic weighting (Ansible's <code>blockinfile</code> has 10+ years of hardening). Schema drift makes data-driven TOML manifests mandatory even for bundled Tier-1 tools.</p>
         <div class="meta"><span class="pill accent">Stream 6</span><span class="pill success">Complete</span><span class="evidence-badge">56 citations</span></div>
+      </a>
+
+      <a class="stream-card" href="./ui-shootout/" style="opacity:0.85">
+        <div class="codename">ui-shootout</div>
+        <h3>GUI stack shootout (deferred)</h3>
+        <p><strong>Headline:</strong> 3 parallel agents evaluated Tauri+Leptos vs Tauri+Dioxus vs Actix+Askama. Actix+Askama-inside-mcpd won 8.57 / 8.13 / 6.71. <strong>GUI itself deferred to v1.x</strong> per 2026-05-24 lockdown; this stays as pre-decided architecture for whenever the GUI ships.</p>
+        <div class="meta"><span class="pill accent">UI shootout</span><span class="pill">Deferred</span><span class="evidence-badge">100 citations</span></div>
+      </a>
+
+      <a class="stream-card" href="./closing-gaps/">
+        <div class="codename">closing-gaps</div>
+        <h3>Closing v1.0 gaps (4 focused agents)</h3>
+        <p><strong>Headline:</strong> Resolves the 5 Tier-1 gaps from the 2026-05-24 review. 4 parallel agents — <a href="./closing-gaps/server-registry/">server-registry</a>, <a href="./closing-gaps/onboarding/">onboarding</a>, <a href="./closing-gaps/secrets-lifecycle/">secrets</a>, <a href="./closing-gaps/version-management/">version-management</a>.</p>
+        <div class="meta"><span class="pill accent">4 agents</span><span class="pill success">Complete</span><span class="evidence-badge">152 citations</span></div>
+      </a>
+
+      <a class="stream-card" href="./ux-design-tui-config.html">
+        <div class="codename">ux-design</div>
+        <h3>UX design — TUI + config files</h3>
+        <p><strong>Headline:</strong> Interactive design exercise with the product owner (2026-05-24). 10 decisions locked: lazygit-style single-screen TUI, keymap (<code>l</code>/<code>e</code>/<code>r</code>/<code>d</code>/<code>s</code>), per-stream log tabs, <code>$EDITOR</code> dispatch, layered per-project overlay with name-override, direnv-style trust gate. 9 explicit rejections recorded.</p>
+        <div class="meta"><span class="pill accent">★ Design exercise</span><span class="pill success">Complete</span><span class="evidence-badge">11 sections</span></div>
       </a>
     </div>
   </section>
