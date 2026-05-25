@@ -1,0 +1,270 @@
+{
+  "entries": [
+    {
+      "id": "tauri-2-stable",
+      "title": "Tauri 2.0 Stable Release (blog post)",
+      "url": "https://v2.tauri.app/blog/tauri-20/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-github",
+      "title": "tauri-apps/tauri — GitHub repository",
+      "url": "https://github.com/tauri-apps/tauri",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-leptos-guide",
+      "title": "Leptos — Tauri 2 first-party integration guide",
+      "url": "https://v2.tauri.app/start/frontend/leptos/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-trunk-guide",
+      "title": "Trunk — Tauri 2 frontend integration guide",
+      "url": "https://v2.tauri.app/start/frontend/trunk/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-github",
+      "title": "leptos-rs/leptos — GitHub repository",
+      "url": "https://github.com/leptos-rs/leptos",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-070-release",
+      "title": "Leptos v0.7.0 release notes (statically-typed view tree, AnyView)",
+      "url": "https://github.com/leptos-rs/leptos/releases/tag/v0.7.0",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-080-release",
+      "title": "Leptos v0.8.0 release notes",
+      "url": "https://github.com/leptos-rs/leptos/releases/tag/v0.8.0",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-docs",
+      "title": "leptos — docs.rs (latest, 0.8.x)",
+      "url": "https://docs.rs/leptos/latest/leptos/",
+      "source": "docs.rs",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-home",
+      "title": "Leptos — Home (project website)",
+      "url": "https://leptos.dev/",
+      "source": "leptos.dev",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "cargo-leptos",
+      "title": "cargo-leptos — build tool for Leptos",
+      "url": "https://github.com/leptos-rs/cargo-leptos",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-cargo-leptos-book",
+      "title": "cargo-leptos — The Leptos Book",
+      "url": "https://book.leptos.dev/ssr/21_cargo_leptos.html",
+      "source": "book.leptos.dev",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-binary-size",
+      "title": "Optimizing WASM Binary Size — The Leptos Book",
+      "url": "https://book.leptos.dev/deployment/binary_size.html",
+      "source": "book.leptos.dev",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-dev-flow",
+      "title": "Too Slow / Development Flow — Leptos discussion #2919",
+      "url": "https://github.com/leptos-rs/leptos/discussions/2919",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-ipc-concept",
+      "title": "Inter-Process Communication — Tauri 2 concept page",
+      "url": "https://v2.tauri.app/concept/inter-process-communication/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-calling-rust",
+      "title": "Calling Rust from the Frontend — Tauri 2 (commands, Channel API)",
+      "url": "https://v2.tauri.app/develop/calling-rust/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-calling-frontend",
+      "title": "Calling the Frontend from Rust — Tauri 2 (events, listen API)",
+      "url": "https://v2.tauri.app/develop/calling-frontend/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-sidecar",
+      "title": "Embedding External Binaries (Sidecar) — Tauri 2",
+      "url": "https://v2.tauri.app/develop/sidecar/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-plugin-shell",
+      "title": "Shell plugin (spawn / stdout streaming) — Tauri 2",
+      "url": "https://v2.tauri.app/plugin/shell/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-tray",
+      "title": "System Tray — Tauri 2",
+      "url": "https://v2.tauri.app/learn/system-tray/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-menu",
+      "title": "Window Menu — Tauri 2 (native menus)",
+      "url": "https://v2.tauri.app/learn/window-menu/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-webview-versions",
+      "title": "Webview Versions — Tauri 2 (WKWebView, WebKitGTK 4.1, WebView2)",
+      "url": "https://v2.tauri.app/reference/webview-versions/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-wry",
+      "title": "tauri-apps/wry — Rust WebView abstraction",
+      "url": "https://github.com/tauri-apps/wry",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-macos-bundle",
+      "title": "macOS Application Bundle — Tauri 2 distribute",
+      "url": "https://v2.tauri.app/distribute/macos-application-bundle/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-macos-sign",
+      "title": "macOS Code Signing & Notarization — Tauri 2 distribute",
+      "url": "https://v2.tauri.app/distribute/sign/macos/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-appimage",
+      "title": "AppImage — Tauri 2 distribute",
+      "url": "https://v2.tauri.app/distribute/appimage/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-debian",
+      "title": "Debian (.deb) — Tauri 2 distribute",
+      "url": "https://v2.tauri.app/distribute/debian/",
+      "source": "tauri.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-sse-feature-req",
+      "title": "[feat] provide SSE (ServerSentEvents) as alternative to websocket — plugins-workspace issue #1002",
+      "url": "https://github.com/tauri-apps/plugins-workspace/issues/1002",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-vs-electron-hopp",
+      "title": "Tauri vs. Electron: performance, bundle size, and the real trade-offs",
+      "url": "https://www.gethopp.app/blog/tauri-vs-electron",
+      "source": "gethopp.app",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-vs-electron-pkgpulse",
+      "title": "Electron vs Tauri 2026: Bundle Size, RAM, Security and Team Fit",
+      "url": "https://www.pkgpulse.com/guides/electron-vs-tauri-2026",
+      "source": "pkgpulse.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-awesome",
+      "title": "tauri-apps/awesome-tauri — Curated production apps & plugins",
+      "url": "https://github.com/tauri-apps/awesome-tauri",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "taurpc",
+      "title": "TauRPC — typesafe IPC layer for Tauri (lib.rs)",
+      "url": "https://lib.rs/crates/taurpc",
+      "source": "lib.rs",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-tauri-tutorial-dev",
+      "title": "Leptos + Tauri Tutorial — dev.to",
+      "url": "https://dev.to/davidedelpapa/leptos-tauri-tutorial-3k60",
+      "source": "dev.to",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "michalvavra-tauri-leptos",
+      "title": "michalvavra/tauri-leptos-example — reference repo",
+      "url": "https://github.com/michalvavra/tauri-leptos-example",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "boringcactus-2025-survey",
+      "title": "Rust GUI 2025 — boringcactus survey of 43 libraries (a11y + IME pass/fail)",
+      "url": "https://www.boringcactus.com/2025/04/14/2025-survey-of-rust-gui-libraries.html",
+      "source": "boringcactus.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-vs-dioxus-2026",
+      "title": "Leptos vs Dioxus: Choosing a Rust Frontend Framework in 2026",
+      "url": "https://rustify.rs/articles/leptos-vs-dioxus-rust-frontend-2026",
+      "source": "rustify.rs",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "tauri-uds-dev-to",
+      "title": "IPC Pipe vs Unix Socket for a Resident Daemon in Tauri — What I Learned",
+      "url": "https://dev.to/hiyoyok/ipc-pipe-vs-unix-socket-for-a-resident-daemon-in-tauri-what-i-learned-fa6",
+      "source": "dev.to",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "forgestream-leptos-tauri",
+      "title": "Getting started with Leptos and Tauri — ForgeStream / IDVerse",
+      "url": "https://forgestream.idverse.com/blog/20251020-getting-started-with-leptos-and-tauri/",
+      "source": "forgestream.idverse.com",
+      "accessed": "2026-05-24"
+    },
+    {
+      "id": "leptos-license",
+      "title": "leptos LICENSE — MIT",
+      "url": "https://github.com/leptos-rs/leptos/blob/main/LICENSE",
+      "source": "github.com",
+      "accessed": "2026-05-24"
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tauri 2 + Leptos — recommendation summary — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../index.html">ui-shootout</a> / <a href="./index.html">tauri-leptos</a> / recommendation</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Recommendation — Tauri 2 + Leptos</h1>
+
+<p class="lede">
+The bottom-line scorecard plus an opinionated pros/cons/gotchas writeup, intended to be read against the sibling stack pages (Tauri+Dioxus and Actix+Tera) when the orchestrator synthesizes the final pick.
+</p>
+
+<section class="section">
+<h2>Bottom line</h2>
+<p>
+Tauri 2 + Leptos is the pure-Rust front-to-back stack with the strongest type-safety story of the three candidates, a small native footprint, and inherited OS-WebView accessibility — but it pays for that with a slower dev loop than JavaScript frontends, a Tauri docs surface that lags the Leptos release line<sup><a class="cite" href="#cite-tauri-leptos-guide" data-ref="tauri-leptos-guide">[?]</a></sup>, and a hiring pool an order of magnitude smaller than React/TS. Recommended <strong>only</strong> if the team is committed to a Rust-first identity across mcpd, CLI, TUI, and GUI; otherwise Tauri+TS frontend strictly dominates on dev velocity and ecosystem depth.
+</p>
+</section>
+
+<section class="section">
+<h2>Pros</h2>
+<ul>
+  <li><strong>Shared types with mcpd</strong> are real and load-bearing: a single <code>mcpd-protocol</code> crate is imported by daemon, CLI, TUI, <em>and</em> the Leptos WASM. Wire-format drift is a compile error, not a runtime bug<sup><a class="cite" href="#cite-leptos-github" data-ref="leptos-github">[?]</a></sup>.</li>
+  <li><strong>Small footprint</strong>: 8–15 MB installer, 30–60 MB idle RAM — single-digit-percent of an equivalent Electron build, and small enough to be a casual install for a developer tool<sup><a class="cite" href="#cite-tauri-vs-electron-hopp" data-ref="tauri-vs-electron-hopp">[?]</a></sup><sup><a class="cite" href="#cite-tauri-vs-electron-pkgpulse" data-ref="tauri-vs-electron-pkgpulse">[?]</a></sup>.</li>
+  <li><strong>Accessibility is "free"</strong>: the OS WebView's accessibility tree and IME handling are inherited, and pass the boringcactus a11y bar that 94% of pure-native Rust frameworks fail<sup><a class="cite" href="#cite-boringcactus-2025-survey" data-ref="boringcactus-2025-survey">[?]</a></sup>.</li>
+  <li><strong>First-party packaging on both target OSes</strong>: <code>tauri build</code> produces signed/notarized .app/.dmg, .AppImage, and .deb with one config<sup><a class="cite" href="#cite-tauri-macos-bundle" data-ref="tauri-macos-bundle">[?]</a></sup><sup><a class="cite" href="#cite-tauri-appimage" data-ref="tauri-appimage">[?]</a></sup><sup><a class="cite" href="#cite-tauri-debian" data-ref="tauri-debian">[?]</a></sup>.</li>
+  <li><strong>Permissive license throughout</strong>: Tauri MIT/Apache-2.0, Leptos MIT, Trunk + cargo-leptos + wasm-bindgen all MIT/Apache-2.0. No GPL contamination<sup><a class="cite" href="#cite-tauri-github" data-ref="tauri-github">[?]</a></sup>.</li>
+  <li><strong>Streaming is a solved problem</strong> via <code>tauri::ipc::Channel</code> — designed for exactly the log-tail use case we need, with binary-format ordered delivery<sup><a class="cite" href="#cite-tauri-calling-rust" data-ref="tauri-calling-rust">[?]</a></sup>.</li>
+  <li><strong>Sidecar mcpd</strong> is a one-line config in Tauri + a shell-plugin spawn call; the daemon-not-ready boot case is trivial to handle<sup><a class="cite" href="#cite-tauri-sidecar" data-ref="tauri-sidecar">[?]</a></sup>.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Cons</h2>
+<ul>
+  <li><strong>Hot-reload is slow</strong> by 2026 standards: 3–4s incremental rebuilds for Rust changes, vs. sub-100ms for TS/Vite<sup><a class="cite" href="#cite-leptos-dev-flow" data-ref="leptos-dev-flow">[?]</a></sup>. CSS hot-reloads instantly, which softens the blow but doesn't eliminate it.</li>
+  <li><strong>Hiring pool is tiny</strong>: Rust + WASM + Leptos's statically-typed view tree is a narrow intersection. You cannot post a job and expect inbound; you onboard existing Rust devs into Leptos (precedent: ~2 months for two engineers<sup><a class="cite" href="#cite-leptos-vs-dioxus-2026" data-ref="leptos-vs-dioxus-2026">[?]</a></sup>).</li>
+  <li><strong>SSR is officially unsupported in the Tauri shell</strong>: the Tauri Leptos guide explicitly says use SSG/CSR<sup><a class="cite" href="#cite-tauri-leptos-guide" data-ref="tauri-leptos-guide">[?]</a></sup>. Half of Leptos's marketing surface (server functions, streaming HTML, hydration) is off-limits inside Tauri.</li>
+  <li><strong>Docs lag the framework</strong>: the Tauri integration guide is pinned to Leptos 0.6 while the framework is on 0.8.x with a 0.9 alpha<sup><a class="cite" href="#cite-leptos-080-release" data-ref="leptos-080-release">[?]</a></sup>.</li>
+  <li><strong>No flagship app on this exact combination</strong>: lots of Tauri+React/Vue/Svelte apps, lots of standalone Leptos web apps, but the Tauri+Leptos intersection has demos and small commercial apps, not a consumer flagship<sup><a class="cite" href="#cite-tauri-awesome" data-ref="tauri-awesome">[?]</a></sup>.</li>
+  <li><strong>WebKitGTK fragmentation on Linux</strong>: different distros ship different WebKitGTK versions and SSE/streaming behavior varies; no first-party Tauri SSE plugin yet (open feature request)<sup><a class="cite" href="#cite-tauri-sse-feature-req" data-ref="tauri-sse-feature-req">[?]</a></sup>.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Gotchas</h2>
+<ul>
+  <li><strong>Bundle two binaries, not one</strong>: if mcpd is shipped as a sidecar, your .app contains both <code>MCP Manager.app/Contents/MacOS/mcp-manager-gui</code> and the sidecar mcpd binary suffixed with target-triple (e.g. <code>mcpd-aarch64-apple-darwin</code>)<sup><a class="cite" href="#cite-tauri-sidecar" data-ref="tauri-sidecar">[?]</a></sup>. Both need to be signed.</li>
+  <li><strong>WASM bundle size discipline</strong> matters — the regex crate alone adds ~500KB to a WASM binary<sup><a class="cite" href="#cite-leptos-binary-size" data-ref="leptos-binary-size">[?]</a></sup>. Audit dependencies and use feature flags aggressively.</li>
+  <li><strong>Universal macOS binaries double bundle size</strong>; consider shipping separate aarch64 and x86_64 builds rather than a fat binary<sup><a class="cite" href="#cite-tauri-macos-bundle" data-ref="tauri-macos-bundle">[?]</a></sup>.</li>
+  <li><strong>Developer ID certs expire every 5 years</strong> — diary it; a quiet expiry breaks CI and ships unsigned builds<sup><a class="cite" href="#cite-tauri-macos-sign" data-ref="tauri-macos-sign">[?]</a></sup>.</li>
+  <li><strong>EventSource on WebKitGTK</strong> works but is more fragile than on WKWebView; prefer the Channel API for hot streaming paths.</li>
+  <li><strong>Leptos 0.7's statically-typed view tree</strong> produces excellent runtime ergonomics but verbose compiler errors when you accidentally try to store views in signals; expect a "where did my <code>AnyView</code> go?" learning curve<sup><a class="cite" href="#cite-leptos-070-release" data-ref="leptos-070-release">[?]</a></sup>.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>When to pick this stack</h2>
+<ul>
+  <li>The team's identity is "we are a Rust project, end to end" — including in-browser code.</li>
+  <li>Wire-format correctness between mcpd and the GUI is a top-3 concern, and you want compile-time guarantees, not runtime tests.</li>
+  <li>Footprint matters — you target developer-tool installs where 100 MB Electron apps are unacceptable.</li>
+  <li>The team already has 2+ senior Rust engineers willing to spend ~2 months ramping on Leptos.</li>
+  <li>You're willing to accept a 3–4s incremental dev loop in exchange for the type guarantees.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>When NOT to pick this stack</h2>
+<ul>
+  <li>You need to staff the GUI team beyond founder-level — the Leptos hiring market is too thin.</li>
+  <li>UI iteration speed is the bottleneck (heavy design phase, frequent visual tweaks, designers in the loop).</li>
+  <li>The team is primarily web-frontend and would prefer to write TS/React with shared types via codegen — Tauri+React with TauRPC gives you 80% of the type-safety for 20% of the friction.</li>
+  <li>You want or need to reuse a substantial React/Vue component library (auth flows, code editors, charting) — the Leptos ecosystem of pre-built components is much smaller.</li>
+  <li>You expect to ship a browser-only fallback for users who don't install the desktop app — that strictly favors the Actix+Tera stack.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Verdict</h2>
+<p>
+Tauri 2 + Leptos is a credible pick that is hard to recommend without a strong organizational commitment to Rust everywhere. The single load-bearing argument is shared types with mcpd; everything else (footprint, packaging, a11y, license) is matched or beaten by Tauri+TS-frontend. If the orchestrator weights "shared types with the daemon" as a top-3 axis, this stack wins; if it weights "dev velocity" or "hiring", Tauri+Dioxus (similar Rust-everywhere with a more relaxed signal model) or Tauri+TS-React (mainstream) is probably the better answer.
+</p>
+</section>
+
+<section class="citations">
+<h3>Citations</h3>
+<ol>
+<li id="cite-tauri-leptos-guide"><a href="https://v2.tauri.app/start/frontend/leptos/">Tauri 2 — Leptos frontend guide</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-leptos-github"><a href="https://github.com/leptos-rs/leptos">leptos-rs/leptos</a> (github.com, 2026-05-24).</li>
+<li id="cite-tauri-vs-electron-hopp"><a href="https://www.gethopp.app/blog/tauri-vs-electron">Tauri vs. Electron — gethopp</a> (gethopp.app, 2026-05-24).</li>
+<li id="cite-tauri-vs-electron-pkgpulse"><a href="https://www.pkgpulse.com/guides/electron-vs-tauri-2026">Electron vs Tauri 2026 — pkgpulse</a> (pkgpulse.com, 2026-05-24).</li>
+<li id="cite-boringcactus-2025-survey"><a href="https://www.boringcactus.com/2025/04/14/2025-survey-of-rust-gui-libraries.html">2025 survey of Rust GUI libraries — boringcactus</a> (boringcactus.com, 2026-05-24).</li>
+<li id="cite-tauri-macos-bundle"><a href="https://v2.tauri.app/distribute/macos-application-bundle/">Tauri 2 — macOS Application Bundle</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-tauri-appimage"><a href="https://v2.tauri.app/distribute/appimage/">Tauri 2 — AppImage</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-tauri-debian"><a href="https://v2.tauri.app/distribute/debian/">Tauri 2 — Debian</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-tauri-github"><a href="https://github.com/tauri-apps/tauri">tauri-apps/tauri</a> (github.com, 2026-05-24).</li>
+<li id="cite-tauri-calling-rust"><a href="https://v2.tauri.app/develop/calling-rust/">Calling Rust from the Frontend — Tauri 2</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-tauri-sidecar"><a href="https://v2.tauri.app/develop/sidecar/">Embedding External Binaries — Tauri 2</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-leptos-dev-flow"><a href="https://github.com/leptos-rs/leptos/discussions/2919">Leptos discussion #2919 — Dev flow</a> (github.com, 2026-05-24).</li>
+<li id="cite-leptos-vs-dioxus-2026"><a href="https://rustify.rs/articles/leptos-vs-dioxus-rust-frontend-2026">Leptos vs Dioxus 2026 — Rustify</a> (rustify.rs, 2026-05-24).</li>
+<li id="cite-leptos-080-release"><a href="https://github.com/leptos-rs/leptos/releases/tag/v0.8.0">Leptos v0.8.0 release notes</a> (github.com, 2026-05-24).</li>
+<li id="cite-leptos-070-release"><a href="https://github.com/leptos-rs/leptos/releases/tag/v0.7.0">Leptos v0.7.0 release notes</a> (github.com, 2026-05-24).</li>
+<li id="cite-tauri-awesome"><a href="https://github.com/tauri-apps/awesome-tauri">tauri-apps/awesome-tauri</a> (github.com, 2026-05-24).</li>
+<li id="cite-tauri-sse-feature-req"><a href="https://github.com/tauri-apps/plugins-workspace/issues/1002">Tauri plugins-workspace #1002 — SSE</a> (github.com, 2026-05-24).</li>
+<li id="cite-leptos-binary-size"><a href="https://book.leptos.dev/deployment/binary_size.html">Optimizing WASM Binary Size — Leptos Book</a> (book.leptos.dev, 2026-05-24).</li>
+<li id="cite-tauri-macos-sign"><a href="https://v2.tauri.app/distribute/sign/macos/">Tauri 2 — macOS Code Signing</a> (tauri.app, 2026-05-24).</li>
+</ol>
+</section>
+
+</main>
+</body>
+</html>

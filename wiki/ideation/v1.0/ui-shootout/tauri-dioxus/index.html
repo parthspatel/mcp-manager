@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tauri 2 + Dioxus — UI Shootout — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">ui-shootout</a> / tauri-dioxus</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Tauri 2 + Dioxus — stack evaluation</h1>
+
+<p class="lede">
+This branch of the GUI shootout evaluates <strong>Dioxus</strong> — a React-shaped, fullstack Rust UI framework — as the renderer for the MCP Manager GUI. Dioxus ships several renderers (WebView desktop, web/WASM, liveview, and the new <strong>Blitz/Native</strong> GPU renderer in 0.7) plus an opinionated CLI (<code>dx</code>) with Subsecond hot-patching of live Rust code. We evaluated it both wrapped in Tauri 2 and standalone via <code>dioxus-desktop</code>.
+</p>
+
+<p><strong>Bottom line up front:</strong> <code>dioxus-desktop</code> standalone (no Tauri wrapper) is the right call. It already uses Wry/Tao under the hood — the same WebView engine Tauri uses — so wrapping it in Tauri adds ceremony with no meaningful upside for a macOS+Linux v1.0. Blitz/Dioxus Native is fascinating but pre-alpha; not for v1. See the <a href="./recommendation-tauri-dioxus-summary.html">recommendation page</a> for the full argument.</p>
+
+<nav class="toc">
+<h4>This stack</h4>
+<ul>
+<li><a href="./research-stack.html">Stack research — Tauri 2 + Dioxus in 2026</a></li>
+<li><a href="./research-mcp-manager-fit.html">Fit research — concrete fit for MCP Manager</a></li>
+<li><a href="./recommendation-tauri-dioxus-summary.html">Recommendation — pros, cons, gotchas</a></li>
+<li><a href="./data/scorecard.json">scorecard.json</a> · <a href="./data/citations.json">citations.json</a></li>
+</ul>
+</nav>
+
+<section class="section">
+<h2>Sibling stacks</h2>
+<ul>
+<li><a href="../tauri-leptos/index.html">Tauri 2 + Leptos</a> — fine-grained reactive Rust UI inside a Tauri shell</li>
+<li><a href="../actix-tera/index.html">Actix-Web + Tera/Askama</a> — server-rendered HTML in a local browser window</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Headline scores</h2>
+<table class="compare">
+<thead><tr><th>Dimension</th><th>Rating</th><th>One-line</th></tr></thead>
+<tbody>
+<tr><td>Developer experience</td><td>9 / 10</td><td>Cleanest Rust UI workflow — <code>dx</code> CLI is best-in-class.</td></tr>
+<tr><td>Hot reload quality</td><td>10 / 10</td><td>Subsecond Rust hot-patching is unique in the Rust ecosystem.</td></tr>
+<tr><td>Type safety with Rust core</td><td>10 / 10</td><td>Single-language; shared types in a <code>core</code> crate, no marshalling.</td></tr>
+<tr><td>Accessibility</td><td>9 / 10</td><td>Inherits WebView a11y — VoiceOver/Orca/IME all work.</td></tr>
+<tr><td>Live update story</td><td>9 / 10</td><td>Signals + SSE/streams compose naturally for log tails.</td></tr>
+<tr><td>IPC ergonomics with mcpd</td><td>8 / 10</td><td>Native Rust client to mcpd's HTTP+SSE bridge, no JS hop.</td></tr>
+<tr><td>Packaging (macOS+Linux)</td><td>8 / 10</td><td><code>dx bundle</code> covers .app/.dmg/.deb/.AppImage.</td></tr>
+<tr><td>Ecosystem maturity</td><td>7 / 10</td><td>Pre-1.0; 0.7.9 in May 2026. Breaking changes between minors.</td></tr>
+<tr><td>Hiring pool</td><td>5 / 10</td><td>React-shaped, but few engineers know Dioxus specifically.</td></tr>
+<tr><td>License</td><td>MIT/Apache-2.0</td><td>Clean. No risk.</td></tr>
+</tbody>
+</table>
+<p class="muted">Full scorecard with notes and evidence IDs: <a href="./data/scorecard.json">scorecard.json</a>.</p>
+</section>
+
+<section class="section">
+<h2>Verdict at a glance</h2>
+<p><strong>Best when:</strong> small Rust-fluent team values a single-language stack, fast iteration via Subsecond, and is fine with the system WebView.</p>
+<p><strong>Worst when:</strong> you need bulletproof CSS across exotic widgets, a deep ecosystem of vetted security primitives, or you plan to migrate off WebView to a true native UI before 2027.</p>
+<p><strong>Recommended flavor:</strong> <code>dioxus-desktop</code> standalone — Tauri wrapping adds glue with no clear benefit on macOS+Linux. <code>dioxus-native</code>/Blitz is pre-alpha and not ready.</p>
+</section>
+</main>
+</body>
+</html>

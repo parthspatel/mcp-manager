@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research — MCP Manager fit for Actix+Askama — v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">ui-shootout</a> / <a href="./index.html">actix-tera</a> / research · fit</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Research — fit with MCP Manager v1.0</h1>
+
+<p class="lede">
+The SSR stack collapses several MCP Manager problems into single bullet points (real-time, IPC, accessibility) and creates a small cluster of new ones (no native window, tray story, localhost security). This page works through each in turn.
+</p>
+
+<nav class="toc">
+<h4>Contents</h4>
+<ul>
+<li><a href="#architecture">Architecture: GUI inside mcpd, or separate process?</a></li>
+<li><a href="#tray">Tray / menubar story and "discoverability"</a></li>
+<li><a href="#auth">Auth on localhost</a></li>
+<li><a href="#focus-steal">The "browser is not really my app" UX problem</a></li>
+<li><a href="#mobile">Mobile path — managing MCP servers from a phone</a></li>
+<li><a href="#native-feel">The "no native app" tradeoff</a></li>
+<li><a href="#sse-fit">Why SSE fits MCP Manager perfectly</a></li>
+</ul>
+</nav>
+
+<section class="section" id="architecture">
+<h2>Architecture: GUI inside mcpd, or separate process?</h2>
+<p>Two viable shapes:</p>
+
+<table class="compare">
+<thead><tr><th>Aspect</th><th>A — GUI lives <em>inside</em> mcpd</th><th>B — GUI is a <em>separate</em> Actix process talking to mcpd via UDS</th></tr></thead>
+<tbody>
+<tr><td>IPC</td><td>None. Handlers call mcpd modules directly. <strong>Zero serialization, zero boundary.</strong></td><td>JSON-RPC over UDS (already exists). Handlers wrap RPC calls.</td></tr>
+<tr><td>Process lifecycle</td><td>One PID. mcpd dying = GUI dying.</td><td>Two PIDs. GUI can restart without restarting servers.</td></tr>
+<tr><td>"daemon not yet running"</td><td>Moot. The GUI IS the daemon.</td><td>Need to handle gracefully — auto-spawn mcpd on first GUI request.</td></tr>
+<tr><td>Blast radius</td><td>GUI bug → daemon crash → MCP servers killed.</td><td>GUI bug → only the GUI process restarts.</td></tr>
+<tr><td>Auth model</td><td>Single bearer token in mcpd config.</td><td>Two layers — GUI-to-user (bearer) AND GUI-to-mcpd (UDS peer-cred).</td></tr>
+<tr><td>Binary count</td><td>One (<code>mcpd</code>).</td><td>Two (<code>mcpd</code>, <code>mcpd-ui</code>).</td></tr>
+<tr><td>Compile time</td><td>Worse — every UI change rebuilds mcpd.</td><td>Better — UI iterates independently of daemon.</td></tr>
+<tr><td>Type sharing</td><td>Direct imports.</td><td>Shared crate for DTOs, or duplicate types.</td></tr>
+</tbody>
+</table>
+
+<p><strong>Recommendation: A (inside mcpd) for v1.0, with the option to extract later.</strong> Rationale:</p>
+<ul>
+<li>The IPC story is the single biggest qualitative advantage of this stack over Tauri — choosing B throws it away.</li>
+<li>v1.0 doesn't need to survive GUI-process restarts; we are not yet at "Docker Desktop" scale of UI complexity.</li>
+<li>If the daemon-crash-takes-down-UI risk becomes real, extracting later is straightforward because the HTTP API is the boundary — we ship the same routes, just hosted by a separate binary that calls mcpd's existing JSON-RPC over UDS.</li>
+</ul>
+</section>
+
+<section class="section" id="tray">
+<h2>Tray / menubar story and "discoverability"</h2>
+<p>
+The single biggest UX wart of "the UI is a browser tab" is discoverability: there's no app icon, no Spotlight result, no dock badge. The user opens a terminal, runs <code>mcpm gui</code>, and a browser tab appears at <code>http://127.0.0.1:7777</code>. That works for developers; it's hostile to anyone else.
+</p>
+
+<p>Three discoverability layers, in increasing investment:</p>
+
+<ol>
+<li><strong>CLI launcher (v1.0 minimum).</strong> <code>mcpm gui</code> opens the default browser to <code>http://127.0.0.1:7777/?token=...</code>. If mcpd isn't running, spawn it. If a tab is already open at that URL, reuse it (browsers do this automatically in most cases).</li>
+<li><strong>Tray icon (v1.0 stretch).</strong> Use <code>tray-icon</code> (Tauri-org-maintained, 1.87M downloads/month) to add a menubar entry on macOS and an AppIndicator on Linux <cite data-ref="tray-icon-crates"></cite>. Menu items: <em>Open in browser</em>, <em>Status: 3 servers running</em>, <em>Restart mcpd</em>, <em>Quit</em>. The macOS main-thread requirement complicates integrating tray into mcpd itself — likely we ship a tiny <code>mcpd-tray</code> helper binary that talks to mcpd via UDS <cite data-ref="tray-icon-docs"></cite>.</li>
+<li><strong>PWA install (v1.1+).</strong> Ship a web app manifest with display: standalone, icons at the standard sizes, and theme color. Chrome/Edge let users "Install App" from the address bar; the result is a dock icon with a standalone window, no browser chrome, that *feels* like a native app <cite data-ref="pwa-installable"></cite>. The macOS Safari PWA story is weaker but improving. This is the cheapest path to "looks like an app in the dock" — no Rust changes needed.</li>
+</ol>
+
+<p>Layers 1 and 3 cost a day of work each. Layer 2 (tray) is a week or two due to the cross-platform event-loop gymnastics; <strong>recommend deferring tray to v1.1</strong> and ship v1.0 with CLI + optional PWA install.</p>
+</section>
+
+<section class="section" id="auth">
+<h2>Auth on localhost</h2>
+<p>
+"It's only on localhost, so it's safe" is wrong, and has been wrong since DNS rebinding became a known attack class. A malicious web page can resolve a name to <code>127.0.0.1</code> and trick the user's browser into hitting <code>http://127.0.0.1:7777/api/servers/X/delete</code> with the user's session cookies attached <cite data-ref="dns-rebinding-blog"></cite>.
+</p>
+
+<p>The defense-in-depth recipe (all three layers, not one-of):</p>
+<ol>
+<li><strong>Bind 127.0.0.1 only by default.</strong> 0.0.0.0 is opt-in via a config flag with a big warning. Refuse to start with 0.0.0.0 unless a bearer token is set.</li>
+<li><strong>Validate the Host header.</strong> Reject requests where Host is not exactly <code>localhost:7777</code>, <code>127.0.0.1:7777</code>, or <code>[::1]:7777</code>. This kills DNS rebinding cold — the attacker's DNS name will be in the Host header and we drop the request <cite data-ref="dns-rebinding-blog"></cite>.</li>
+<li><strong>Bearer token in URL on first launch.</strong> On <code>mcpm gui</code>, generate a random token, store its hash, and open the browser to <code>http://127.0.0.1:7777/?token=&lt;raw&gt;</code>. The page captures the token into <code>localStorage</code> and sets it as <code>Authorization: Bearer &lt;raw&gt;</code> on every fetch (or as a same-site Strict cookie). Token rotates on each <code>mcpd</code> restart unless persisted.</li>
+</ol>
+
+<p>Pi-hole v6 ships almost exactly this: a password set at install time, used to gate the web UI <cite data-ref="pi-hole-v6-password"></cite>. The MCP Manager twist is that we want zero-config — the user doesn't see the token unless they're being deliberate.</p>
+
+<p><strong>Stretch:</strong> for the "GUI is inside mcpd" architecture, we could expose the bearer over the existing UDS interface and have the CLI fetch it via UDS peer-credentials (only the user owning the socket can read the token). This eliminates the "token visible in process listing" leak.</p>
+</section>
+
+<section class="section" id="focus-steal">
+<h2>The "browser is not really my app" UX problem</h2>
+<p>Several taxes the SSR stack pays:</p>
+<ul>
+<li><strong>Focus stealing.</strong> Opening a new browser tab steals focus from whatever the user was doing. There's no native way to "raise the existing MCP Manager window" — at best, an existing tab gets focus if the browser deduplicates URLs.</li>
+<li><strong>Accidentally closed.</strong> The user hits cmd-w by reflex and closes the tab in the middle of editing a config. No native "are you sure?" — though we can hook <code>beforeunload</code> if there are unsaved changes.</li>
+<li><strong>No global hotkey.</strong> No cmd-shift-M to "show MCP Manager." A tray icon helps; OS-level hotkeys require native code.</li>
+<li><strong>No dock badge for unread notifications.</strong> PWA install gets us a dock icon but the badging API is browser-limited.</li>
+<li><strong>No system file picker integration.</strong> File uploads go through the HTML <code>&lt;input type="file"&gt;</code> dialog. No "drop into the dock icon."</li>
+<li><strong>No native notification permission UX.</strong> Browsers gate notifications behind their own permission prompt.</li>
+</ul>
+<p>None of these are dealbreakers; all of them are real. The PWA-install path (Chrome/Edge) recovers a few — dock icon, standalone window, file system access — but not all <cite data-ref="pwa-installable"></cite>.</p>
+</section>
+
+<section class="section" id="mobile">
+<h2>Mobile path — managing MCP servers from a phone</h2>
+<p>
+This is the SSR stack's killer differentiator. If the user opts in to LAN binding (<code>--bind 0.0.0.0</code> with a bearer token), the same UI is reachable from any device on the network — phone, tablet, the laptop in the other room. The Tauri stacks would require a full mobile-app build (iOS+Android, App Store / Play Store, code signing) to match this. The SSR stack gets it for free, because the browser is the runtime.
+</p>
+<p>What's needed:</p>
+<ul>
+<li><strong>Mobile-responsive CSS</strong> — the templates need a small-screen layout. Trivial with modern CSS grid + flexbox.</li>
+<li><strong>Tap-friendly controls</strong> — 44px minimum hit targets, no hover-only interactions.</li>
+<li><strong>HTTPS for LAN access</strong> — self-signed certs are user-hostile; the better path is "use Tailscale" or "use mkcert in dev." Production-grade is "we don't bind 0.0.0.0 — point Tailscale Funnel/Caddy at us."</li>
+<li><strong>Mobile-safe SSE</strong> — phones aggressively kill background connections. The 10s heartbeat ping mitigates; long-tail UX may need fallback to polling.</li>
+</ul>
+<p>v1.0 ships mobile-responsive CSS but does <em>not</em> ship LAN binding by default. Mobile is documented as "set --bind 0.0.0.0 and use a bearer token; or front it with Tailscale."</p>
+</section>
+
+<section class="section" id="native-feel">
+<h2>The "no native app" tradeoff</h2>
+<table class="compare">
+<thead><tr><th>What you give up</th><th>What you get</th></tr></thead>
+<tbody>
+<tr><td>Native window chrome</td><td>~30 MB less RAM than a WebView app idle</td></tr>
+<tr><td>Dock/launchpad presence (without PWA install)</td><td>Distribution via <code>brew install mcpm</code> — no signing, no notarization, no DMG</td></tr>
+<tr><td>Global hotkeys, dock badging</td><td>LAN/mobile access as a first-class feature, not a port</td></tr>
+<tr><td>Native file picker / drag-drop into dock</td><td>Screen-reader and IME quality far beyond anything Rust GUI toolkits offer <cite data-ref="boringcactus-2025-survey"></cite></td></tr>
+<tr><td>Native notifications without permission prompts</td><td>Single Rust binary, no Node/Vite/Trunk in the build chain</td></tr>
+<tr><td>"Feels like a Mac app"</td><td>Compatible with every browser-based dev tool ecosystem — extensions, devtools, screen recorders</td></tr>
+</tbody>
+</table>
+<p>
+The blunt question is whether MCP Manager's <em>job</em> is to feel like a Mac app, or to be a power tool for managing servers. If it's the latter — and the comp set is Docker Desktop's UI, plus all of Jellyfin/Sonarr/Pi-hole — then "browser tab" is not just acceptable, it's correct.
+</p>
+</section>
+
+<section class="section" id="sse-fit">
+<h2>Why SSE fits MCP Manager perfectly</h2>
+<p>Every interactive MCP Manager surface fits the "server pushes a stream, browser appends to a DOM node" pattern:</p>
+<ul>
+<li><strong>Log tails</strong>: server emits LogLine; client appends to a <code>&lt;div sse-swap="log" hx-swap="beforeend"&gt;</code>.</li>
+<li><strong>Server status changes</strong>: server emits StatusUpdate; client swaps the badge in the table row.</li>
+<li><strong>Resource graphs</strong>: server emits per-second CPU/RAM samples; client appends to a sparkline.</li>
+<li><strong>mcpd lifecycle events</strong>: server emits "server X exited with code 137"; client toast-notifies.</li>
+</ul>
+<p>This is the exact pattern <code>actix-web-lab::sse</code> + tokio broadcast channels are built for <cite data-ref="actix-web-lab-sse"></cite><cite data-ref="actix-sse-example"></cite>. In Tauri, the equivalent is <code>tauri::ipc::Channel</code> — works, but requires marshalling through the WebView's IPC protocol. Here, it's just HTTP/1.1 and an event listener.</p>
+
+<pre><code>&lt;!-- The entire log-tail UI. No JS code beyond loading htmx + the sse ext. --&gt;
+&lt;article hx-ext="sse" sse-connect="/api/servers/filesystem/logs"&gt;
+  &lt;h2&gt;filesystem — logs&lt;/h2&gt;
+  &lt;pre id="log-out" sse-swap="log" hx-swap="beforeend scroll:bottom"&gt;&lt;/pre&gt;
+&lt;/article&gt;</code></pre>
+</section>
+</main>
+</body>
+</html>

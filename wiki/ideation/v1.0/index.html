@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCP Manager — Ideation v1.0</title>
-<meta name="description" content="Six parallel design explorations for a Rust-based MCP Manager (core + CLI + TUI + GUI + toolchain projection). 266 citations across 52 pages.">
+<meta name="description" content="Six parallel design streams plus a 3-stack GUI shootout for a Rust-based MCP Manager. 366 citations across 68 pages.">
 <link rel="stylesheet" href="./assets/styles.css">
 <script type="module" src="./assets/core.js"></script>
 </head>
@@ -25,16 +25,30 @@
   </p>
 
   <p>
-    <span class="evidence-badge">266 citations</span>
-    <span class="evidence-badge">52 HTML pages</span>
+    <span class="evidence-badge">366 citations</span>
+    <span class="evidence-badge">68 HTML pages</span>
     <span class="evidence-badge">9 ranking matrices</span>
-    <span class="pill success">All 6 streams complete</span>
+    <span class="pill success">All 6 streams + GUI shootout complete</span>
   </p>
 
   <aside class="card" style="border-left:4px solid var(--accent);background:var(--bg-faint);margin-block:1.5rem">
     <h4 style="margin-top:0">Addendum 2026-05-24 — Stream 6 added by user request</h4>
     <p style="margin-bottom:0.5rem">After the initial 5 streams completed, the user flagged a gap: the design covered how to <em>read</em> MCP server configs from existing hosts (<a href="./curious-otter-survey/">Stream 1</a>) but not how to <em>project</em> the canonical MCP Manager state back out to the many tools that consume MCP servers. <strong><a href="./clever-fox-bridge/">Stream 6 (<code>clever-fox-bridge</code>)</a></strong> closed that gap: it catalogues 12 MCP-consuming tools, settles on <strong>managed-block</strong> as the default sync mode (Ansible-style fenced regions), picks <strong>TOML</strong> as the custom-toolchain spec format, and surfaces 6 scoping questions for the orchestrator.</p>
     <p style="margin-bottom:0"><strong>Headline finding:</strong> schema drift means even bundled Tier-1 tool support has to be expressed as data-driven manifests, not hardcoded Rust — every Tier-1 tool ships schema changes every few months.</p>
+  </aside>
+
+  <aside class="card" style="border-left:4px solid var(--success);background:var(--bg-faint);margin-block:1.5rem">
+    <h4 style="margin-top:0">v1.0 lockdown — 2026-05-24 decisions</h4>
+    <p style="margin-bottom:0.5rem">The product owner reviewed all 6 streams and resolved the following decisions. These are now <strong>committed for v1.0</strong> and supersede any contradicting language in the original stream pages (kept as authored snapshots).</p>
+    <ol style="margin-top:0">
+      <li><strong>Drop Windows.</strong> v1.0 ships macOS + Linux only. Removes named-pipes / SDDL / AppContainer complexity from <a href="./precise-crane-conduit/">S4</a> and <a href="./stoic-badger-sandbox/">S2</a>. Windows installer story deferred indefinitely.</li>
+      <li><strong>Auto-spawn the daemon.</strong> <code>mcpm exec</code> auto-spawns <code>mcpd</code> on first call (~200ms one-time). On first GUI launch, if the OS has a service manager (systemd-user on Linux, launchd on macOS), prompt the user once: "register mcpd as a background service?" — opt-in, not default. Obsoletes the proposed "mcpd-lite" from <a href="./clever-fox-bridge/">S6</a> entirely.</li>
+      <li><strong>Toolchain scope is user-configurable per registered project.</strong> Both per-user and per-project canonical scopes supported; the user picks when registering a project. Lockfile location follows the scope: per-user → centralized at <code>~/.config/mcp-manager/projection.lock</code>; per-project → sidecar at the project root (<code>.mcp-manager.lock</code>). Clients can also initialize/update via <code>mcpm</code> CLI to register a project + toolchain set.</li>
+      <li><strong>JetBrains XML projection ships in v1.0.</strong> Despite the higher implementation risk flagged by <a href="./clever-fox-bridge/">S6</a>, JetBrains IDE support (IntelliJ / PyCharm / RustRover / WebStorm / CLion / GoLand) is non-negotiable for v1.0.</li>
+      <li><strong>Curated community toolchain registry deferred to v1.1.</strong> See <a href="./future-features-v1.1.html">future features (v1.1)</a>.</li>
+      <li><strong>GUI stack: Actix-Web + Askama, served from inside <code>mcpd</code>.</strong> All 3 UI research agents reported back; <a href="./ui-shootout/">the shootout</a> ranks Actix at 8.57 / Dioxus-desktop at 8.13 / Tauri+Leptos at 6.71 on a 13-criterion UX-weighted matrix. Localhost SSR web app (Pi-hole / Sonarr pattern) with tray-icon helper + PWA manifest for "feels like an app". S5's earlier Tauri+Leptos recommendation is superseded.</li>
+      <li><strong>Daemon supervision surface is broad, not narrow.</strong> mcpd is a real process supervisor, not just a launcher: restart-on-crash with jittered exponential backoff + max-attempts within a sliding window, OOM detection (cgroupv2 on Linux; jetsam-inferred on macOS), append-only audit log of every state change, and tail-API access to three log streams (mcpd itself, each MCP server's stdout/stderr, and the audit log). See the "Daemon supervision surface" convergent card below for the full enumeration.</li>
+    </ol>
   </aside>
 
   <nav class="toc">
@@ -78,10 +92,11 @@
         <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>.</p>
       </article>
 
-      <article class="card">
+      <article class="card" style="border-color:var(--success)">
         <h4>GUI</h4>
-        <p><strong>Tauri 2</strong> with a <strong>Leptos</strong> (Rust-WASM) frontend. Pure-native Rust GUIs largely failed a basic accessibility + IME baseline; Tauri inherits system WebView a11y "for free".</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>. Frontend choice still re-openable — see open question.</p>
+        <p><strong>Actix-Web + Askama, served from inside <code>mcpd</code></strong> on <code>localhost:NNNN</code>. Server-rendered Rust HTML + SSE for live updates + HTMX for interactivity. Zero IPC, single binary, single auth surface. The user visits a URL in their existing browser — Pi-hole / Sonarr / Jellyfin pattern. A small <code>mcpd-tray</code> helper + PWA manifest restore most of the "feels like an app" UX.</p>
+        <p>Free wins: browser-grade accessibility (the most accessible runtime ever shipped), 60ms first paint (vs. 350–450ms for Tauri options), opt-in <code>--bind 0.0.0.0</code> unlocks LAN/mobile management on day one.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./ui-shootout/">ui-shootout</a> (3-agent comparison, 2026-05-24). Supersedes <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a>'s earlier Tauri+Leptos pick.</p>
       </article>
 
       <article class="card">
@@ -119,9 +134,65 @@
 
       <article class="card">
         <h4>Tool support tiers</h4>
-        <p><strong>Tier 1</strong> (auto-detect + native projection): Claude Code CLI, Codex CLI, VS Code, Cursor, Zed, JetBrains family (IntelliJ / PyCharm / RustRover / WebStorm / CLion / GoLand).</p>
+        <p><strong>Tier 1</strong> (auto-detect + native projection): Claude Code CLI, Codex CLI, VS Code, Cursor, Zed, JetBrains family (IntelliJ / PyCharm / RustRover / WebStorm / CLion / GoLand). <strong>JetBrains XML projection ships in v1.0</strong> (user lockdown, 2026-05-24).</p>
         <p><strong>Tier 2</strong> (opt-in projection): Windsurf, Continue, Cline, Goose, LibreChat, Claude Desktop.</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">S6</a>.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">S6</a> + v1.0 lockdown.</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Daemon UX: auto-spawn</h4>
+        <p>The CLI <code>mcpm exec</code> wrapper auto-spawns <code>mcpd</code> if it isn't running (~200ms one-time, then a UDS connection). Subsequent clients (Zed, Claude Code, Cursor, …) get the already-running daemon for free. The proposed "mcpd-lite" alternative is obsolete.</p>
+        <p>On <em>first GUI launch only</em>, the GUI detects the OS's service manager (systemd-user on Linux, launchd on macOS) and prompts the user once: "register mcpd as a background service?". Opt-in, not default.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./steady-bear-foundation/recommendation-core-architecture-summary.html">S3</a> + v1.0 lockdown.</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Toolchain scope: user-configurable per project</h4>
+        <p>When the user registers a project with <code>mcpm</code>, they pick whether the canonical scope is <strong>per-user</strong> (one MCP toolset for all projects) or <strong>per-project</strong> (this project has its own toolset). Both are first-class. Default is per-user; opt-in to per-project at <code>mcpm project init</code> time.</p>
+        <p><strong>Lockfile follows scope</strong>: per-user → <code>~/.config/mcp-manager/projection.lock</code>; per-project → <code>.mcp-manager.lock</code> at the project root.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">S6</a> + v1.0 lockdown.</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success)">
+        <h4>Platforms: macOS + Linux only</h4>
+        <p>v1.0 ships macOS + Linux. Windows support is <strong>not in v1.0</strong>. Removes named-pipes / SDDL / AppContainer / Docker-Desktop-on-Windows complexity from the design space. UDS is the only IPC primitive; sandbox runtime is the macOS Sandbox + bubblewrap on Linux; service-manager integration is launchd + systemd-user.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: v1.0 lockdown (2026-05-24).</p>
+      </article>
+
+      <article class="card" style="border-color:var(--success);grid-column:1/-1">
+        <h4>Daemon supervision surface (full v1.0 scope)</h4>
+        <p>mcpd is a <em>real</em> process supervisor for the MCP servers under its management, not a thin launcher. Locked v1.0 capabilities:</p>
+        <ol>
+          <li><strong>Start / stop</strong> — primitive. Triggered by client requests over JSON-RPC.</li>
+          <li><strong>Restart on crash, with jittered exponential backoff and max-attempts</strong>:
+            <ul>
+              <li>Backoff schedule: <code>delay = min(base × 2^attempt × (1 + rand(0, 0.3)), cap)</code>. Tentative: <code>base=1s</code>, <code>cap=60s</code>. The 30% jitter prevents <strong>thundering-herd</strong> when many servers all crash together (post-sleep, post-network-flap).</li>
+              <li>Max-attempts within a sliding window: e.g. <code>5 restarts in 600s</code>. Exceeding the budget marks the server <code>failed</code> and stops retrying — prevents <strong>infinite restart loops</strong> for a server that crashes immediately on every boot. User must explicitly <code>mcpm restart &lt;server&gt;</code> to clear failed state.</li>
+              <li>Modeled on systemd's <code>Restart=on-failure</code> + <code>StartLimitBurst</code> + <code>StartLimitIntervalSec</code> semantics.</li>
+            </ul>
+          </li>
+          <li><strong>OOM handling</strong>:
+            <ul>
+              <li><strong>Linux</strong>: per-server memory limits via cgroupv2 (<code>memory.max</code>); OOM kills observed deterministically via <code>memory.events</code>. Optional <code>memory.high</code> for soft throttling. Treated as a crash for restart purposes; audit-logged with the OOM cause.</li>
+              <li><strong>macOS</strong>: weaker observability — no native OOM events API. v1.0 will infer OOM from <code>SIGKILL</code> with no signal info + recent memory pressure (read via <code>host_processor_info</code>). Per-server limits via <code>posix_rlimit RLIMIT_AS</code> if requested; otherwise jetsam decides. Audit log marks the cause "OOM (inferred)".</li>
+            </ul>
+          </li>
+          <li><strong>Audit log</strong> — append-only JSONL of every state change: <code>{ts, actor, event, server, details}</code>. Events: <code>server.spawn</code>, <code>server.stop</code>, <code>server.crash</code>, <code>server.oom</code>, <code>server.failed</code>, <code>config.change</code>, <code>secret.read</code>, <code>secret.write</code>, <code>projection.write</code>. Default rotation: daily files, 90 days retained, located at <code>$XDG_STATE_HOME/mcpd/audit/</code> (Linux) or <code>~/Library/Logs/mcpd/audit/</code> (macOS).</li>
+          <li><strong>Tail-API access to three log streams</strong>:
+            <ul>
+              <li><strong>mcpd</strong> itself — structured Rust logs via <code>tracing</code> + a ring buffer (e.g. 10MB in memory + on-disk rotation).</li>
+              <li><strong>Each MCP server</strong> — stdout + stderr captured by the supervisor through pipes; per-server ring buffer (e.g. 4MB in memory).</li>
+              <li><strong>Audit log</strong> — same JSONL file, tailable live as new entries land.</li>
+            </ul>
+            All three exposed via:
+            <ul>
+              <li>CLI: <code>mcpm logs --follow [&lt;server&gt; | --daemon | --audit]</code>, with <code>--since</code>, <code>--lines</code>, <code>--grep</code> filters.</li>
+              <li>GUI (Actix): three SSE endpoints — <code>/logs/daemon/stream</code>, <code>/logs/server/&lt;id&gt;/stream</code>, <code>/logs/audit/stream</code>. The browser tab can show all three side-by-side in real time (this is the SSE+HTMX strength that won the GUI shootout).</li>
+              <li>Wire: JSON-RPC <code>logs.tail</code> method over UDS, returns a streaming response.</li>
+            </ul>
+          </li>
+        </ol>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: user directive #3 (2026-05-24). Implementation owner: <a href="./steady-bear-foundation/recommendation-core-architecture-summary.html">steady-bear-foundation</a>.</p>
       </article>
     </div>
   </section>
@@ -156,11 +227,22 @@
 │   ┌────────────────────────▼─────────────────────────────────┐      │
 │   │  mcpd (tokio-based daemon)                  ← Stream 3   │      │
 │   │  ┌─────────────┐ ┌──────────────┐ ┌────────────────────┐ │      │
-│   │  │ mcp-core    │ │ mcp-          │ │ mcp-secrets       │ │      │
-│   │  │ (registry,  │ │  supervisor   │ │ (OS keychain,     │ │      │
-│   │  │  config,    │ │  per-server,  │ │  in-memory cache) │ │      │
-│   │  │  journal)   │ │  conmon-like  │ │                   │ │      │
+│   │  │ mcp-core    │ │ mcp-         │ │ mcp-secrets        │ │      │
+│   │  │ registry,   │ │ supervisor   │ │ OS keychain,       │ │      │
+│   │  │ config,     │ │ per-server   │ │ in-memory cache    │ │      │
+│   │  │ audit-log   │ │ restart +    │ │                    │ │      │
+│   │  │ (JSONL)     │ │ backoff +    │ │                    │ │      │
+│   │  │             │ │ OOM watch    │ │                    │ │      │
 │   │  └─────────────┘ └──────┬───────┘ └────────────────────┘ │      │
+│   │                                                          │      │
+│   │  ┌──────────────────────────────────────────────────┐    │      │
+│   │  │ mcp-logs  — ring-buffered tail API for:          │    │      │
+│   │  │   1) mcpd itself (tracing → ring buffer)         │    │      │
+│   │  │   2) each MCP server (stdout+stderr captured)    │    │      │
+│   │  │   3) audit log (live JSONL tail)                 │    │      │
+│   │  │ exposed via: CLI `mcpm logs --follow`,           │    │      │
+│   │  │              GUI SSE, wire JSON-RPC `logs.tail`  │    │      │
+│   │  └──────────────────────────────────────────────────┘    │      │
 │   │                                                          │      │
 │   │  ┌──────────────────────────────────────────────────┐    │      │
 │   │  │ mcp-projector  ← Stream 6 (clever-fox-bridge)    │    │      │
@@ -318,74 +400,44 @@
 
   <section class="section" id="open-questions">
     <h2>Open questions for v1.0 scoping</h2>
-    <p>Four decisions remain genuinely open. Each is scoped, not blocking — but should be answered before lock-down.</p>
+    <p>Most originally-open questions were resolved by the v1.0 lockdown decisions above. What remains:</p>
 
-    <details class="accordion" open>
-      <summary>Windows default isolation strategy</summary>
-      <p>S2 tentatively recommends Docker MCP Toolkit on Windows for cross-OS uniformity, but it requires Docker Desktop (license + Hyper-V/WSL2). Alternatives: AppContainer-direct with pinned uvx/npx (native, but per-server capability authoring is heavy and not every MCP server has been tested), or WSL2-with-devenv (most reproducible, but adds a second OS into onboarding).</p>
-      <p>Decision blocks: the Windows installer flow.</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./stoic-badger-sandbox/recommendation-nix-isolation-summary.html">stoic-badger-sandbox</a></p>
+    <details class="accordion">
+      <summary>✓ User directive #3: daemon supervision scope <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved 2026-05-24</span></summary>
+      <p>Resolved by the user: mcpd is a real process supervisor — restart-on-crash with jittered backoff + max-attempts (prevents both thundering-herd and infinite-loop), OOM handling (cgroupv2 on Linux, jetsam-inferred on macOS), audit log of every state change, and tail API for three log streams (mcpd itself, each MCP server, audit). See the <a href="#convergent">"Daemon supervision surface"</a> convergent-decisions card above for the full enumeration. This also closes the previously-open "daemon ambition: how much supervision in v1.0?" question.</p>
     </details>
 
     <details class="accordion">
-      <summary>Auto-spawn daemon vs hard-fail with install pointer</summary>
-      <p>Should <code>mcp start &lt;server&gt;</code> silently auto-spawn a daemon when none exists (podman-like, friendliest UX), or hard-fail with a friendly pointer to <code>mcp daemon --install-launchd|--install-systemd-user</code> (more transparent about what's appearing on the user's machine)?</p>
-      <p>Decision blocks: first-run UX, OS-permission prompt experience, and CI/headless behavior.</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./steady-bear-foundation/recommendation-core-architecture-summary.html">steady-bear-foundation</a></p>
+      <summary>GUI stack — resolved to Actix + Askama <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved 2026-05-24</span></summary>
+      <p>3 parallel agents evaluated Tauri+Leptos, Tauri+Dioxus (which pivoted to recommending Dioxus-desktop standalone), and Actix-Web+Tera/Askama. Weighted ranking matrix gave Actix 8.57 / Dioxus 8.13 / Leptos 6.71. Detailed comparison + sensitivity analysis at <a href="./ui-shootout/"><code>ui-shootout/</code></a>.</p>
+      <p>Sub-decisions captured at <a href="./ui-shootout/index.html#open-questions">shootout open questions</a>: (a) tray icon ships in v1.0, (b) LAN binding opt-in (default localhost-only), (c) Tauri-shell-over-Actix as a v1.1 upgrade path if "browser tab" UX becomes a complaint.</p>
     </details>
 
     <details class="accordion">
-      <summary>Tauri frontend: Leptos (Rust-WASM) vs TypeScript</summary>
-      <p>S5 recommends Leptos for a mono-lingual codebase and shared types from <code>mcp-client</code>, but a TS frontend remains viable if the project plans to hire TS/React engineers. Re-decidable at scaffold time, not at design time.</p>
-      <p>Decision blocks: GUI hiring profile, frontend build pipeline.</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">nimble-raven-toolkit</a></p>
+      <summary>✓ Daemon ambition / supervision surface area <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved 2026-05-24</span></summary>
+      <p>Closed by directive #3 above. v1.0 commits to: start/stop + restart-with-backoff + OOM handling + audit log + tail API for three log streams. See the <a href="#convergent">"Daemon supervision surface"</a> convergent card for the full spec.</p>
     </details>
 
     <details class="accordion">
-      <summary>Daemon ambition: how much supervision in v1.0?</summary>
-      <p>S1 raised this; S3 + S4 effectively answered "yes, real supervision." But the <em>surface area</em> of supervision in v1.0 is still open: just spawn/stop, or also restart-on-crash, OOM handling, resource limits, audit logs, telemetry export? Each level adds scope.</p>
-      <p>Decision blocks: v1.0 feature scope, beta cut date.</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./curious-otter-survey/recommendation-mcp-config-summary.html">curious-otter-survey</a></p>
-    </details>
-
-    <details class="accordion">
-      <summary>Canonical scope: per-user vs per-project as the default <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
-      <p>Editors split on this: VSCode and Cursor encourage per-project <code>.vscode/mcp.json</code> and <code>.cursor/mcp.json</code> respectively; Claude Code, Zed, and JetBrains lean per-user. MCP Manager has to pick one as the canonical default and translate to the other.</p>
-      <p>Decision blocks: the <code>mcpm init</code> flow, the team-onboarding story (committing canonical into a repo vs not), and whether <code>.mcp-manager.lock</code> ships per-project or per-user.</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge</a></p>
-    </details>
-
-    <details class="accordion">
-      <summary>Linux sandbox-root enumeration depth (Flatpak / Snap) <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
-      <p>Flatpak-installed VSCode lives at <code>~/.var/app/com.visualstudio.code/config/Code/User/settings.json</code>; Snap puts it elsewhere again. Aggressive enumeration finds more tools but slows <code>mcpm doctor</code> and increases false positives. Conservative enumeration misses installs.</p>
-      <p>Decision blocks: discovery UX on Linux desktops (a sizeable fraction of the target user base).</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/research-toolchain-discovery.html">clever-fox-bridge</a></p>
-    </details>
-
-    <details class="accordion">
-      <summary>Wrapper-command secrets fallback when mcpd isn't running <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
-      <p>If a user launches their editor without mcpd running, projected configs that reference live secrets fail. S6 proposes <code>mcpm exec --secrets-from</code> as a wrapper-command shim so the editor spawns the server through a transient mcpd-lite. This trades a small "Where's that <code>mcpm exec</code> command from?" cognitive cost for not requiring users to always have mcpd running. Accept, reject, or alternate design?</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge</a></p>
-    </details>
-
-    <details class="accordion">
-      <summary>Curated community toolchain registry (Homebrew-taps style) <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
-      <p>The TOML escape hatch lets anyone teach mcpm about a new tool. Should we host a <em>curated</em> registry of community-contributed manifests (like Homebrew taps or mise plugins) so users can <code>mcpm toolchain add cline-fork</code> and pull a vetted manifest? Adds maintenance burden and a moderation policy; without it, ecosystem-discoverability is poor.</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge</a></p>
-    </details>
-
-    <details class="accordion">
-      <summary>Sidecar vs centralised lock file <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
-      <p>To detect drift and conflicts, the projector needs a lock file recording the last-known hash of each managed region. Sidecar (<code>.mcp-manager.lock</code> next to each tool's config) keeps the data local; centralised (<code>~/.config/mcp-manager/projection.lock</code>) is easier to audit but couples per-project work to a per-user file.</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/research-toolchain-sync-modes.html">clever-fox-bridge</a></p>
-    </details>
-
-    <details class="accordion">
-      <summary>JetBrains XML projection in v1.0 or defer? <span class="pill accent" style="font-size:0.7rem;margin-left:0.5rem">new — S6</span></summary>
-      <p>JetBrains IDEs store MCP config in XML inside the IDE config dir — fundamentally different parser, fundamentally riskier projection (XML schemas drift via IDE-side merge semantics that the user can't see). S6 puts the JetBrains family in Tier 1 because of user demand, but flags XML projection as the highest-effort tool in the catalog. Ship in v1.0 or defer to v1.1?</p>
-      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/research-toolchain-known-clients.html">clever-fox-bridge</a></p>
+      <summary>Linux sandbox-root enumeration depth — tentatively "medium"</summary>
+      <p>For each Tier-1 tool, hardcode its Snap package name and Flatpak app ID, check those well-known paths in addition to the native <code>~/.config/&lt;tool&gt;/</code> location. ~5–10 stats per tool, no filesystem walk. The list of Snap/Flatpak IDs is part of each tool's TOML manifest (per S6's data-driven-manifests decision). User confirmed this is the right tier of aggressiveness; remaining open detail is the per-tool manifest population.</p>
+      <p style="color:var(--fg-faint);font-size:0.85rem">Owner: <a href="./clever-fox-bridge/research-toolchain-discovery.html">clever-fox-bridge</a> (lowered to manifest authoring)</p>
     </details>
   </section>
+
+  <p style="margin-block:2rem;padding:1rem;background:var(--bg-elev);border-radius:var(--radius);font-size:0.9rem;color:var(--fg-muted)">
+    <strong>Resolved decisions</strong> (originally open, now committed):
+    Windows isolation strategy (dropped, no Windows in v1.0) ·
+    Auto-spawn daemon (yes, with optional service-manager registration) ·
+    Wrapper-command secrets fallback / mcpd-lite (obsoleted by auto-spawn) ·
+    Canonical scope per-user vs per-project (user-configurable; both supported) ·
+    Sidecar vs centralised lock file (follows scope choice) ·
+    JetBrains XML projection (ships in v1.0) ·
+    Curated community registry (deferred to v1.1) ·
+    GUI stack: Actix + Askama (GUI inside mcpd), see <a href="./ui-shootout/">ui-shootout</a> ·
+    <strong>Daemon supervision surface (restart+backoff, OOM, audit log, 3-stream log tail)</strong>.
+    See <a href="#convergent">convergent v1.0 design</a> above for the locked-in choices.
+  </p>
 
   <section class="section" id="how-to-read">
     <h2>How to read each stream</h2>

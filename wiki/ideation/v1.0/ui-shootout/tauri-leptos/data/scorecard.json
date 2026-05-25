@@ -1,0 +1,92 @@
+{
+  "stack": "tauri-leptos",
+  "stack_label": "Tauri 2 + Leptos",
+  "verdict_summary": "A pure-Rust front-to-back stack that shares types and logic with mcpd via a common crate, ships a small system-WebView binary, and delivers genuinely native a11y on macOS and Linux — at the cost of a slower-than-JS dev loop, an officially-unsupported SSR setup (Tauri tells you to use Leptos in SSG/CSR mode), and a fragmented WebKit surface on Linux.",
+  "best_when": "Wins when the team is Rust-first, wants a shared-types architecture between mcpd and the GUI, values a small footprint over instant-HMR turnaround, and is willing to invest in macOS notarization to ship a real native app.",
+  "worst_when": "Wrong call if the team needs sub-second hot-reload iteration on UI, wants to hire from a deep pool of frontend devs, or expects rich SSE/streaming behavior to work identically across WKWebView and WebKitGTK without per-platform testing.",
+  "scores": {
+    "developer_experience": {
+      "rating": 6,
+      "notes": "Tauri's tooling (create-tauri-app, tauri.conf.json, capabilities) is mature and well-documented post-2.0 GA; cargo-leptos coordinates server+client builds and supports Tailwind/SASS. But the toolchain has two moving parts (Trunk OR cargo-leptos, plus Tauri CLI), Leptos 0.7's statically-typed view tree means a steeper compiler-error learning curve than React/Dioxus, and the Tauri docs themselves are pinned to Leptos 0.6 (community is on 0.8) so you'll be cross-referencing.",
+      "evidence_ids": ["tauri-2-stable", "tauri-leptos-guide", "leptos-070-release", "cargo-leptos", "leptos-cargo-leptos-book"]
+    },
+    "hot_reload_quality": {
+      "rating": 5,
+      "notes": "cargo-leptos --hot-reload patches markup changes in many cases without full reload, and CSS/SASS reloads cleanly. Rust logic changes still require WASM rebuild — incremental builds are typically 3–4s, vastly slower than JS HMR. You will never get the sub-100ms feedback loop of a TS frontend.",
+      "evidence_ids": ["leptos-dev-flow", "leptos-cargo-leptos-book", "cargo-leptos"]
+    },
+    "type_safety_with_rust_core": {
+      "rating": 10,
+      "notes": "This is the headline strength. mcpd's request/response types (serde structs) can be imported directly into the Leptos crate — no codegen, no wire-format drift, no separate TypeScript types file. Compile-time errors when the daemon protocol changes. TauRPC adds a typed RPC layer on top of Tauri commands for an even tighter contract.",
+      "evidence_ids": ["leptos-github", "tauri-calling-rust", "taurpc"]
+    },
+    "binary_size_mb": {
+      "value": 12,
+      "notes": "Tauri installers commonly land between 600 KB and 10 MB for the shell; adding a non-trivial Leptos WASM bundle (with logging, JSON-RPC client, syntax highlighting for logs) plus the mcpd sidecar typically pushes the macOS .app and Linux AppImage into the 8–15 MB range. Real Tauri apps like Ariadne sit around 40 MB on disk with assets.",
+      "evidence_ids": ["tauri-vs-electron-hopp", "tauri-vs-electron-pkgpulse", "leptos-binary-size"]
+    },
+    "memory_idle_mb": {
+      "value": 60,
+      "notes": "Independent 2026 benchmarks consistently put Tauri at ~30–60 MB resident at idle, roughly half an equivalent Electron build. Leptos's fine-grained reactivity adds little extra; the WKWebView/WebKitGTK process is the dominant contributor.",
+      "evidence_ids": ["tauri-vs-electron-pkgpulse", "tauri-vs-electron-hopp"]
+    },
+    "first_paint_ms": {
+      "value": 450,
+      "notes": "Cold launch in well-known Tauri apps is sub-second (Ariadne reportedly under 1s; Hopp's benchmark put Tauri at <500ms vs Electron at 1–2s). Leptos WASM adds tens-to-low-hundreds of ms for the initial WASM compile+instantiate; CSR-only Leptos in a sidecar-less Tauri shell can realistically hit 400–500ms first paint on an M-series Mac.",
+      "evidence_ids": ["tauri-vs-electron-hopp", "tauri-vs-electron-pkgpulse"]
+    },
+    "accessibility": {
+      "rating": 8,
+      "notes": "Tauri inherits the OS WebView's accessibility tree — VoiceOver on macOS and Orca on Linux work out of the box for standard HTML semantics, and IME (CJK composition) works because the WebView handles it natively. The boringcactus 2025 survey rates WebView-hybrid stacks as passing the 'label + input + screen reader + IME' bar that 94% of pure-native Rust frameworks fail. Leptos's view tree generates standard DOM — no custom canvas.",
+      "evidence_ids": ["boringcactus-2025-survey", "tauri-webview-versions"]
+    },
+    "theming_native_feel": {
+      "rating": 6,
+      "notes": "Tauri provides native window chrome, full native macOS/Linux menu bars and system tray APIs, and the WebView respects system dark/light mode. But the UI inside the window is still a WebView — fonts, scrollbars, focus rings won't match native AppKit/GTK perfectly. Leptos has no built-in 'native-look' component library; you ship your own CSS or pull shadcn-style components.",
+      "evidence_ids": ["tauri-menu", "tauri-tray", "tauri-webview-versions"]
+    },
+    "ipc_with_mcpd_ergonomics": {
+      "rating": 7,
+      "notes": "Two clean paths: (a) Tauri commands in Rust dial mcpd's UDS via tokio::net::UnixStream and expose typed commands to Leptos — clean, but requires explicit Channel API for streaming. (b) Leptos talks directly to mcpd's HTTP/SSE bridge via reqwasm/gloo-net from WASM — simpler, but loses the ability to enforce Tauri capabilities/ACLs. Either way, shared serde types eliminate marshaling pain. Tauri can also sidecar-spawn mcpd on first launch.",
+      "evidence_ids": ["tauri-calling-rust", "tauri-sidecar", "tauri-uds-dev-to", "tauri-ipc-concept"]
+    },
+    "live_update_story": {
+      "rating": 6,
+      "notes": "Two viable patterns. Pattern A: Tauri Channel API streams from a Rust-side UDS connection into Leptos signals — fast, ordered, well-supported. Pattern B: Leptos/WASM uses the WebView's native EventSource against mcpd's HTTP/SSE bridge — works on WKWebView, but WebKitGTK has historical fetch/EventSource quirks, and an open feature request for a first-party Tauri SSE plugin (issue #1002) signals this is not yet a paved path. Server-list refresh and log tails will both work; you'll write more glue than in a pure-web app.",
+      "evidence_ids": ["tauri-calling-rust", "tauri-calling-frontend", "tauri-sse-feature-req", "tauri-webview-versions"]
+    },
+    "packaging_macos_linux": {
+      "rating": 8,
+      "notes": "Tauri's bundler produces .app/.dmg for macOS (with first-party notarization automation via APPLE_API_KEY env vars), .AppImage and .deb for Linux, all via a single 'tauri build' invocation. Universal binaries (aarch64+x86_64) supported. .rpm requires a third-party action but is solved. Notarization adds 30–90s to CI macOS builds.",
+      "evidence_ids": ["tauri-macos-bundle", "tauri-macos-sign", "tauri-appimage", "tauri-debian"]
+    },
+    "ecosystem_maturity_2026": {
+      "rating": 7,
+      "notes": "Tauri 2.0 went stable Oct 2024 with mobile, ACL/capabilities, and the new Channel IPC; awesome-tauri lists hundreds of production apps. Leptos is at 0.8.x in 2026 with 0.9-alpha out, APIs are 'basically settled' per maintainer commentary, but the combination Tauri+Leptos lacks a major flagship app the way Tauri+React has 1Password 8 or Tauri+Vue has multiple shipped products.",
+      "evidence_ids": ["tauri-2-stable", "tauri-awesome", "leptos-080-release", "leptos-vs-dioxus-2026"]
+    },
+    "production_users": {
+      "value": ["Ariadne (Tauri Git client)", "LumenTrack (Tauri crypto tracker)", "Whispering (Tauri speech-to-text)", "Watson.ai (Tauri meeting tool)", "1Password 8 (early Tauri adopter)", "Tauri+Leptos combo: forgestream/IDVerse demo, michalvavra/tauri-leptos-example (no published mass-market app)"],
+      "notes": "Tauri itself has many flagship users; Leptos has many SSR-web production users; the specific Tauri+Leptos combination has demo projects and small commercial apps but no widely-known consumer flagship — this is a real gap.",
+      "evidence_ids": ["tauri-awesome", "tauri-vs-electron-pkgpulse", "michalvavra-tauri-leptos", "forgestream-leptos-tauri"]
+    },
+    "license_risk": {
+      "value": "MIT-or-Apache-2.0",
+      "notes": "Tauri is MIT or Apache-2.0 at the user's option. Leptos is MIT. Trunk, wasm-bindgen, cargo-leptos all MIT/Apache-2.0. No GPL contamination, no commercial-required components. Fully compatible with MCP Manager's permissive-license requirement.",
+      "evidence_ids": ["tauri-github", "leptos-license", "leptos-github"]
+    },
+    "team_hiring_pool": {
+      "rating": 3,
+      "notes": "Hiring is the achilles heel. Rust + WASM + Leptos's statically-typed view tree is a narrow intersection — orders of magnitude smaller than React/TS. Existing Rust devs can ramp (one report: 2 engineers, ~2 months, React+TS to Leptos), but you cannot post a 'senior Leptos engineer' job and expect inbound. Tauri-side Rust is much more hireable than the Leptos-side WASM.",
+      "evidence_ids": ["leptos-vs-dioxus-2026", "leptos-home"]
+    }
+  },
+  "deal_breakers": [],
+  "open_questions": [
+    "Does mcpd's JSON-RPC bridge already expose SSE over HTTP, or only over UDS? If SSE is HTTP-only, the Leptos WASM can hit it directly via EventSource (simplest path); if UDS-only, Tauri commands must proxy via the Channel API.",
+    "Is the GUI shipped as a sidecar that auto-spawns mcpd, or does mcpd run as a launchd/systemd unit independent of the GUI? The Tauri sidecar story is solid but adds bundle size and complicates the 'mcpd not yet running' boot case.",
+    "Does the team accept Leptos's CSR/SSG-only constraint inside Tauri (the official Tauri docs explicitly say 'Tauri doesn't officially support server based solutions, so use SSG'), or do they want SSR which would mean running mcpd as the Leptos server — a non-trivial architectural reframing.",
+    "Is the 3–4s incremental rebuild loop acceptable, or does the team need TS-like sub-second HMR? If the latter, a TS frontend on Tauri is the saner pick.",
+    "Will the project commit to AccessKit/native-tested IME flows now or accept WebView-default a11y (which is good but inherits WebKitGTK quirks on Linux)?"
+  ]
+}

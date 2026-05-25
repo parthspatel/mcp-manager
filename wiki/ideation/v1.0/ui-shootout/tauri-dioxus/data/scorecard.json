@@ -1,0 +1,93 @@
+{
+  "stack": "tauri-dioxus",
+  "stack_label": "Tauri 2 + Dioxus",
+  "verdict_summary": "An all-Rust stack with the best dev loop in the Rust UI space (Subsecond hot-patching) and full WebView accessibility for free — but the official Tauri+Dioxus story is unblessed, so you pick one of three flavors: Dioxus-desktop alone (the pragmatic choice), Tauri wrapping a Dioxus WASM frontend (most ceremony), or Dioxus Native via Blitz (not yet production-ready). For MCP Manager, plain Dioxus-desktop is the right call.",
+  "best_when": "You have a small Rust-fluent team that values a single-language stack, fast iteration via Subsecond, and is fine with a system WebView for rendering.",
+  "worst_when": "You need bulletproof CSS rendering across exotic widgets, a deep plugin ecosystem of vetted security primitives, or you intend to migrate to a non-WebView native UI before 2027.",
+  "scores": {
+    "developer_experience": {
+      "rating": 9,
+      "notes": "`dx new`, `dx serve`, `dx bundle` is the cleanest Rust UI workflow available in 2026. React-like RSX is familiar; signals model is tractable. The only friction is choosing between Dioxus-desktop, Tauri+Dioxus, or Dioxus Native.",
+      "evidence_ids": ["dioxus-cli", "dioxus-070-blog", "leptos-vs-dioxus-2026"]
+    },
+    "hot_reload_quality": {
+      "rating": 10,
+      "notes": "Subsecond — Dioxus 0.7's experimental Rust hot-patching via `dx serve --hotpatch` — is the first Rust framework to live-edit actual Rust code without losing app state. RSX/property hot reload already worked in 0.6. This is best-in-class for the entire Rust ecosystem.",
+      "evidence_ids": ["dioxus-070-blog", "subsecond-blog", "dioxus-hotreload"]
+    },
+    "type_safety_with_rust_core": {
+      "rating": 10,
+      "notes": "Single-language: shared types live in a `core` crate, used directly by both UI components and any Rust IPC layer. No wasm-bindgen marshalling for Dioxus-desktop (Rust runs natively); no TS schema duplication; serde Just Works. Beats Tauri+TS frontends and ties Leptos.",
+      "evidence_ids": ["dioxus-github", "dioxus-platforms-desktop"]
+    },
+    "binary_size_mb": {
+      "value": 12,
+      "notes": "Dioxus-desktop with Wry/Tao produces ~8–15 MB release binaries on macOS aarch64 — slightly larger than vanilla Tauri (~3–10 MB) because of bundled VirtualDOM/runtime. Add ~2 MB for embedded assets typical of an MCP Manager-sized GUI. Dioxus Native binaries are larger still (Blitz + WGPU stack).",
+      "evidence_ids": ["dioxus-bundle", "tauri-vs-electron"]
+    },
+    "memory_idle_mb": {
+      "value": 80,
+      "notes": "Empirical reports place Dioxus-desktop in the 60–100 MB idle range — system WebView (WKWebView) accounts for most of it, plus the Dioxus VirtualDOM. Tauri-only baseline is ~30–50 MB; the VDOM adds a measurable but modest overhead.",
+      "evidence_ids": ["tauri-vs-electron"]
+    },
+    "first_paint_ms": {
+      "value": 350,
+      "notes": "Cold-start first paint on Apple Silicon: WKWebView initialization dominates (~200 ms) plus VDOM mount (~100–150 ms). Comparable to a Tauri+React app; faster than Electron; slower than a native iced/egui frame.",
+      "evidence_ids": ["tauri-vs-electron", "dioxus-platforms-desktop"]
+    },
+    "accessibility": {
+      "rating": 9,
+      "notes": "Dioxus-desktop inherits the system WebView's a11y tree — VoiceOver on macOS and Orca on Linux work out-of-the-box, including IME for CJK. This is the same a11y story as Tauri or Electron. Dioxus Native (Blitz) does NOT yet have a screen-reader story.",
+      "evidence_ids": ["boringcactus-2025-survey", "blitz-github"]
+    },
+    "theming_native_feel": {
+      "rating": 7,
+      "notes": "Full CSS available, so dark mode / system colors via `@media (prefers-color-scheme)` are trivial. Tailwind built-in in 0.7 with zero config. But it's still 'web inside a window' — won't feel like AppKit; toolbars, sheets, and menus require manual styling.",
+      "evidence_ids": ["dioxus-070-blog"]
+    },
+    "ipc_with_mcpd_ergonomics": {
+      "rating": 8,
+      "notes": "Two clean paths: (1) Dioxus-desktop runs Rust natively, so the UI can directly construct a hyper/reqwest client to mcpd's HTTP+SSE bridge or open a `tokio::net::UnixStream` to the UDS — no Tauri command boundary. (2) If using Tauri+Dioxus-WASM, route through tauri::ipc::Channel for streaming. SSE EventSource is available from the WebView side too.",
+      "evidence_ids": ["dioxus-platforms-desktop", "tauri-sidecar-vs-uds", "tauri-http-plugin"]
+    },
+    "live_update_story": {
+      "rating": 9,
+      "notes": "Signals + use_resource compose naturally with async streams. Dioxus 0.7 has first-class SSE/streaming primitives on the fullstack side, and on desktop you can subscribe to an SSE EventSource from the WebView or push events from Rust into signals via channels. Log tails and toolchain-projection status updates are idiomatic.",
+      "evidence_ids": ["dioxus-fullstack-streams", "dioxus-fullstack-axum", "dioxus-070-blog"]
+    },
+    "packaging_macos_linux": {
+      "rating": 8,
+      "notes": "`dx bundle --package-types macos,dmg,deb,appimage` covers both required targets. Code signing on macOS works via standard codesign + the team's Developer ID — no Tauri-specific magic. Tauri 2's bundler (if wrapping) is more mature with notarization automation, but Dioxus-only is sufficient for v1.",
+      "evidence_ids": ["dioxus-bundle", "tauri-2-stable"]
+    },
+    "ecosystem_maturity_2026": {
+      "rating": 7,
+      "notes": "Dioxus 0.7.9 as of May 2026 is the most stable release to date but still pre-1.0; the team explicitly warns about breaking changes between 0.x. Tauri 2 (GA Oct 2024) is rock-solid. The intersection — Tauri+Dioxus — is community-maintained (Desdaemon/tauri-dioxus) with no official blessing. Blitz/Dioxus Native is pre-alpha.",
+      "evidence_ids": ["dioxus-079", "dioxus-070-blog", "tauri-2-stable", "tauri-dioxus-discussion", "blitz-github"]
+    },
+    "production_users": {
+      "value": ["Huawei (internal apps)", "Airbus + ESA collision-avoidance UI", "Satellite.im", "Spacedrive (Tauri side)"],
+      "notes": "Dioxus is YC-backed (Dioxus Labs) and has named industrial users. The Tauri+Dioxus-specifically combo has no notable shipping product as of May 2026; everyone using Dioxus uses dioxus-desktop directly.",
+      "evidence_ids": ["ycombinator-dioxus", "dioxus-github"]
+    },
+    "license_risk": {
+      "value": "MIT-or-Apache-2.0",
+      "notes": "Both Tauri and Dioxus are MIT/Apache-2.0 dual-licensed. Wry, Tao, Blitz inherit the same. No GPL/commercial entanglement. Zero risk against MCP Manager's permissive license requirement.",
+      "evidence_ids": ["dioxus-github", "tauri-github"]
+    },
+    "team_hiring_pool": {
+      "rating": 5,
+      "notes": "Smaller than React+Tauri, comparable to Leptos. Rust developers comfortable with React-like component models can ramp in days. But finding contributors who already know Dioxus specifically is hard — the project has ~36k stars and a small core team. For a small founder-led project this is fine; for hiring at scale it's a constraint."
+    }
+  },
+  "deal_breakers": [
+    "Blitz/Dioxus Native is pre-alpha (missing many event types, layout bugs, no a11y) — recommending Dioxus Native as MCP Manager v1's renderer would be reckless.",
+    "Tauri+Dioxus has no official template or maintainer story — community-only via Desdaemon/tauri-dioxus. Picking this combo adds glue-code maintenance burden with no clear upside over plain Dioxus-desktop.",
+    "Pre-1.0 Dioxus: minor releases (0.6→0.7) historically have breaking changes in macros and APIs. Plan for a yearly migration cost."
+  ],
+  "open_questions": [
+    "Does mcpd's HTTP/SSE bridge accept a UDS or only a TCP socket? If TCP-only, Dioxus-desktop's direct-from-Rust client is trivial; if UDS-required, hyper-over-UnixStream is straightforward but the JSON-RPC plumbing must be written.",
+    "Does the team want to keep open the option to ship a web build of the MCP Manager GUI? Dioxus's single component tree gives that for free; Tauri+TS doesn't.",
+    "Is Subsecond hot-patching reliable enough on macOS for daily use in May 2026, or still flaky? Worth a 1-day spike before committing."
+  ]
+}

@@ -1,0 +1,260 @@
+{
+  "entries": [
+    {
+      "id": "actix-web-github",
+      "title": "actix/actix-web — Powerful, pragmatic, extremely fast Rust web framework",
+      "url": "https://github.com/actix/actix-web",
+      "source": "GitHub",
+      "accessed": "2026-05-24",
+      "note": "Maintained under the Actix org; MIT-or-Apache-2.0 dual-licensed. README documents 4.x series and Rust 1.75+ MSRV."
+    },
+    {
+      "id": "actix-web-crates",
+      "title": "actix-web — crates.io (68M+ downloads)",
+      "url": "https://crates.io/crates/actix-web",
+      "source": "crates.io",
+      "accessed": "2026-05-24",
+      "note": "Latest stable: 4.13.0 (Feb 2026). 68M+ all-time downloads. Still no 5.0; the 4.x series remains the active line."
+    },
+    {
+      "id": "actix-rs-home",
+      "title": "Actix Web — official documentation",
+      "url": "https://actix.rs/",
+      "source": "actix.rs",
+      "accessed": "2026-05-24",
+      "note": "Primary docs site for getting-started, routing, extractors, and middleware patterns."
+    },
+    {
+      "id": "actix-web-vs-axum-2026",
+      "title": "Actix-web vs Axum in 2026 — throughput, latency, memory",
+      "url": "https://medium.com/@abhinav.dobhal/actix-web-vs-e1e019714542",
+      "source": "Medium (Abhinav Dobhal)",
+      "accessed": "2026-05-24",
+      "note": "2026 head-to-head: Actix ~20k req/s vs Axum ~18k req/s; idle RAM 50–80 MB (Actix) vs 60–90 MB (Axum). Actix wins raw throughput; Axum wins maintainability for most teams."
+    },
+    {
+      "id": "rust-web-frameworks-2026",
+      "title": "Rust Web Frameworks in 2026: Axum vs Actix vs Rocket vs Warp vs Salvo",
+      "url": "https://aarambhdevhub.medium.com/rust-web-frameworks-in-2026-axum-vs-actix-web-vs-rocket-vs-warp-vs-salvo-which-one-should-you-2db3792c79a2",
+      "source": "Medium / Aarambh Dev Hub",
+      "accessed": "2026-05-24",
+      "note": "Survey of the 2026 Rust web-framework landscape; Actix retains the raw-perf crown, Axum dominates new-project mindshare."
+    },
+    {
+      "id": "calmops-rust-web-2026",
+      "title": "Rust Web Development 2026 — Actix, Axum, and Modern Rust",
+      "url": "https://calmops.com/programming/rust-web-development-2026/",
+      "source": "calmops.com",
+      "accessed": "2026-05-24",
+      "note": "Hands-on 2026 guide covering production patterns for Actix and Axum."
+    },
+    {
+      "id": "tera-github",
+      "title": "Keats/tera — Jinja2/Django-style template engine for Rust",
+      "url": "https://github.com/Keats/tera",
+      "source": "GitHub",
+      "accessed": "2026-05-24",
+      "note": "v1 frozen, v2 on crates.io with migration guide. MIT-licensed. Maintained by Vincent Prouillet (also author of Zola)."
+    },
+    {
+      "id": "tera-home",
+      "title": "Tera — official site and docs",
+      "url": "https://keats.github.io/tera/",
+      "source": "keats.github.io",
+      "accessed": "2026-05-24",
+      "note": "Runtime template engine modeled on Jinja2/Django. Supports inheritance, macros, filters, tests; templates loaded from disk at startup or via glob."
+    },
+    {
+      "id": "tera-crates",
+      "title": "tera — crates.io",
+      "url": "https://crates.io/crates/tera",
+      "source": "crates.io",
+      "accessed": "2026-05-24",
+      "note": "v2 generally-available; v1 frozen. Tera ships an auto-reload feature that recompiles templates on file change for dev workflows."
+    },
+    {
+      "id": "askama-github",
+      "title": "askama-rs/askama — type-safe compile-time Jinja-like templates",
+      "url": "https://github.com/askama-rs/askama",
+      "source": "GitHub",
+      "accessed": "2026-05-24",
+      "note": "Generates Rust code from templates at compile time. The rinja fork was re-unified with Askama in 2024–2025."
+    },
+    {
+      "id": "askama-home",
+      "title": "Askama — official introduction",
+      "url": "https://askama.rs/",
+      "source": "askama.rs",
+      "accessed": "2026-05-24",
+      "note": "Templates are bound to user-defined structs; #[derive(Template)] gives you typed render() methods and compile-time errors for missing fields."
+    },
+    {
+      "id": "askama-docsrs",
+      "title": "askama 0.14.0 on docs.rs",
+      "url": "https://docs.rs/crate/askama/latest",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "0.14.0 released 2025-04-23. Note: the standalone askama_actix integration crate was deprecated/removed in 0.13; use Askama's core Template::render() and return a string body."
+    },
+    {
+      "id": "askama-actix-deprecated",
+      "title": "askama_actix on Lib.rs — marked deprecated/not recommended",
+      "url": "https://lib.rs/crates/askama_actix",
+      "source": "lib.rs",
+      "accessed": "2026-05-24",
+      "note": "Confirms 0.15.0+deprecated status; new code should call .render() directly and return HttpResponse::Ok().content_type(\"text/html\").body(html)."
+    },
+    {
+      "id": "maud-github",
+      "title": "lambda-fairy/maud — compile-time HTML templates as a Rust macro",
+      "url": "https://github.com/lambda-fairy/maud",
+      "source": "GitHub",
+      "accessed": "2026-05-24",
+      "note": "Alternative to Tera/Askama. Templates are inline Rust macros, not external files — IDE-friendly but designer-hostile."
+    },
+    {
+      "id": "leapcell-template-tradeoffs",
+      "title": "Rust Template Engines: Compile-Time vs Run-Time vs Macro Tradeoffs",
+      "url": "https://leapcell.io/blog/rust-template-engines-compile-time-vs-run-time-vs-macro-tradeoffs",
+      "source": "Leapcell blog",
+      "accessed": "2026-05-24",
+      "note": "Clear taxonomy: Tera = runtime, Askama/Maud = compile-time. Compile-time gives type safety + speed but requires a recompile per template change unless dev-mode auto-reload is wired up."
+    },
+    {
+      "id": "actix-sse-example",
+      "title": "actix-sse-example — broadcast SSE with actix-web",
+      "url": "https://github.com/chaudharypraveen98/actix-sse-example",
+      "source": "GitHub",
+      "accessed": "2026-05-24",
+      "note": "Canonical pattern: tokio broadcast channel + actix-web-lab Sse helper + 10s heartbeat ping to evict stale clients."
+    },
+    {
+      "id": "actix-web-lab-sse",
+      "title": "actix_web_lab::sse — official SSE helper module",
+      "url": "https://docs.rs/actix-web-lab/latest/actix_web_lab/sse/index.html",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "Sse::from_infallible_receiver, Sse::from_stream, retry/keepalive helpers — first-party SSE story for Actix in 2026."
+    },
+    {
+      "id": "htmx-sse-ext",
+      "title": "htmx ~ Server-Sent Events extension",
+      "url": "https://htmx.org/extensions/sse/",
+      "source": "htmx.org",
+      "accessed": "2026-05-24",
+      "note": "hx-ext=\"sse\" + sse-connect=\"<url>\" + sse-swap=\"<event>\" wires a server stream into any DOM element. ~12 KB JS, no build step."
+    },
+    {
+      "id": "htmx-vs-alpine-2026",
+      "title": "HTMX vs Alpine.js — Lightweight Interactivity 2026 (PkgPulse)",
+      "url": "https://www.pkgpulse.com/guides/htmx-vs-alpinejs-2026",
+      "source": "PkgPulse Guides",
+      "accessed": "2026-05-24",
+      "note": "HTMX = server-driven HTML swaps; Alpine = client-side reactive state. Most 2026 lightweight stacks use both together."
+    },
+    {
+      "id": "harm-stack",
+      "title": "The HARM Stack (HTMX + Axum + AlpineJS + Rust + Maud)",
+      "url": "https://nguyenhuythanh.com/posts/the-harm-stack-considered-unharmful/",
+      "source": "nguyenhuythanh.com",
+      "accessed": "2026-05-24",
+      "note": "Worked example of a Rust SSR + HTMX + Alpine stack; demonstrates the architecture in production."
+    },
+    {
+      "id": "tray-icon-crates",
+      "title": "tray-icon — crates.io (Tauri-org maintained)",
+      "url": "https://crates.io/crates/tray-icon",
+      "source": "crates.io",
+      "accessed": "2026-05-24",
+      "note": "1.87M downloads/month, used by 149 crates. macOS main-thread requirement; Linux uses libayatana-appindicator or libappindicator. Latest update Apr 2026."
+    },
+    {
+      "id": "tray-icon-docs",
+      "title": "tray_icon — docs.rs API reference",
+      "url": "https://docs.rs/tray-icon",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "Cross-platform tray icon + menu API; standalone from Tauri and usable in any Rust app with a winit event loop."
+    },
+    {
+      "id": "zola-templates",
+      "title": "Zola — uses Tera templates",
+      "url": "https://www.getzola.org/documentation/templates/overview/",
+      "source": "getzola.org",
+      "accessed": "2026-05-24",
+      "note": "Reference production user of Tera. Tera's primary author Vincent Prouillet built Zola; the two evolve together."
+    },
+    {
+      "id": "jellyfin-networking",
+      "title": "Jellyfin — networking and bind-address docs",
+      "url": "https://jellyfin.org/docs/general/post-install/networking/",
+      "source": "jellyfin.org",
+      "accessed": "2026-05-24",
+      "note": "Reference architecture for a localhost-or-LAN web app: HTTP on 8096, no native window, served to any browser on the network."
+    },
+    {
+      "id": "dns-rebinding-blog",
+      "title": "DNS rebinding attacks explained — GitHub Security blog",
+      "url": "https://github.blog/security/application-security/dns-rebinding-attacks-explained-the-lookup-is-coming-from-inside-the-house/",
+      "source": "github.blog",
+      "accessed": "2026-05-24",
+      "note": "Threat model that any localhost web service must defend against. Mitigation: bind 127.0.0.1 only AND validate Host header AND require a bearer token."
+    },
+    {
+      "id": "pwa-installable",
+      "title": "Making PWAs installable — MDN",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Installing",
+      "source": "MDN",
+      "accessed": "2026-05-24",
+      "note": "Chrome/Edge desktop install puts the PWA in the macOS dock or Linux app launcher with standalone display-mode. Path to a 'feels like an app' UX without shipping a native window."
+    },
+    {
+      "id": "pi-hole-v6-password",
+      "title": "Pi-hole v6 — setting and using the web password",
+      "url": "https://dev.to/makewithyoshi/pi-hole-v6-how-to-actually-set-a-password-and-login-properly-n9k",
+      "source": "DEV Community",
+      "accessed": "2026-05-24",
+      "note": "Real-world prior art for a localhost web admin UI with bearer/password auth — Pi-hole's approach to the same UX problem MCP Manager faces."
+    },
+    {
+      "id": "cargo-watch-releases",
+      "title": "watchexec/cargo-watch — releases and usage",
+      "url": "https://github.com/watchexec/cargo-watch/releases",
+      "source": "GitHub",
+      "accessed": "2026-05-24",
+      "note": "cargo watch -x run gives a 2–4s rebuild loop. Combined with Tera auto-reload, dev iteration on templates is near-instant; with Askama, every template change triggers a full rebuild."
+    },
+    {
+      "id": "actix-autoreload",
+      "title": "Actix Web — Auto-Reloading documentation",
+      "url": "https://actix.rs/docs/autoreload/",
+      "source": "actix.rs",
+      "accessed": "2026-05-24",
+      "note": "Official guide to combining cargo-watch with systemfd/listenfd for graceful socket-passing restarts on file change."
+    },
+    {
+      "id": "leapcell-askama-tera",
+      "title": "Seamless Server-Side Templating in Rust — Askama and Tera",
+      "url": "https://leapcell.io/blog/seamless-server-side-templating-in-rust-web-applications-with-askama-and-tera",
+      "source": "Leapcell blog",
+      "accessed": "2026-05-24",
+      "note": "Side-by-side recipes for both engines including Actix integration patterns post-askama_actix-deprecation."
+    },
+    {
+      "id": "boringcactus-2025-survey",
+      "title": "Boringcactus 2025 Rust UI survey — 43 libraries tested",
+      "url": "https://boringcactus.com/2025/04/13/2025-survey-of-rust-gui-libraries.html",
+      "source": "boringcactus.com",
+      "accessed": "2026-05-24",
+      "note": "Referenced by sister stacks. The browser itself trivially passes the screen-reader + IME test that 94% of Rust GUI toolkits failed, which is the strongest single argument for the SSR stack."
+    },
+    {
+      "id": "actix-web-lab-crates",
+      "title": "actix-web-lab — crates.io",
+      "url": "https://crates.io/crates/actix-web-lab",
+      "source": "crates.io",
+      "accessed": "2026-05-24",
+      "note": "Maintained by the Actix team as a staging ground for features (SSE, typed headers, scope guards). Promoted features eventually move into actix-web proper."
+    }
+  ]
+}

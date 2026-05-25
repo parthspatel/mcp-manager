@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Manager — v1.1 future features</title>
+<meta name="description" content="Features deferred out of v1.0 scope, kept here for the v1.1 spec.">
+<link rel="stylesheet" href="./assets/styles.css">
+<script type="module" src="./assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">future · v1.1</span></div>
+    <div class="crumbs"><a href="./index.html">← v1.0 synthesis hub</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Future features &amp; spec — v1.1+</h1>
+
+  <p class="lede">
+    Items deferred out of v1.0 scope during the 2026-05-24 lockdown. Kept here so they aren't lost; each entry has enough context that the v1.1 design phase can resume without re-deriving "why was this deferred?".
+  </p>
+
+  <p>
+    <span class="evidence-badge">deferred from v1.0</span>
+    <span class="pill accent">future spec</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#community-registry">Curated community toolchain registry</a></li>
+      <li><a href="#tauri-shell">Tauri shell over the Actix UI</a></li>
+      <li><a href="#future-scope-criteria">When to revisit each item</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="community-registry">
+    <h2>Curated community toolchain registry</h2>
+
+    <p><strong>What:</strong> A hosted, curated registry of community-contributed toolchain manifests — analogous to Homebrew taps, mise plugins, or asdf plugins. Users would run something like:</p>
+
+    <pre><code>mcpm toolchain add @community/cline-fork
+mcpm toolchain add github:user/my-custom-editor-manifest
+mcpm toolchain list --remote</code></pre>
+
+    <p>…and pull a vetted TOML manifest for an editor or AI client that MCP Manager doesn't ship native support for.</p>
+
+    <h3>Why deferred from v1.0</h3>
+    <ul>
+      <li><strong>Maintenance burden.</strong> A curated registry needs a moderation policy, a vetting process, abuse reporting, and someone responsible for it. v1.0 doesn't have the bandwidth.</li>
+      <li><strong>Trust model is non-trivial.</strong> A manifest in the projector runs with the user's filesystem permissions — a malicious manifest could exfiltrate secrets or overwrite arbitrary files. Needs signing, provenance, possibly a sandboxed execution model.</li>
+      <li><strong>v1.0's TOML escape hatch already covers the urgent need.</strong> Users CAN teach <code>mcpm</code> about new tools right now by dropping a TOML manifest in <code>~/.config/mcp-manager/manifests/</code>. The registry just makes <em>discovery</em> easier.</li>
+    </ul>
+
+    <h3>v1.1 spec sketch</h3>
+    <ol>
+      <li><strong>Registry format</strong>: probably a Git repository (Homebrew-tap-style) — clone or shallow-fetch, no central HTTP API needed. Lower ops cost.</li>
+      <li><strong>Trust tiers</strong>:
+        <ul>
+          <li><code>core</code> — manifests shipped with mcpm itself (e.g. <code>@mcp-manager/core</code>).</li>
+          <li><code>community</code> — vetted, signed by a maintainer (<code>@community/*</code>).</li>
+          <li><code>unverified</code> — arbitrary git URLs; user must accept a "trust this source" prompt the first time. Signature optional.</li>
+        </ul>
+      </li>
+      <li><strong>Signing</strong>: minisign or ssh-signed-git-tags. Pick one; minisign is simpler.</li>
+      <li><strong>Capability declarations</strong>: each manifest declares what filesystem paths it writes and what env vars it reads. <code>mcpm</code> enforces the declaration at projection time (refuses to write outside the declared paths). This makes a malicious manifest much less dangerous — the worst it can do is corrupt the editor configs it explicitly says it manages.</li>
+      <li><strong>CLI</strong>: <code>mcpm toolchain</code> sub-commands — <code>add</code> / <code>list</code> / <code>remove</code> / <code>update</code> / <code>verify</code>.</li>
+      <li><strong>Curation policy</strong>: needs human governance. Probably one or two trusted maintainers initially; PR-based.</li>
+    </ol>
+
+    <h3>What can be done in v1.0 to NOT make this harder</h3>
+    <p>The v1.0 TOML manifest format should be designed with future-registry use in mind:</p>
+    <ul>
+      <li>Include a <code>schema_version</code> field so v1.0 manifests work on v1.1 mcpm.</li>
+      <li>Include optional <code>capabilities</code> declarations (paths-written, env-read) — v1.0 won't enforce them, but v1.1 will. Manifests authored now will already be enforceable later.</li>
+      <li>Include optional <code>source</code> + <code>signature</code> fields. Tolerate absence in v1.0; require for <code>community</code>-tier in v1.1.</li>
+    </ul>
+
+    <p style="color:var(--fg-faint);font-size:0.85rem">
+      Source of deferral: 2026-05-24 product lockdown.
+      Originally flagged in <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge / S6</a>.
+    </p>
+  </section>
+
+  <section class="section" id="tauri-shell">
+    <h2>Tauri shell over the Actix UI</h2>
+
+    <p><strong>What:</strong> A thin Tauri 2 binary whose WebView points at <code>http://localhost:NNNN</code> — i.e., the same Actix UI v1.0 ships, but wrapped in a real native window with a dock icon, native menu bar, system notifications, and macOS code signing / notarization. The Actix server runs as a Tauri "sidecar" process (or the same mcpd binary, just launched by Tauri instead of by the user). Both targets ship from one codebase.</p>
+
+    <h3>Why deferred from v1.0</h3>
+    <ul>
+      <li><strong>v1.0 ships Actix + Askama served from inside mcpd</strong> (see <a href="./ui-shootout/">ui-shootout</a>). That gets users a working GUI sooner with the simplest architecture.</li>
+      <li>The "browser tab" UX taxes (no dock icon, Cmd-W kills the UI, no global hotkeys) are partially mitigated in v1.0 by a tray-icon helper + PWA manifest. Whether they're <em>painful</em> in practice is an empirical question — we'll know after v1.0 ships.</li>
+      <li>Tauri adds packaging complexity (Apple notarization, code-signing certs, AppImage/.deb/.rpm builds) that we want to learn after the UI itself is stable.</li>
+    </ul>
+
+    <h3>v1.1 spec sketch</h3>
+    <ol>
+      <li><strong>New crate <code>mcpd-shell-tauri</code></strong> — Tauri 2 app, dependency on <code>mcpd</code> as a sidecar, points the WebView at <code>localhost:NNNN</code>.</li>
+      <li><strong>No UI rewrite</strong> — Actix server and Askama templates from v1.0 are reused verbatim. The shell is purely a wrapper.</li>
+      <li><strong>Distribution:</strong> Tauri shell becomes the recommended download for non-developer users; the headless <code>mcpd</code> + browser-tab mode remains supported (and still required for LAN/mobile use).</li>
+      <li><strong>Native integrations:</strong> dock badge with running-server count, macOS Touch Bar entries for quick start/stop, system notifications for server crashes, native open/save dialogs for config import/export.</li>
+      <li><strong>Auto-update:</strong> Tauri's first-party updater for the shell binary; the bundled <code>mcpd</code> updates independently via Homebrew/apt/cargo.</li>
+    </ol>
+
+    <h3>What can be done in v1.0 to NOT make this harder</h3>
+    <ul>
+      <li>Make sure the Actix server can be configured via env vars or flags (port, bind address, auth token) so the Tauri shell can launch it cleanly.</li>
+      <li>Keep all UI state in the URL (deep-linkable views) so the Tauri shell can restore the user's last view on launch.</li>
+      <li>Avoid any UI feature that fundamentally requires browser-only behavior (e.g. drag-and-drop FROM the OS into the UI) without an equivalent IPC fallback.</li>
+    </ul>
+
+    <p style="color:var(--fg-faint);font-size:0.85rem">
+      Source: <a href="./ui-shootout/index.html#open-questions">ui-shootout open questions</a>.
+      Flagged by the actix-tera agent (open question #5) as a likely v1.1 ask.
+    </p>
+  </section>
+
+  <section class="section" id="future-scope-criteria">
+    <h2>When to revisit each item</h2>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Item</th><th>Revisit trigger</th><th>Estimated effort</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Curated community toolchain registry</td>
+          <td>v1.0 has shipped and there's measurable demand (e.g. ≥10 community-authored manifests floating around in GitHub gists)</td>
+          <td>~6 weeks: registry repo + signing + capability declarations + CLI surface + governance policy</td>
+        </tr>
+        <tr>
+          <td>Tauri shell over Actix UI</td>
+          <td>v1.0 has shipped; user feedback flags "no dock icon" / "Cmd-W lost my work" / "can't get global hotkeys" as recurring complaints in &gt;~20% of sessions</td>
+          <td>~3–4 weeks: Tauri scaffold + sidecar config + notarization + auto-updater (no UI work — wraps the existing Actix server)</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Document state: minimal. Add items here as they're deferred during v1.0 development. Each entry should explain <em>why</em> deferred (so the future reader doesn't relitigate), <em>what shape</em> the future feature would take, and what v1.0 should do to avoid foreclosing the option.
+  </p>
+</main>
+</body>
+</html>

@@ -168,6 +168,27 @@ const SIDEBAR_STREAMS = [
       { path: "recommendation-toolchain-summary.html", label: "Recommendation", kind: "recommendation" },
     ],
   },
+  {
+    id: "ui-shootout",
+    n: 7,
+    title: "GUI shootout",
+    pages: [
+      { path: "index.html", label: "Shootout hub", kind: "index" },
+      { path: "matrix-shootout.html", label: "Ranking matrix", kind: "matrix" },
+      { path: "actix-tera/index.html", label: "Actix + Askama · overview", kind: "index" },
+      { path: "actix-tera/research-stack.html", label: "Actix · stack", kind: "research" },
+      { path: "actix-tera/research-mcp-manager-fit.html", label: "Actix · fit", kind: "research" },
+      { path: "actix-tera/recommendation-actix-tera-summary.html", label: "Actix · recommendation", kind: "recommendation" },
+      { path: "tauri-dioxus/index.html", label: "Dioxus · overview", kind: "index" },
+      { path: "tauri-dioxus/research-stack.html", label: "Dioxus · stack", kind: "research" },
+      { path: "tauri-dioxus/research-mcp-manager-fit.html", label: "Dioxus · fit", kind: "research" },
+      { path: "tauri-dioxus/recommendation-tauri-dioxus-summary.html", label: "Dioxus · recommendation", kind: "recommendation" },
+      { path: "tauri-leptos/index.html", label: "Leptos · overview", kind: "index" },
+      { path: "tauri-leptos/research-stack.html", label: "Leptos · stack", kind: "research" },
+      { path: "tauri-leptos/research-mcp-manager-fit.html", label: "Leptos · fit", kind: "research" },
+      { path: "tauri-leptos/recommendation-tauri-leptos-summary.html", label: "Leptos · recommendation", kind: "recommendation" },
+    ],
+  },
 ];
 
 const SIDEBAR_STREAM_IDS = new Set(SIDEBAR_STREAMS.map((s) => s.id));
@@ -181,20 +202,45 @@ const SIDEBAR_KIND_BADGE = {
 };
 
 // Determine page location from URL. Robust to file://, served root, trailing
-// slash. The prefix is what every sidebar link is prepended with so paths
-// resolve from any depth.
+// slash, AND nested stream directories (e.g. ui-shootout/tauri-leptos/foo.html).
+// The prefix is what every sidebar link is prepended with so paths resolve
+// from any depth. pathWithinStream is the relative path from the stream root
+// to the current page, used for active-link detection.
 function computeSidebarLocation() {
   const path = location.pathname.replace(/\/$/, "/index.html");
   const segments = path.split("/").filter(Boolean);
   const file = segments[segments.length - 1] || "index.html";
-  const parent = segments[segments.length - 2] || "";
-  const inStream = SIDEBAR_STREAM_IDS.has(parent);
-  return {
-    file,
-    streamId: inStream ? parent : null,
-    isHub: !inStream,
-    prefix: inStream ? "../" : "./",
-  };
+
+  // Find the first segment that matches a known stream id. This handles
+  // both flat (curious-otter-survey/foo.html) and nested
+  // (ui-shootout/tauri-leptos/foo.html) cases.
+  let streamId = null;
+  let streamIdx = -1;
+  for (let i = 0; i < segments.length; i++) {
+    if (SIDEBAR_STREAM_IDS.has(segments[i])) {
+      streamId = segments[i];
+      streamIdx = i;
+      break;
+    }
+  }
+
+  const isHub = streamId === null;
+  // Path from the stream's root to the current page, e.g.:
+  //   curious-otter-survey/research-foo.html → "research-foo.html"
+  //   ui-shootout/tauri-leptos/research-stack.html → "tauri-leptos/research-stack.html"
+  const pathWithinStream = isHub
+    ? null
+    : segments.slice(streamIdx + 1).join("/");
+
+  // "../" prefix needed to reach the v1.0 root from the current page.
+  // Count how many directory levels we are below the root:
+  //   hub:              0 levels deep → "./"
+  //   stream-direct:    1 level deep  → "../"
+  //   stream-nested:    2 levels deep → "../../"
+  const depthBelowRoot = isHub ? 0 : segments.length - streamIdx - 1;
+  const prefix = depthBelowRoot === 0 ? "./" : "../".repeat(depthBelowRoot);
+
+  return { file, streamId, pathWithinStream, isHub, prefix };
 }
 
 function el(tag, props = {}, children = []) {
@@ -248,6 +294,23 @@ function buildSidebarHubLink(loc) {
   );
 }
 
+function buildSidebarFutureLink(loc) {
+  const active = loc.isHub && loc.file === "future-features-v1.1.html";
+  return el(
+    "a",
+    {
+      href: loc.prefix + "future-features-v1.1.html",
+      class: "sidebar-link sidebar-hub-link" + (active ? " is-active" : ""),
+      "aria-current": active ? "page" : null,
+      title: "Features deferred from v1.0",
+    },
+    [
+      el("span", { class: "sidebar-link-badge kind-index", "aria-hidden": "true" }, ["»"]),
+      el("span", { class: "sidebar-link-label" }, ["Future (v1.1)"]),
+    ]
+  );
+}
+
 function buildSidebarStreamSection(stream, loc, storedOpen) {
   const isCurrentStream = loc.streamId === stream.id;
 
@@ -258,7 +321,9 @@ function buildSidebarStreamSection(stream, loc, storedOpen) {
 
   const pageList = el("ul", { class: "sidebar-pagelist" });
   for (const page of stream.pages) {
-    const active = isCurrentStream && loc.file === page.path;
+    // Compare full path-within-stream so nested entries (e.g.
+    // ui-shootout/tauri-leptos/foo.html) activate on the correct page.
+    const active = isCurrentStream && loc.pathWithinStream === page.path;
     const link = el(
       "a",
       {
@@ -322,7 +387,10 @@ function buildSidebar(loc) {
   );
 
   sidebar.appendChild(
-    el("div", { class: "sidebar-hub-section" }, [buildSidebarHubLink(loc)])
+    el("div", { class: "sidebar-hub-section" }, [
+      buildSidebarHubLink(loc),
+      buildSidebarFutureLink(loc),
+    ])
   );
 
   const nav = el("nav", { class: "sidebar-nav", "aria-label": "Streams" });

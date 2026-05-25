@@ -1,0 +1,244 @@
+{
+  "entries": [
+    {
+      "id": "dioxus-070-blog",
+      "title": "Dioxus 0.7 — Native rendering, hot-patching, fullstack overhaul",
+      "url": "https://dioxuslabs.com/blog/release-070/",
+      "source": "dioxuslabs.com",
+      "accessed": "2026-05-24",
+      "note": "Released September 8, 2025. Introduces Dioxus Native (WGPU + Blitz), Subsecond Rust hot-patching, Axum-based fullstack with SSE/WebSocket/file streaming, Stores for nested reactive state. Blitz still 'work in progress'."
+    },
+    {
+      "id": "dioxus-070-release",
+      "title": "Release Dioxus v0.7.0 — DioxusLabs/dioxus",
+      "url": "https://github.com/DioxusLabs/dioxus/releases/tag/v0.7.0",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "Canonical release notes for 0.7.0."
+    },
+    {
+      "id": "dioxus-079",
+      "title": "dioxus 0.7.9 on docs.rs",
+      "url": "https://docs.rs/crate/dioxus/latest",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "Latest stable point release as of May 2026 — 0.7.9."
+    },
+    {
+      "id": "dioxus-github",
+      "title": "DioxusLabs/dioxus on GitHub",
+      "url": "https://github.com/DioxusLabs/dioxus",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "MIT/Apache-2.0 dual license. 36.1k stars, 1.7k forks as of May 2026. Sponsored by FutureWei, Satellite.im, GitHub Accelerator. Targets web, desktop, mobile, SSR, liveview."
+    },
+    {
+      "id": "dioxus-platforms-desktop",
+      "title": "Dioxus 0.7 docs — Desktop platform",
+      "url": "https://dioxuslabs.com/learn/0.7/guides/platforms/desktop/",
+      "source": "dioxuslabs.com",
+      "accessed": "2026-05-24",
+      "note": "Desktop platform runs on Wry/Tao WebView (same engine as Tauri). Dioxus desktop is essentially a thin Tauri-shaped wrapper, not a separate renderer."
+    },
+    {
+      "id": "blitz-github",
+      "title": "DioxusLabs/blitz — A radically modular HTML/CSS rendering engine",
+      "url": "https://github.com/DioxusLabs/blitz",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "Native renderer used by Dioxus Native. Built on Stylo (Firefox), Taffy, Vello. Self-described as pre-alpha — 'still many bugs and missing features. Performance has not been a focus.'"
+    },
+    {
+      "id": "dioxus-native-crate",
+      "title": "dioxus-native on crates.io",
+      "url": "https://crates.io/crates/dioxus-native",
+      "source": "crates.io",
+      "accessed": "2026-05-24",
+      "note": "Crate that paints Dioxus apps entirely on the GPU via Blitz."
+    },
+    {
+      "id": "blitz-css-status",
+      "title": "Blitz CSS support matrix",
+      "url": "https://blitz.is/status/css",
+      "source": "blitz.is",
+      "accessed": "2026-05-24",
+      "note": "Live matrix of which CSS features Blitz supports. Significant gaps remain — incorrect writing direction, layout quirks, missing event types (mouseover, forms), input widget types."
+    },
+    {
+      "id": "dioxus-fullstack-axum",
+      "title": "Dioxus 0.7 — Axum Router (fullstack)",
+      "url": "https://dioxuslabs.com/learn/0.7/essentials/fullstack/axum/",
+      "source": "dioxuslabs.com",
+      "accessed": "2026-05-24",
+      "note": "Dioxus Fullstack is built on Axum; provides SSE, WebSocket, streaming, typed forms, file upload/download, middleware natively."
+    },
+    {
+      "id": "dioxus-fullstack-streams",
+      "title": "Dioxus 0.7 fullstack — Streaming and SSE",
+      "url": "https://dioxuslabs.com/learn/0.7/essentials/fullstack/streams/",
+      "source": "dioxuslabs.com",
+      "accessed": "2026-05-24",
+      "note": "TextStream and SSE primitives for streaming server-to-client data — directly relevant to log tailing and live updates from mcpd."
+    },
+    {
+      "id": "dioxus-hotreload",
+      "title": "Dioxus 0.7 — Hot reloading reference",
+      "url": "https://dioxuslabs.com/learn/0.7/essentials/ui/hotreload/",
+      "source": "dioxuslabs.com",
+      "accessed": "2026-05-24",
+      "note": "Two layers of hot reload: instant RSX/property reload (no rebuild) plus experimental Subsecond Rust hot-patching via `dx serve --hotpatch`."
+    },
+    {
+      "id": "subsecond-blog",
+      "title": "Hot Reloading in Rust? Subsecond and Dioxus to the rescue!",
+      "url": "https://codethoughts.io/posts/2026-02-07-rust-hot-reloading/",
+      "source": "codethoughts.io",
+      "accessed": "2026-05-24",
+      "note": "February 2026 deep dive on Subsecond — incremental linking / binary patching for live Rust edits. First Rust framework to ship this."
+    },
+    {
+      "id": "dioxus-cli",
+      "title": "dioxus-cli (dx) on crates.io",
+      "url": "https://crates.io/crates/dioxus-cli",
+      "source": "crates.io",
+      "accessed": "2026-05-24",
+      "note": "Unified CLI: `dx new`, `dx serve`, `dx bundle`, `dx serve --hotpatch`. Produces .app/.dmg/.deb/.AppImage outputs."
+    },
+    {
+      "id": "dioxus-bundle",
+      "title": "Dioxus 0.7 — Bundling apps",
+      "url": "https://dioxuslabs.com/learn/0.7/tutorial/bundle/",
+      "source": "dioxuslabs.com",
+      "accessed": "2026-05-24",
+      "note": "Bundle macOS .app + .dmg, Linux .deb + .AppImage via --package-types flag."
+    },
+    {
+      "id": "tauri-2-stable",
+      "title": "Tauri 2.0 Stable Release",
+      "url": "https://v2.tauri.app/blog/tauri-20/",
+      "source": "v2.tauri.app",
+      "accessed": "2026-05-24",
+      "note": "GA Oct 2, 2024. Capabilities/permissions ACL, mobile targets, new IPC via custom protocols, tauri::ipc::Channel for streaming."
+    },
+    {
+      "id": "tauri-github",
+      "title": "tauri-apps/tauri on GitHub",
+      "url": "https://github.com/tauri-apps/tauri",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "MIT/Apache-2.0 dual license."
+    },
+    {
+      "id": "tauri-sidecar",
+      "title": "Tauri 2 — Embedding External Binaries (Sidecar)",
+      "url": "https://v2.tauri.app/develop/sidecar/",
+      "source": "v2.tauri.app",
+      "accessed": "2026-05-24",
+      "note": "First-class sidecar API for managing daemon child processes — the obvious path for shipping mcpd alongside the GUI."
+    },
+    {
+      "id": "tauri-sidecar-vs-uds",
+      "title": "IPC Pipe vs Unix Socket for a Resident Daemon in Tauri",
+      "url": "https://dev.to/hiyoyok/ipc-pipe-vs-unix-socket-for-a-resident-daemon-in-tauri-what-i-learned-fa6",
+      "source": "dev.to",
+      "accessed": "2026-05-24",
+      "note": "Practical write-up on choosing stdin/stdout pipes vs Unix domain sockets for talking to a resident daemon from Tauri."
+    },
+    {
+      "id": "tauri-sse-issue",
+      "title": "Tauri plugins — SSE feature request (#1002)",
+      "url": "https://github.com/tauri-apps/plugins-workspace/issues/1002",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "Open issue for first-class SSE support in Tauri plugins. Community crate tauri-plugin-sse exists but is not official."
+    },
+    {
+      "id": "tauri-http-plugin",
+      "title": "Tauri 2 HTTP plugin",
+      "url": "https://v2.tauri.app/plugin/http-client/",
+      "source": "v2.tauri.app",
+      "accessed": "2026-05-24",
+      "note": "First-party Rust-backed HTTP client. Plus EventSource works natively from the WebView frontend for SSE."
+    },
+    {
+      "id": "tauri-keyring-plugin",
+      "title": "tauri-plugin-keyring (HuakunShen)",
+      "url": "https://github.com/HuakunShen/tauri-plugin-keyring",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "Community plugin wrapping the Rust `keyring` crate — macOS Keychain / Linux Secret Service. Stronghold is deprecated in v3."
+    },
+    {
+      "id": "tauri-vs-electron",
+      "title": "Tauri vs Electron — bundle size and runtime trade-offs",
+      "url": "https://www.gethopp.app/blog/tauri-vs-electron",
+      "source": "gethopp.app",
+      "accessed": "2026-05-24",
+      "note": "Tauri installers ~600KB–10MB vs Electron 80–150MB; idle RAM ~30–50MB."
+    },
+    {
+      "id": "tauri-dioxus-template",
+      "title": "Desdaemon/tauri-dioxus — Dioxus integration with Tauri",
+      "url": "https://github.com/Desdaemon/tauri-dioxus",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "Community template that uses Dioxus as the WASM frontend inside a Tauri shell. Not officially supported by either project."
+    },
+    {
+      "id": "tauri-dioxus-discussion",
+      "title": "Are there plans to integrate Dioxus and Tauri? (Tauri discussion #9169)",
+      "url": "https://github.com/orgs/tauri-apps/discussions/9169",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "Tauri maintainers' position: Dioxus has its own desktop runner using Wry/Tao, so no official create-tauri-app template. Mixing is community-supported."
+    },
+    {
+      "id": "boringcactus-2025-survey",
+      "title": "boringcactus — A 2025 Survey of Rust GUI Libraries",
+      "url": "https://www.boringcactus.com/2025/04/13/2025-survey-of-rust-gui-libraries.html",
+      "source": "boringcactus.com",
+      "accessed": "2026-05-24",
+      "note": "Of 43 libraries tested, only 4 (Slint, egui, Dioxus, WinSafe) passed minimal a11y+IME label test. Dioxus inherits WebView a11y for free."
+    },
+    {
+      "id": "leptos-vs-dioxus-2026",
+      "title": "Leptos vs Dioxus — Rust Frontend Framework in 2026",
+      "url": "https://rustify.rs/articles/leptos-vs-dioxus-rust-frontend-2026",
+      "source": "rustify.rs",
+      "accessed": "2026-05-24",
+      "note": "2026 framing: Leptos is web-fullstack focused; Dioxus is multi-target (web, desktop, mobile, TUI)."
+    },
+    {
+      "id": "ycombinator-dioxus",
+      "title": "Launch YC: Dioxus Labs — Web, Desktop, Mobile with one codebase",
+      "url": "https://www.ycombinator.com/launches/JBK-dioxus-labs-web-desktop-and-mobile-apps-with-one-codebase",
+      "source": "ycombinator.com",
+      "accessed": "2026-05-24",
+      "note": "YC-funded company. Listed customers/users: Huawei, Airbus + ESA collision-avoidance system, Satellite.im (peer-to-peer Discord competitor)."
+    },
+    {
+      "id": "dioxus-roadmap-070",
+      "title": "Dioxus 0.7 Roadmap — Discussion #3523",
+      "url": "https://github.com/DioxusLabs/dioxus/discussions/3523",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "Public roadmap doc tracking pre-1.0 work."
+    },
+    {
+      "id": "dioxus-liveview-deprecated",
+      "title": "Experiences with Dioxus liveview — Discussion #3378",
+      "url": "https://github.com/DioxusLabs/dioxus/discussions/3378",
+      "source": "github.com",
+      "accessed": "2026-05-24",
+      "note": "Team has been deprioritizing liveview; recommends Fullstack instead. Liveview may be dropped in a future release."
+    },
+    {
+      "id": "tauri-keychain-crate",
+      "title": "tauri-plugin-keychain on docs.rs",
+      "url": "https://docs.rs/crate/tauri-plugin-keychain/latest",
+      "source": "docs.rs",
+      "accessed": "2026-05-24",
+      "note": "Alternative plugin using native macOS Keychain Services directly."
+    }
+  ]
+}

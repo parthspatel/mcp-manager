@@ -1,0 +1,83 @@
+{
+  "title": "GUI stack shootout — weighted ranking",
+  "subtitle": "Aggregated from 3 parallel agent scorecards (2026-05-24). Weights tuned for 'OBSESSED about UX' product direction. Numeric dimensions (binary size, memory, first paint) normalized 1–10.",
+  "criteria": [
+    { "key": "live_update_story",          "label": "Live update story (SSE log tails, status)",    "weight": 0.13, "direction": "higher" },
+    { "key": "accessibility",              "label": "Accessibility (a11y, IME, screen reader)",     "weight": 0.11, "direction": "higher" },
+    { "key": "developer_experience",       "label": "Developer experience",                          "weight": 0.11, "direction": "higher" },
+    { "key": "ipc_with_mcpd_ergonomics",   "label": "IPC ergonomics with mcpd",                      "weight": 0.10, "direction": "higher" },
+    { "key": "first_paint_norm",           "label": "First paint (normalized; faster = higher)",     "weight": 0.09, "direction": "higher" },
+    { "key": "theming_native_feel",        "label": "Native chrome / 'feels like an app'",           "weight": 0.08, "direction": "higher" },
+    { "key": "type_safety_with_rust_core", "label": "Type safety with Rust core",                    "weight": 0.08, "direction": "higher" },
+    { "key": "packaging_macos_linux",      "label": "Packaging on macOS + Linux",                    "weight": 0.06, "direction": "higher" },
+    { "key": "hot_reload_quality",         "label": "Hot reload quality",                            "weight": 0.06, "direction": "higher" },
+    { "key": "ecosystem_maturity_2026",    "label": "Ecosystem maturity (2026)",                     "weight": 0.05, "direction": "higher" },
+    { "key": "team_hiring_pool",           "label": "Hiring pool",                                   "weight": 0.05, "direction": "higher" },
+    { "key": "binary_size_norm",           "label": "Binary size (normalized; smaller = higher)",    "weight": 0.04, "direction": "higher" },
+    { "key": "memory_idle_norm",           "label": "Memory at idle (normalized; smaller = higher)", "weight": 0.04, "direction": "higher" }
+  ],
+  "options": [
+    {
+      "key": "actix-tera",
+      "label": "Actix + Askama (GUI inside mcpd)",
+      "scores": {
+        "live_update_story":          10,
+        "accessibility":              10,
+        "developer_experience":       8,
+        "ipc_with_mcpd_ergonomics":   10,
+        "first_paint_norm":           10,
+        "theming_native_feel":        3,
+        "type_safety_with_rust_core": 9,
+        "packaging_macos_linux":      7,
+        "hot_reload_quality":         6,
+        "ecosystem_maturity_2026":    9,
+        "team_hiring_pool":           8,
+        "binary_size_norm":           10,
+        "memory_idle_norm":           10
+      }
+    },
+    {
+      "key": "tauri-dioxus",
+      "label": "Dioxus-desktop (standalone, not Tauri-wrapped)",
+      "scores": {
+        "live_update_story":          9,
+        "accessibility":              9,
+        "developer_experience":       9,
+        "ipc_with_mcpd_ergonomics":   8,
+        "first_paint_norm":           6,
+        "theming_native_feel":        7,
+        "type_safety_with_rust_core": 10,
+        "packaging_macos_linux":      8,
+        "hot_reload_quality":         10,
+        "ecosystem_maturity_2026":    7,
+        "team_hiring_pool":           5,
+        "binary_size_norm":           8,
+        "memory_idle_norm":           7
+      }
+    },
+    {
+      "key": "tauri-leptos",
+      "label": "Tauri 2 + Leptos (CSR mode)",
+      "scores": {
+        "live_update_story":          6,
+        "accessibility":              8,
+        "developer_experience":       6,
+        "ipc_with_mcpd_ergonomics":   7,
+        "first_paint_norm":           5,
+        "theming_native_feel":        6,
+        "type_safety_with_rust_core": 10,
+        "packaging_macos_linux":      8,
+        "hot_reload_quality":         5,
+        "ecosystem_maturity_2026":    7,
+        "team_hiring_pool":           3,
+        "binary_size_norm":           8,
+        "memory_idle_norm":           9
+      }
+    }
+  ],
+  "normalization_notes": {
+    "first_paint_norm":  "60ms→10, 350ms→6, 450ms→5 (10 is instant; 5 is acceptable)",
+    "binary_size_norm":  "8MB→10, 12MB→8 (smaller is better; 8MB is excellent)",
+    "memory_idle_norm":  "55MB→10, 60MB→9, 80MB→7 (smaller is better)"
+  }
+}

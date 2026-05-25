@@ -1,0 +1,97 @@
+{
+  "stack": "actix-tera",
+  "stack_label": "Actix-Web + Askama (localhost SSR with HTMX + a sprinkle of Alpine)",
+  "verdict_summary": "A localhost SSR web app served from inside mcpd is the lowest-risk, highest-leverage path for v1.0: it sidesteps every Rust-GUI accessibility wart by delegating to the browser, makes SSE the native idiom for log tails and status, and unlocks LAN/mobile management for free — at the cost of giving up native chrome and inheriting the 'just a browser tab' UX taxes.",
+  "best_when": "You want one Rust binary (mcpd) to own auth, state, IPC, and UI, with first-class real-time updates, a screen-reader-grade frontend, and a path to LAN/mobile control — and you accept that the UI is a browser tab, not a native window.",
+  "worst_when": "Users expect a 'real app' in the dock with global hotkeys, deep OS integration (notifications, file pickers, dock badges), or a polished tray menu with native menu items; or when you want frontend hot-reload on the order of milliseconds rather than seconds.",
+  "scores": {
+    "developer_experience": {
+      "rating": 8,
+      "notes": "Boring, well-trodden stack — Actix is 9 years old with 68M+ downloads, Askama gives compile-time-checked templates, and HTMX needs no toolchain. One language, one Cargo.toml, no Node/Vite/Trunk. Compile times are the main friction; cargo-watch + listenfd give 2–4s loops.",
+      "evidence_ids": ["actix-web-crates", "askama-github", "cargo-watch-releases", "actix-autoreload"]
+    },
+    "hot_reload_quality": {
+      "rating": 6,
+      "notes": "Tera has true template hot-reload (no rebuild). Askama requires a Rust rebuild on every template edit — cargo-watch makes this tolerable (~2–4s) but it's strictly worse than Vite/Trunk HMR. HTMX/CSS edits via a static-files mount can be sub-second.",
+      "evidence_ids": ["tera-home", "askama-docsrs", "cargo-watch-releases", "actix-autoreload"]
+    },
+    "type_safety_with_rust_core": {
+      "rating": 9,
+      "notes": "Askama gives compile-time template type-checking against #[derive(Template)] structs — missing fields or wrong types fail the build. If GUI lives inside mcpd, there is literally no IPC boundary: handlers call mcpd functions directly. Tera by contrast is dynamically typed (Jinja-style context), worse than Askama here.",
+      "evidence_ids": ["askama-home", "askama-github", "leapcell-template-tradeoffs"]
+    },
+    "binary_size_mb": {
+      "value": 8,
+      "notes": "Typical release-mode Actix hello-world is ~5–8 MB stripped; a full Actix+Askama+SSE binary lands ~8–15 MB. Adding tray-icon + browser-opener pushes it to ~12–18 MB. Still smaller than Tauri release builds in some configurations because there's no WebView2/WKWebView runtime to bundle.",
+      "evidence_ids": ["actix-web-vs-axum-2026", "calmops-rust-web-2026"]
+    },
+    "memory_idle_mb": {
+      "value": 55,
+      "notes": "Actix idle RSS ~50–80 MB at rest (one accept loop per core + Tokio runtimes). Add Askama + a few open SSE clients and you're at ~55–90 MB. The browser tab is separate and counts against the user's browser process, not mcpd.",
+      "evidence_ids": ["actix-web-vs-axum-2026"]
+    },
+    "first_paint_ms": {
+      "value": 60,
+      "notes": "Server-rendered HTML over localhost is essentially network-free; first paint is dominated by the browser cold-tab overhead. Measured Actix+Askama hello-page is sub-5ms server-side; total to first paint in a fresh tab is ~40–80ms.",
+      "evidence_ids": ["actix-web-vs-axum-2026", "leapcell-askama-tera"]
+    },
+    "accessibility": {
+      "rating": 10,
+      "notes": "Free win. The browser is the most accessible runtime ever shipped — VoiceOver, Orca, NVDA, Narrator, IME, zoom, high-contrast, reduce-motion, dyslexia fonts via extensions, all work out of the box with no AccessKit, no glue code. This is the SSR stack's strongest single argument.",
+      "evidence_ids": ["pwa-installable", "boringcactus-2025-survey"]
+    },
+    "theming_native_feel": {
+      "rating": 3,
+      "notes": "Score honestly: it's a browser tab. No native menubar, no native context menus, no dock icon (unless installed as PWA), no global hotkeys. CSS can mimic light/dark and even match OS accent colors via prefers-color-scheme, but it will never *feel* like a Mac app.",
+      "evidence_ids": ["pwa-installable", "jellyfin-networking"]
+    },
+    "ipc_with_mcpd_ergonomics": {
+      "rating": 10,
+      "notes": "If GUI lives inside mcpd, IPC IS just function calls — no JSON-RPC, no UDS, no serialization. The GUI handler imports the same mcpd modules the CLI does and calls them directly. This is qualitatively different from Tauri (which has a real Rust↔JS boundary).",
+      "evidence_ids": ["actix-rs-home", "actix-web-github"]
+    },
+    "live_update_story": {
+      "rating": 10,
+      "notes": "SSE is native to the HTTP layer. actix-web-lab::sse + tokio broadcast channel is the standard pattern; htmx hx-ext='sse' wires it into the DOM with zero JS. Log tails, server status, resource graphs all become one-liners.",
+      "evidence_ids": ["actix-web-lab-sse", "actix-sse-example", "htmx-sse-ext"]
+    },
+    "packaging_macos_linux": {
+      "rating": 7,
+      "notes": "No .app bundle, no DMG, no AppImage — just a binary. Distribution is `brew install mcpm` or `cargo install` or a tarball. Tray-icon helper is optional. This is simpler than Tauri's signing/notarization saga, but it also means no Spotlight/launchpad presence unless you ship a tiny .app wrapper or PWA-install instructions.",
+      "evidence_ids": ["tray-icon-crates", "tray-icon-docs", "pwa-installable"]
+    },
+    "ecosystem_maturity_2026": {
+      "rating": 9,
+      "notes": "Actix is one of the two most mature Rust web frameworks (with Axum). Tera ships v2 with v1 frozen; Askama 0.14 is stable post-rinja-reunification. The askama_actix integration crate was deprecated, but the replacement (call .render() yourself) is two lines. Maud and Rocket are alternatives if Askama fits awkwardly.",
+      "evidence_ids": ["actix-web-crates", "tera-crates", "askama-docsrs", "askama-actix-deprecated"]
+    },
+    "production_users": {
+      "value": ["Zola (Tera)", "Jellyfin-style local web apps (architecture parallel)", "Pi-hole v6 (architecture parallel)", "Sentry's edge services (Actix in production)", "MeiliSearch dashboard (Actix-served HTML)"],
+      "notes": "No single MCP-Manager-shaped Rust SSR app to point to, but the pattern is dominant in the self-hosted/homelab world (Jellyfin, Sonarr, Pi-hole, Plex) and Actix is widely deployed in production backends. Zola is the canonical Tera reference; Askama has thousands of less-visible deployments.",
+      "evidence_ids": ["zola-templates", "jellyfin-networking", "pi-hole-v6-password", "actix-web-crates"]
+    },
+    "license_risk": {
+      "value": "MIT-or-Apache-2.0",
+      "notes": "Actix-web: MIT-or-Apache-2.0. Askama: MIT-or-Apache-2.0. Tera: MIT. HTMX: BSD-2. Alpine.js: MIT. tray-icon: MIT-or-Apache-2.0. No GPL contamination anywhere in the proposed stack.",
+      "evidence_ids": ["actix-web-github", "askama-github", "tera-github", "tray-icon-crates"]
+    },
+    "team_hiring_pool": {
+      "rating": 8,
+      "notes": "Anyone who knows HTML+CSS can contribute to the templates — much larger pool than Leptos/Dioxus, where you need Rust+reactive-Rust expertise. Rust web devs (Actix or Axum experience) are abundant in 2026. HTMX is rapidly mainstream in the indie/self-hosted world.",
+      "evidence_ids": ["rust-web-frameworks-2026", "htmx-vs-alpine-2026"]
+    }
+  },
+  "deal_breakers": [
+    "If the product vision requires a 'real native macOS app' (App Store distribution, deep OS integration, global hotkeys, dock badging), this stack cannot deliver — it is fundamentally a browser tab.",
+    "If users will routinely run mcpd headless on a dev box and expect the GUI binary to handle 'daemon not running' gracefully *separately* from mcpd, the daemon-is-the-GUI architecture collides with that mental model and you need to fall back to a separate-process design.",
+    "Browser tab can be accidentally closed mid-task with no warning. There is no equivalent of an unsaved-changes dialog that survives 'oops cmd-w'. For data-loss-prone flows this is a real UX regression versus a native window."
+  ],
+  "open_questions": [
+    "Does GUI live INSIDE mcpd (one binary, simplest IPC) or as a SEPARATE process talking to mcpd via UDS (cleaner blast radius, can restart GUI without restarting servers)? Recommendation: inside mcpd for v1.0, extract later if needed.",
+    "Tera vs Askama vs Maud — which template engine? Recommendation in the summary page: Askama, because compile-time type-checking against the mcpd domain model is the SSR stack's defining advantage, and the rebuild cost is tolerable with cargo-watch.",
+    "Auth model on first launch — bearer token in `mcpm gui` URL? Loopback peer-cred via UDS-then-HTTP handshake? OS keychain? Pi-hole v6 ships a password set during install; we likely want a one-shot bearer auto-pasted into a launched browser window.",
+    "Should the localhost server also bind 0.0.0.0 (gated by auth) to enable LAN/mobile management? Big differentiator but doubles the security surface — DNS rebinding, weak token attacks, etc.",
+    "Tray-icon helper: bundle a tiny separate binary (`mcpm-tray`) that talks to mcpd via UDS, or skip the tray entirely and rely on `mcpm gui` opening the browser? Bundling tray-icon into mcpd itself complicates the daemon (event loop requirements).",
+    "PWA install flow — do we ship a web manifest and instruct users to 'Install App' from Chrome's address bar to get a dock icon? This is the cheapest path to feeling-like-an-app, but only works in Chromium browsers."
+  ]
+}
