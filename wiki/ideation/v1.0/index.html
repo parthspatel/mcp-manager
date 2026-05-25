@@ -26,9 +26,9 @@
 
   <p>
     <span class="evidence-badge">518 citations</span>
-    <span class="evidence-badge">83 HTML pages</span>
+    <span class="evidence-badge">84 HTML pages</span>
     <span class="evidence-badge">11 ranking matrices</span>
-    <span class="pill success">6 streams + shootout + 4 closing-gap agents complete</span>
+    <span class="pill success">6 streams + shootout + 4 closing-gap agents + UX design complete</span>
   </p>
 
   <aside class="card" style="border-left:4px solid var(--accent);background:var(--bg-faint);margin-block:1.5rem">
@@ -95,11 +95,12 @@
         <p>v1.0 ships <strong>three interactive surfaces — no GUI</strong>:</p>
         <ul>
           <li><strong>CLI</strong> — <code>clap</code> with derive macros. Primary surface for scripting, automation, and power users.</li>
-          <li><strong>TUI</strong> — <code>ratatui</code> + <code>crossterm</code>. The interactive surface for browsing servers, tailing logs, editing canonical config, viewing audit log. Runs entirely in the terminal — no localhost server, no browser.</li>
-          <li><strong>Config files</strong> — TOML (mcpd's canonical state). Hand-editable. <code>mcpm config edit</code> opens the user's <code>$EDITOR</code>.</li>
+          <li><strong>TUI</strong> — <code>ratatui</code> + <code>crossterm</code>. Single-screen lazygit/k9s style with three left panes (Servers / Toolchains / Secrets) + contextual right pane. Mouse + keyboard.</li>
+          <li><strong>Config files</strong> — TOML (mcpd's canonical state). Hand-editable. <code>e</code> in the TUI dispatches to <code>$EDITOR</code>; mcpd reloads atomically on save.</li>
         </ul>
+        <p>Detailed design — keymap, log multiplexing, source-URI shape, per-project layering, project detection + trust gate — captured at <a href="./ux-design-tui-config.html"><strong>UX design — TUI + config files</strong></a>.</p>
         <p>GUI is deferred. The <a href="./ui-shootout/">GUI shootout</a> remains as pre-decided research (Actix+Askama inside mcpd) for whenever a GUI is added; see <a href="./future-features-v1.1.html#gui">future features</a>.</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a> + 2026-05-24 lockdown (GUI deferred).</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./nimble-raven-toolkit/recommendation-client-tools-summary.html">S5</a> + 2026-05-24 UX exercise + 2026-05-24 lockdown (GUI deferred).</p>
       </article>
 
       <article class="card">

@@ -333,6 +333,23 @@ function buildSidebarFutureLink(loc) {
   );
 }
 
+function buildSidebarUxDesignLink(loc) {
+  const active = loc.isHub && loc.file === "ux-design-tui-config.html";
+  return el(
+    "a",
+    {
+      href: loc.prefix + "ux-design-tui-config.html",
+      class: "sidebar-link sidebar-hub-link" + (active ? " is-active" : ""),
+      "aria-current": active ? "page" : null,
+      title: "TUI + config files UX design",
+    },
+    [
+      el("span", { class: "sidebar-link-badge kind-recommendation", "aria-hidden": "true" }, ["★"]),
+      el("span", { class: "sidebar-link-label" }, ["UX design"]),
+    ]
+  );
+}
+
 function buildSidebarStreamSection(stream, loc, storedOpen) {
   const isCurrentStream = loc.streamId === stream.id;
 
@@ -411,6 +428,7 @@ function buildSidebar(loc) {
   sidebar.appendChild(
     el("div", { class: "sidebar-hub-section" }, [
       buildSidebarHubLink(loc),
+      buildSidebarUxDesignLink(loc),
       buildSidebarFutureLink(loc),
     ])
   );
