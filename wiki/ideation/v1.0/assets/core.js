@@ -224,18 +224,26 @@ const SIDEBAR_KIND_BADGE = {
 };
 
 // Determine page location from URL. Robust to file://, served root, trailing
-// slash, AND nested stream directories (e.g. ui-shootout/tauri-leptos/foo.html).
-// The prefix is what every sidebar link is prepended with so paths resolve
-// from any depth. pathWithinStream is the relative path from the stream root
-// to the current page, used for active-link detection.
+// slash, and ANY depth of nesting (v1.0 root, research subdir, stream dir,
+// nested-stream dir). The prefix is what every sidebar link is prepended with
+// so paths resolve from any depth.
+//
+// Layout assumed:
+//   v1.0/index.html                                  (root hub — isV1Root)
+//   v1.0/future-features-v1.1.html                   (root)
+//   v1.0/{product-overview,technical-design,ux-design}.html  (root, future)
+//   v1.0/research/index.html                         (research hub)
+//   v1.0/research/<stream>/<file>.html               (stream pages)
+//   v1.0/research/<stream>/<sub>/<file>.html         (nested stream pages)
 function computeSidebarLocation() {
   const path = location.pathname.replace(/\/$/, "/index.html");
   const segments = path.split("/").filter(Boolean);
   const file = segments[segments.length - 1] || "index.html";
+  // Relative path from v1.0 root: e.g. "research/curious-otter-survey/foo.html"
+  const relativeFromV1 = segments.join("/");
 
-  // Find the first segment that matches a known stream id. This handles
-  // both flat (curious-otter-survey/foo.html) and nested
-  // (ui-shootout/tauri-leptos/foo.html) cases.
+  // Find the first segment that matches a known stream id. Works whether
+  // streams live at v1.0/<stream>/ (legacy) or v1.0/research/<stream>/ (current).
   let streamId = null;
   let streamIdx = -1;
   for (let i = 0; i < segments.length; i++) {
@@ -246,23 +254,30 @@ function computeSidebarLocation() {
     }
   }
 
-  const isHub = streamId === null;
-  // Path from the stream's root to the current page, e.g.:
-  //   curious-otter-survey/research-foo.html → "research-foo.html"
-  //   ui-shootout/tauri-leptos/research-stack.html → "tauri-leptos/research-stack.html"
-  const pathWithinStream = isHub
-    ? null
-    : segments.slice(streamIdx + 1).join("/");
+  // isV1Root: we're at the v1.0 root level (one segment, the filename only).
+  // Distinct from "no stream" — research/index.html has no stream but IS NOT root.
+  const isV1Root = segments.length === 1;
 
-  // "../" prefix needed to reach the v1.0 root from the current page.
-  // Count how many directory levels we are below the root:
-  //   hub:              0 levels deep → "./"
-  //   stream-direct:    1 level deep  → "../"
-  //   stream-nested:    2 levels deep → "../../"
-  const depthBelowRoot = isHub ? 0 : segments.length - streamIdx - 1;
+  // Path from the stream's root to the current page, e.g.:
+  //   research/curious-otter-survey/research-foo.html → "research-foo.html"
+  //   research/ui-shootout/tauri-leptos/foo.html → "tauri-leptos/foo.html"
+  const pathWithinStream = streamId !== null
+    ? segments.slice(streamIdx + 1).join("/")
+    : null;
+
+  // "../" prefix needed to reach v1.0 root from current page.
+  // Simply: one "../" per subdirectory between this file and the root.
+  //   v1.0/index.html                      → segments.length=1 → 0 levels deep → "./"
+  //   v1.0/research/index.html             → segments.length=2 → 1 level deep  → "../"
+  //   v1.0/research/<stream>/foo.html      → segments.length=3 → 2 levels deep → "../../"
+  //   v1.0/research/<stream>/<sub>/foo.html→ segments.length=4 → 3 levels deep → "../../../"
+  const depthBelowRoot = segments.length - 1;
   const prefix = depthBelowRoot === 0 ? "./" : "../".repeat(depthBelowRoot);
 
-  return { file, streamId, pathWithinStream, isHub, prefix };
+  // isHub kept for backward-compat: true when at the v1.0 root.
+  const isHub = isV1Root;
+
+  return { file, relativeFromV1, streamId, pathWithinStream, isHub, isV1Root, prefix };
 }
 
 function el(tag, props = {}, children = []) {
@@ -333,19 +348,19 @@ function buildSidebarFutureLink(loc) {
   );
 }
 
-function buildSidebarUxDesignLink(loc) {
-  const active = loc.isHub && loc.file === "ux-design-tui-config.html";
+function buildSidebarResearchHubLink(loc) {
+  const active = loc.relativeFromV1 === "research/index.html";
   return el(
     "a",
     {
-      href: loc.prefix + "ux-design-tui-config.html",
+      href: loc.prefix + "research/index.html",
       class: "sidebar-link sidebar-hub-link" + (active ? " is-active" : ""),
       "aria-current": active ? "page" : null,
-      title: "TUI + config files UX design",
+      title: "Product-research hub — streams, shootout, closing-gaps, UX exercise",
     },
     [
-      el("span", { class: "sidebar-link-badge kind-recommendation", "aria-hidden": "true" }, ["★"]),
-      el("span", { class: "sidebar-link-label" }, ["UX design"]),
+      el("span", { class: "sidebar-link-badge kind-research", "aria-hidden": "true" }, ["R"]),
+      el("span", { class: "sidebar-link-label" }, ["Research"]),
     ]
   );
 }
@@ -366,7 +381,9 @@ function buildSidebarStreamSection(stream, loc, storedOpen) {
     const link = el(
       "a",
       {
-        href: loc.prefix + stream.id + "/" + page.path,
+        // Streams live under research/. prefix takes us to v1.0 root; then
+        // research/<stream>/<page-path-within-stream>.
+        href: loc.prefix + "research/" + stream.id + "/" + page.path,
         class:
           "sidebar-link sidebar-pagelink kind-" + page.kind + (active ? " is-active" : ""),
         "aria-current": active ? "page" : null,
@@ -428,7 +445,7 @@ function buildSidebar(loc) {
   sidebar.appendChild(
     el("div", { class: "sidebar-hub-section" }, [
       buildSidebarHubLink(loc),
-      buildSidebarUxDesignLink(loc),
+      buildSidebarResearchHubLink(loc),
       buildSidebarFutureLink(loc),
     ])
   );

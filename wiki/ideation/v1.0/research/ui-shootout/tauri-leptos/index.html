@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tauri 2 + Leptos — UI shootout — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../index.html">ui-shootout</a> / tauri-leptos</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Stack 1 — Tauri 2 + Leptos</h1>
+
+<p class="lede">
+A pure-Rust front-to-back desktop stack: <strong>Tauri 2</strong> provides the OS WebView shell, native menus, system tray, sidecar process management, and signed/notarized installers; <strong>Leptos</strong> renders the UI as Rust compiled to WebAssembly, with fine-grained reactivity and the ability to share serde types with mcpd directly. This page is the summary and table of contents for the Tauri+Leptos evaluation lane of the shootout.
+</p>
+
+<section class="section">
+<h2>Bottom line</h2>
+<p>
+A pure-Rust front-to-back stack that shares types and logic with mcpd via a common crate, ships a small system-WebView binary, and delivers genuinely native a11y on macOS and Linux — at the cost of a slower-than-JS dev loop, an officially-unsupported SSR setup<sup><a class="cite" href="#cite-tauri-leptos-guide" data-ref="tauri-leptos-guide">[?]</a></sup> (Tauri tells you to use Leptos in SSG/CSR mode), and a fragmented WebKit surface on Linux.
+</p>
+<ul>
+  <li><strong>Best when</strong>: the team is Rust-first, wants shared types between mcpd and the GUI, values footprint over instant-HMR turnaround, and is willing to invest in macOS notarization.</li>
+  <li><strong>Worst when</strong>: the team needs sub-second hot-reload, wants a deep frontend hiring pool, or expects SSE/streaming to "just work" identically on WKWebView and WebKitGTK without per-platform testing.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Pages in this evaluation</h2>
+<ul>
+  <li><a href="research-stack.html"><strong>Stack research</strong></a> — Tauri 2 and Leptos as they exist in 2026: architecture, build pipeline, dev loop, packaging, ecosystem, prior art.</li>
+  <li><a href="research-mcp-manager-fit.html"><strong>MCP Manager fit</strong></a> — concrete plumbing: how the GUI dials mcpd (UDS via Tauri commands? HTTP/SSE from WASM? both?), secrets flow, daemon-not-ready boot, live updates, type sharing.</li>
+  <li><a href="recommendation-tauri-leptos-summary.html"><strong>Recommendation summary</strong></a> — opinionated pros / cons / gotchas / when-to-pick / when-NOT-to-pick.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Sibling stacks (other lanes)</h2>
+<ul>
+  <li><a href="../tauri-dioxus/index.html">Stack 2 — Tauri 2 + Dioxus</a></li>
+  <li><a href="../actix-tera/index.html">Stack 3 — Actix-Web + Tera/Askama (browser-based)</a></li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Headline scores</h2>
+<table class="compare">
+<thead><tr><th>Axis</th><th>Score</th><th>One-liner</th></tr></thead>
+<tbody>
+<tr><td>Type safety with Rust core</td><td>10 / 10</td><td>Share serde structs with mcpd — no codegen, no drift.</td></tr>
+<tr><td>Accessibility</td><td>8 / 10</td><td>OS WebView gives VoiceOver + IME for free.<sup><a class="cite" href="#cite-boringcactus-2025-survey" data-ref="boringcactus-2025-survey">[?]</a></sup></td></tr>
+<tr><td>Packaging (macOS + Linux)</td><td>8 / 10</td><td>First-party .app/.dmg/.AppImage/.deb + notarization automation.</td></tr>
+<tr><td>IPC ergonomics with mcpd</td><td>7 / 10</td><td>Two clean paths: Tauri-command-via-UDS or HTTP/SSE from WASM.</td></tr>
+<tr><td>Ecosystem maturity 2026</td><td>7 / 10</td><td>Tauri 2 stable; Leptos 0.8; the combo lacks a flagship.</td></tr>
+<tr><td>Hot reload</td><td>5 / 10</td><td>3–4s incremental WASM rebuilds; CSS hot-reloads cleanly.</td></tr>
+<tr><td>Hiring pool</td><td>3 / 10</td><td>Rust + WASM + Leptos is a narrow intersection.</td></tr>
+</tbody>
+</table>
+<p>Full scorecard in <a href="./data/scorecard.json">data/scorecard.json</a>. Citation set in <a href="./data/citations.json">data/citations.json</a>.</p>
+</section>
+
+<section class="citations">
+<h3>Citations</h3>
+<ol>
+<li id="cite-tauri-leptos-guide"><a href="https://v2.tauri.app/start/frontend/leptos/">Leptos — Tauri 2 first-party integration guide</a> (tauri.app, accessed 2026-05-24).</li>
+<li id="cite-boringcactus-2025-survey"><a href="https://www.boringcactus.com/2025/04/14/2025-survey-of-rust-gui-libraries.html">2025 survey of Rust GUI libraries — boringcactus</a> (boringcactus.com, accessed 2026-05-24).</li>
+</ol>
+</section>
+
+</main>
+</body>
+</html>

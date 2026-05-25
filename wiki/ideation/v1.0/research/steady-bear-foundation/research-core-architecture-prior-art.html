@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prior art — Core architecture · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">steady-bear-foundation</a> / research · prior art</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Research — Prior art for process-management cores</h1>
+  <p class="lede">
+    Survey of how analogous systems are architected, ordered by "structural distance" from MCP Manager: container engines (dockerd, containerd, podman), OS service managers (systemd, launchd), package/build daemons (nix-daemon), local-VM orchestrators (lima, colima), MCP-native tools (mcp-inspector), and per-invocation tool runners (uvx, pipx). Each section extracts the load-bearing design choice and notes which patterns transfer to managing MCP servers.
+  </p>
+
+  <nav class="toc">
+    <h4>On this page</h4>
+    <ul>
+      <li><a href="#dockerd">Docker / dockerd</a></li>
+      <li><a href="#containerd">containerd + containerd-shim</a></li>
+      <li><a href="#podman">podman + conmon</a></li>
+      <li><a href="#systemd">systemd</a></li>
+      <li><a href="#launchd">launchd</a></li>
+      <li><a href="#nix-daemon">nix-daemon</a></li>
+      <li><a href="#lima">lima / colima</a></li>
+      <li><a href="#mcp-inspector">mcp-inspector</a></li>
+      <li><a href="#uvx-pipx">uvx / pipx</a></li>
+      <li><a href="#patterns">Patterns that transfer to MCP management</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="dockerd">Docker / dockerd</h2>
+  <p>
+    Docker is the canonical "client-server with a persistent daemon" design. The Docker CLI converts user commands into REST API requests sent to the <code>dockerd</code> daemon over a Unix socket (<code>/var/run/docker.sock</code>) or TCP; the daemon does the heavy lifting of building, running, and distributing containers<cite data-ref="docker-overview"></cite>. <code>dockerd</code> itself doesn't directly run containers — it passes the image and run-configuration to <code>containerd</code>, which uses <code>runc</code> to create the container process<cite data-ref="docker-overview"></cite>.
+  </p>
+  <p>
+    Two consequences worth lifting: (1) the daemon centralizes state and supervision (auto-restart, log aggregation, port mapping) but becomes a single point of failure for everything it manages, and (2) remote management "for free" — any client that can reach the API socket can drive the daemon, including from another machine<cite data-ref="docker-overview"></cite>.
+  </p>
+
+  <h2 id="containerd">containerd + containerd-shim</h2>
+  <p>
+    Underneath <code>dockerd</code>, <code>containerd</code> manages the container lifecycle and spawns one <code>containerd-shim</code> per container. The shim is a subreaper that adopts the container's PID-1 children and any orphaned descendants, keeps the container's stdio file descriptors open, and reports the exit status back to <code>containerd</code> — all while allowing <code>runc</code> (the actual OCI runtime) to exit cleanly right after <code>execve</code><cite data-ref="containerd-shim-blog"></cite>.
+  </p>
+  <p>
+    The shim pattern decouples "runtime that knows how to <code>execve</code> a container" from "monitor that owns the running container forever". For MCP servers, the analogous question is: should we have one supervisor process per MCP server (shim-style, robust against the manager crashing) or one supervisor for all of them (less code, but if the supervisor dies all children's stdio is orphaned)?
+  </p>
+
+  <h2 id="podman">podman + conmon</h2>
+  <p>
+    Podman is a "fully featured container engine that is a simple daemonless tool", explicitly positioned as a drop-in CLI replacement for Docker (<code>alias docker=podman</code>)<cite data-ref="podman-overview"></cite>. Without a long-running daemon, Podman invokes the OCI runtime directly and relies on the host's init system (systemd) — or per-container <code>conmon</code> monitors — to keep containers alive across CLI invocations.
+  </p>
+  <p>
+    <strong><code>conmon</code></strong> is the per-container monitor used by both Podman and CRI-O. After it spawns the OCI runtime as a child, conmon daemonizes itself so the managing program can die while the container keeps running; while the container is alive, it (a) exposes a socket for attach, (b) holds the container's standard streams open and forwards them, (c) writes container logs to a file or the systemd journal, and (d) records exit time and status for the next CLI invocation to pick up<cite data-ref="conmon-readme"></cite>. It is described as "the smallest daemon a container can have"<cite data-ref="conmon-readme"></cite>.
+  </p>
+  <p>
+    This hybrid model — no persistent <em>central</em> daemon, but a tiny per-managed-thing monitor — is the most directly transferable pattern to MCP servers, since MCP servers are themselves typically lightweight long-running processes.
+  </p>
+
+  <h2 id="systemd">systemd</h2>
+  <p>
+    On Linux, systemd is PID 1 and acts as a unified service supervisor: it tracks services via <strong>cgroups</strong> rather than PIDs (so daemons cannot "escape" by double-forking), restarts crashed services per declarative policy, and routes service stdout/stderr into <code>systemd-journald</code> as structured binary logs with PID/UID/cgroup metadata<cite data-ref="systemd-wikipedia"></cite>. The documented mechanism for delegating subtrees of cgroups (and thus resource limits and tracking) to a service manager nested inside systemd is described in the cgroup-delegation guide<cite data-ref="systemd-cgroup-delegation"></cite>.
+  </p>
+  <p>
+    The transferable idea is the <em>declarative-unit-file</em> model: a server is described by an immutable file (command, env, resource limits, restart policy) and the supervisor reconciles toward it. MCP server descriptions in the registry can follow the same shape.
+  </p>
+
+  <h2 id="launchd">launchd</h2>
+  <p>
+    On macOS, launchd is PID 1 and uses property-list (<code>.plist</code>) files in <code>~/Library/LaunchAgents</code> (per-user) and <code>/Library/LaunchDaemons</code> (system-wide) to describe services<cite data-ref="launchd-info"></cite><cite data-ref="launchd-wikipedia"></cite>. A key launchd feature is on-demand activation: launchd can listen on a socket on the service's behalf and start the service only when the first connection arrives, then shut it down when idle<cite data-ref="launchd-wikipedia"></cite>.
+  </p>
+  <p>
+    On-demand activation maps cleanly to MCP: hosts often connect to local MCP servers only when the user invokes a tool — a manager that can lazily start, then idle-stop, MCP servers can save large amounts of memory.
+  </p>
+
+  <h2 id="nix-daemon">nix-daemon</h2>
+  <p>
+    In multi-user Nix installations, the <code>/nix/store</code> and the SQLite database that indexes it are owned by a privileged user (usually root). Unprivileged users do not poke at the store directly; instead they set <code>NIX_REMOTE=daemon</code> and their Nix CLI forwards operations over a Unix socket to a <code>nix-daemon</code> process running as the store owner, which performs the builds inside unprivileged <code>nixbld*</code> users<cite data-ref="nix-multi-user"></cite>. Concurrency is capped by the number of build users<cite data-ref="nix-multi-user"></cite>.
+  </p>
+  <p>
+    The "privileged daemon owns a state directory, unprivileged clients use a socket" pattern is the closest prior art for MCP Manager's case where multiple host apps on the same machine need consistent installs of the same server. The sandbox in nix-daemon, however, is explicitly described as a reproducibility tool — not a security boundary between users<cite data-ref="nix-multi-user"></cite>.
+  </p>
+
+  <h2 id="lima">lima / colima</h2>
+  <p>
+    Lima is "Linux Machines" — a host agent that boots a small VM (qemu or vz) and provisions container runtimes inside it; Colima ("Containers on Lima") wraps Lima with a Docker-CLI-compatible UX. Lima's architecture is documented as four layers: <em>CLI</em> (user interface), <em>YAML config</em> (declarative VM templates, validated, persisted), <em>host agent</em> (manages VM lifecycle, drivers, host↔guest channels), and <em>guest environment</em> (in-VM agent + container runtime)<cite data-ref="lima-architecture"></cite>.
+  </p>
+  <p>
+    The pattern of separating a stable <em>config / template</em> layer from a stateful <em>orchestrator</em> layer is directly relevant: MCP Manager's registry of "what to install" should be replayable and reproducible without depending on the supervisor's in-memory state.
+  </p>
+
+  <h2 id="mcp-inspector">mcp-inspector</h2>
+  <p>
+    The official <code>modelcontextprotocol/inspector</code> tool is the most direct prior art. It has two components: an <strong>MCPI</strong> React-based web UI for testing/debugging, and an <strong>MCPP</strong> Node.js proxy that acts as a protocol bridge between the browser and a configured MCP server<cite data-ref="mcp-inspector"></cite>. The proxy supports all three transports — stdio (it spawns a child), SSE (deprecated), and Streamable HTTP — and acts as both an MCP client (to the server) and an HTTP server (to the UI)<cite data-ref="mcp-inspector"></cite>.
+  </p>
+  <p>
+    Inspector demonstrates two things directly relevant to MCP Manager: (1) a proxy-style component is sufficient to bridge transports when a UI cannot itself spawn child processes, and (2) treating the manager as an MCP client allows reusing the official SDK for handshake, capability negotiation, and lifecycle management<cite data-ref="mcp-spec-lifecycle"></cite>.
+  </p>
+
+  <h2 id="uvx-pipx">uvx / pipx</h2>
+  <p>
+    Both tools install or run Python CLI tools in isolated environments. <code>pipx</code> creates one durable virtualenv per installed tool under <code>$PIPX_HOME/venvs/&lt;name&gt;</code>, with executables exposed on <code>$PATH</code><cite data-ref="pipx-overview"></cite>. <code>uvx</code> (built into uv) instead resolves the requested package, creates a short-lived environment, executes the entry point, and discards the env afterward — though cached envs are reused until pruned, pinned, or refreshed<cite data-ref="uvx-handbook"></cite>. uvx is written in Rust and reportedly 10-100x faster than pipx<cite data-ref="uvx-handbook"></cite>.
+  </p>
+  <p>
+    For MCP Manager specifically: most MCP servers ship as <code>npx</code> or <code>uvx</code>-invokable scripts. We can either (a) shell out to <code>uvx</code>/<code>npx</code> (cheap, fragile) or (b) provide our own equivalent ephemeral-env layer. uvx's model — resolve, cache by package+version, execute, retain cache — is the lighter-weight option and is implementable on top of <code>rustup</code>-managed environments or Nix profiles depending on Stream 2's outcome.
+  </p>
+
+  <h2 id="patterns">Patterns that transfer to MCP management</h2>
+  <table class="compare">
+    <thead><tr><th>Source</th><th>Pattern</th><th>Transferability to MCP Manager</th></tr></thead>
+    <tbody>
+      <tr><td>dockerd</td><td>Central daemon with REST API</td><td><span class="pill warn">Partial</span> — gives remote management but adds operational weight.</td></tr>
+      <tr><td>containerd-shim</td><td>Per-managed subreaper</td><td><span class="pill success">High</span> — solves orphan stdio + survives manager restart.</td></tr>
+      <tr><td>conmon (podman)</td><td>Per-container monitor that daemonizes itself</td><td><span class="pill success">High</span> — directly applicable as per-MCP-server lifecycle owner.</td></tr>
+      <tr><td>systemd unit files</td><td>Declarative supervised service</td><td><span class="pill success">High</span> — registry entries can mirror unit-file fields (Restart=, ExecStart=, Environment=).</td></tr>
+      <tr><td>launchd on-demand</td><td>Lazy start, idle-stop</td><td><span class="pill success">High</span> — most MCP servers are idle most of the time.</td></tr>
+      <tr><td>nix-daemon</td><td>Privileged daemon + unprivileged socket clients</td><td><span class="pill warn">Partial</span> — root not required for MCP; but multi-user shared installs benefit.</td></tr>
+      <tr><td>lima config</td><td>Declarative templates as the source of truth</td><td><span class="pill success">High</span> — registry is the truth, runtime is reconciliation.</td></tr>
+      <tr><td>mcp-inspector proxy</td><td>Transport bridge using official SDK</td><td><span class="pill success">High</span> — applies to manager-as-MCP-proxy use case.</td></tr>
+      <tr><td>uvx ephemeral env</td><td>Resolve / cache / execute / discard</td><td><span class="pill success">High</span> — ideal for "run-once" MCP server invocations.</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

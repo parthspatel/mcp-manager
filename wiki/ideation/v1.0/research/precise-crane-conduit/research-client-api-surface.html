@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API surface — Client API · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">precise-crane-conduit</a> / API surface</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>API surface — required operations by resource</h1>
+
+  <p class="lede">
+    Neutral enumeration of the operations the client API must expose so that CLI, TUI, and GUI can do everything users expect a "Docker for MCP servers" to do — manage installations, control runtimes, read/write config and secrets, and observe logs and events. Operations are grouped into six resources. Request and response shapes are illustrative, not yet bound to a wire format (that is decided in the recommendation page).
+  </p>
+
+  <section class="section">
+    <h2>Resource model</h2>
+    <table class="compare">
+      <thead>
+        <tr><th>Resource</th><th>Identity</th><th>Lifetime</th><th>Stream-shaped data?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>server</code></td><td>name + ID</td><td>persistent (definition)</td><td>no</td></tr>
+        <tr><td><code>installation</code></td><td>server_id + version</td><td>persistent</td><td>partial (install progress)</td></tr>
+        <tr><td><code>runtime</code></td><td>server_id + instance_id</td><td>ephemeral (running process)</td><td>yes (status changes)</td></tr>
+        <tr><td><code>config</code></td><td>server_id (+ scope: user/workspace)</td><td>persistent</td><td>no</td></tr>
+        <tr><td><code>secret</code></td><td>server_id + key</td><td>persistent</td><td>no</td></tr>
+        <tr><td><code>log</code></td><td>runtime_id</td><td>append-only stream</td><td>yes</td></tr>
+        <tr><td><code>event</code></td><td>topic-keyed (state, install, error)</td><td>broadcast stream</td><td>yes</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>Operations by resource</h2>
+
+    <details class="accordion" open>
+      <summary><code>server</code> — managed MCP server definitions</summary>
+      <ul>
+        <li><code>server.list</code> — return all known server definitions.</li>
+        <li><code>server.get(id)</code> — fetch one definition with its current installation + runtime state.</li>
+        <li><code>server.create(spec)</code> — register a new server (from manifest, URL, or template).</li>
+        <li><code>server.update(id, patch)</code> — partial update of metadata or pinned version.</li>
+        <li><code>server.delete(id, opts)</code> — remove definition; <code>opts.purge</code> also drops install + secrets.</li>
+        <li><code>server.search(query)</code> — query a registry (server registry is Stream 1 territory; the API only needs to forward the result).</li>
+      </ul>
+
+      <h4>Representative payload — <code>server.get</code> response</h4>
+<pre><code>{
+  "id": "github-mcp",
+  "name": "GitHub",
+  "manifest_version": "1",
+  "transport": "stdio",
+  "command": { "program": "github-mcp", "args": [], "env": {} },
+  "installation": {
+    "state": "installed",
+    "version": "0.4.2",
+    "installed_at": "2026-05-10T18:04:11Z",
+    "runtime_kind": "nix-devenv"
+  },
+  "runtime": { "state": "stopped", "instance_id": null },
+  "config_summary": { "keys": 3, "secrets": 1 },
+  "labels": ["productivity", "dev"]
+}</code></pre>
+    </details>
+
+    <details class="accordion">
+      <summary><code>installation</code> — version installation lifecycle</summary>
+      <ul>
+        <li><code>installation.install(server_id, version_constraint)</code> — produces a long-running operation; emits progress events.</li>
+        <li><code>installation.uninstall(server_id, opts)</code></li>
+        <li><code>installation.upgrade(server_id, version_constraint)</code></li>
+        <li><code>installation.list_versions(server_id)</code> — query candidate versions from registry / Nix derivations.</li>
+        <li><code>installation.verify(server_id)</code> — hash/signature check.</li>
+        <li><code>installation.operation_status(op_id)</code> — for async installs.</li>
+      </ul>
+
+      <h4>Representative request — start an install</h4>
+<pre><code>// Request
+{ "server_id": "github-mcp", "version": "^0.4.0", "force": false }
+
+// Initial response (op handle)
+{ "operation_id": "op_01HEX...", "kind": "install", "status": "running" }
+
+// Progress events delivered on the events stream:
+{ "kind": "install.progress", "op_id": "op_01HEX...",
+  "stage": "fetch", "percent": 42, "message": "downloading github-mcp@0.4.2" }
+{ "kind": "install.complete", "op_id": "op_01HEX...",
+  "version": "0.4.2", "duration_ms": 12345 }</code></pre>
+    </details>
+
+    <details class="accordion">
+      <summary><code>runtime</code> — process control (start, stop, restart of MCP server processes)</summary>
+      <ul>
+        <li><code>runtime.start(server_id, opts)</code> — returns <code>instance_id</code> on success.</li>
+        <li><code>runtime.stop(instance_id, grace_period_s)</code></li>
+        <li><code>runtime.restart(instance_id)</code></li>
+        <li><code>runtime.signal(instance_id, signal)</code></li>
+        <li><code>runtime.inspect(instance_id)</code> — pid, started_at, resource usage if collected, last health probe.</li>
+        <li><code>runtime.list(filter)</code> — running instances (analogous to a container listing).</li>
+        <li><code>runtime.attach(instance_id, request)</code> — only meaningful for some sandboxes (Stream 2); may be unsupported.</li>
+      </ul>
+
+      <h4>Representative response — <code>runtime.inspect</code></h4>
+<pre><code>{
+  "instance_id": "inst_01HEX...",
+  "server_id": "github-mcp",
+  "state": "running",
+  "pid": 49271,
+  "started_at": "2026-05-24T14:22:00Z",
+  "transport": { "kind": "stdio", "child_stdio": "piped" },
+  "health": { "last_probe": "2026-05-24T14:25:00Z", "result": "ok" },
+  "resource_usage": { "rss_bytes": 41943040, "cpu_ms": 4200 },
+  "exit": null
+}</code></pre>
+    </details>
+
+    <details class="accordion">
+      <summary><code>config</code> — read/write structured configuration</summary>
+      <ul>
+        <li><code>config.get(server_id, scope?)</code> — merged view by default, or raw scope.</li>
+        <li><code>config.set(server_id, scope, patch)</code> — JSON-merge patch.</li>
+        <li><code>config.unset(server_id, scope, key_path)</code></li>
+        <li><code>config.schema(server_id)</code> — return JSON Schema for a server's config (lets GUI generate forms).</li>
+        <li><code>config.validate(server_id, candidate)</code> — server-side validation before commit.</li>
+        <li><code>config.diff(server_id, candidate)</code> — show effect of a candidate vs current.</li>
+      </ul>
+    </details>
+
+    <details class="accordion">
+      <summary><code>secret</code> — opaque credential storage (separate so the value never round-trips in logs)</summary>
+      <ul>
+        <li><code>secret.list(server_id)</code> — returns key + metadata only, never values.</li>
+        <li><code>secret.put(server_id, key, value, opts)</code> — value is write-only.</li>
+        <li><code>secret.delete(server_id, key)</code></li>
+        <li><code>secret.exists(server_id, key)</code></li>
+        <li><em>Note:</em> no <code>secret.get</code> — secrets are injected into the server's environment by core, not handed back to clients. The keyring binding is Stream 3's concern.</li>
+      </ul>
+    </details>
+
+    <details class="accordion">
+      <summary><code>log</code> — server stdout / stderr / structured records</summary>
+      <ul>
+        <li><code>log.tail(instance_id, opts)</code> — open a streaming log feed. <code>opts.follow</code>, <code>opts.since</code>, <code>opts.until</code>, <code>opts.cursor</code> (replay from a cursor — Kubernetes-watch-style<sup><cite data-ref="k8s-watch"></cite></sup>).</li>
+        <li><code>log.page(instance_id, before_cursor?, limit)</code> — non-streaming historical lookup.</li>
+        <li><code>log.export(instance_id, range, format)</code> — bulk export for support bundles.</li>
+      </ul>
+
+      <h4>Representative streaming frame</h4>
+<pre><code>{
+  "cursor": "cur_AAABl9xWqz",
+  "instance_id": "inst_01HEX...",
+  "stream": "stderr",
+  "ts": "2026-05-24T14:25:01.412Z",
+  "level": "info",
+  "message": "tool=create_issue duration_ms=143"
+}</code></pre>
+    </details>
+
+    <details class="accordion">
+      <summary><code>event</code> — broadcast stream of state changes</summary>
+      <ul>
+        <li><code>event.subscribe(filter, since_cursor?)</code> — long-lived stream.</li>
+        <li>Topics: <code>runtime.state_changed</code>, <code>install.progress</code>, <code>install.complete</code>, <code>install.failed</code>, <code>health.transition</code>, <code>config.changed</code>, <code>secret.changed</code>, <code>system.error</code>.</li>
+        <li>Each event carries a monotonic <code>cursor</code> so clients can replay from where they left off — same pattern Kubernetes <code>watch</code> uses with <code>resourceVersion</code><sup><cite data-ref="k8s-watch"></cite></sup>.</li>
+      </ul>
+    </details>
+
+    <details class="accordion">
+      <summary><code>system</code> — meta operations</summary>
+      <ul>
+        <li><code>system.version</code> — daemon build + API version.</li>
+        <li><code>system.health</code> — daemon's own self-check.</li>
+        <li><code>system.shutdown</code> — graceful daemon shutdown (probably privileged).</li>
+        <li><code>system.events_replay(from_cursor)</code> — bootstrap snapshot for late-attaching clients.</li>
+      </ul>
+    </details>
+  </section>
+
+  <section class="section">
+    <h2>Cross-cutting requirements</h2>
+    <ul>
+      <li><strong>Idempotency</strong>: mutating operations should accept a client-supplied idempotency key so retries don't double-install.</li>
+      <li><strong>Long-running operations</strong>: install / upgrade / verify must return an op handle immediately; clients poll <code>operation_status</code> or subscribe to <code>event</code>.</li>
+      <li><strong>Cursor-based replay</strong>: every stream (logs + events) emits monotonic cursors so a reconnecting client can resume without losing or double-delivering records<sup><cite data-ref="k8s-streaming-blog"></cite></sup>.</li>
+      <li><strong>Pagination</strong>: <code>list</code> operations on potentially large collections (logs, events history) must support cursor pagination.</li>
+      <li><strong>Strong typing</strong>: every payload should be schema-described — see <a href="./research-client-api-versioning.html">versioning</a>.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>Error envelope</h2>
+    <p>
+      A single envelope shape across all operations simplifies client code. JSON-RPC 2.0 defines a <code>{code, message, data}</code> error object<sup><cite data-ref="jsonrpc-2-spec"></cite></sup>; gRPC has canonical status codes; HTTP has status + body. A wire-protocol-neutral sketch:
+    </p>
+<pre><code>{
+  "error": {
+    "code": "INSTALL_FAILED",
+    "message": "Nix derivation failed to build",
+    "kind": "subprocess",
+    "retryable": false,
+    "details": {
+      "exit_code": 1,
+      "stderr_tail": "...",
+      "operation_id": "op_01HEX..."
+    },
+    "trace_id": "trace_..."
+  }
+}</code></pre>
+  </section>
+</main>
+</body>
+</html>

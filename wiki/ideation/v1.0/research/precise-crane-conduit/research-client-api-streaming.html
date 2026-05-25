@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Streaming — Client API · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">precise-crane-conduit</a> / Streaming</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Live updates — log tail, event subscriptions, metrics</h1>
+
+  <p class="lede">
+    Three operations are inherently streaming: <code>log.tail</code>, <code>event.subscribe</code>, and (optionally) live metrics. Streaming has its own design dimensions independent of the unary RPC choice: framing, backpressure, reconnect / replay semantics, and how the chosen IPC channel encodes "this connection is dedicated to a long-lived stream of N frames". This page enumerates the available transport-level patterns without choosing.
+  </p>
+
+  <section class="section">
+    <h2>Streaming patterns side-by-side</h2>
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Pattern</th>
+          <th>Direction</th>
+          <th>Framing</th>
+          <th>Built-in backpressure?</th>
+          <th>Reconnect/replay</th>
+          <th>Reachable from browser?</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>gRPC server-streaming</strong></td>
+          <td>server → client</td>
+          <td>HTTP/2 DATA frames, length-prefixed protobuf<sup><cite data-ref="rfc7234-http2"></cite></sup></td>
+          <td>Yes — HTTP/2 <code>WINDOW_UPDATE</code><sup><cite data-ref="grpc-flow-control"></cite></sup></td>
+          <td>Client-side; app must replay-from-cursor</td>
+          <td>Via <code>tonic-web</code> (unary + server-stream only)<sup><cite data-ref="tonic-web-crate"></cite></sup></td>
+        </tr>
+        <tr>
+          <td><strong>gRPC bidi streaming</strong></td>
+          <td>both</td>
+          <td>HTTP/2 DATA frames</td>
+          <td>Yes — flow control on both directions<sup><cite data-ref="grpc-flow-control"></cite></sup></td>
+          <td>Client-side</td>
+          <td>No — gRPC-web cannot do bidi<sup><cite data-ref="tonic-web-crate"></cite></sup></td>
+        </tr>
+        <tr>
+          <td><strong>Server-Sent Events (SSE)</strong></td>
+          <td>server → client</td>
+          <td>UTF-8 text, <code>data:</code> / <code>event:</code> / <code>id:</code> lines, blank-line terminated<sup><cite data-ref="html-spec-sse"></cite></sup></td>
+          <td>TCP back-pressure only</td>
+          <td>Built into <code>EventSource</code>: auto-reconnect + <code>Last-Event-ID</code><sup><cite data-ref="mdn-eventsource"></cite></sup></td>
+          <td>Yes — native</td>
+        </tr>
+        <tr>
+          <td><strong>WebSocket</strong></td>
+          <td>both</td>
+          <td>Framed binary or text, RFC 6455<sup><cite data-ref="rfc6455-websocket"></cite></sup></td>
+          <td>TCP back-pressure only</td>
+          <td>Manual</td>
+          <td>Yes — native</td>
+        </tr>
+        <tr>
+          <td><strong>NDJSON over a socket</strong></td>
+          <td>either (typically server → client)</td>
+          <td>One JSON object per line, LF-delimited<sup><cite data-ref="ndjson-spec"></cite></sup></td>
+          <td>TCP back-pressure only</td>
+          <td>App-defined; embed cursor in each frame</td>
+          <td>Not directly (UDS); HTTP variant works</td>
+        </tr>
+        <tr>
+          <td><strong>MessagePack stream</strong></td>
+          <td>either</td>
+          <td>Concatenated msgpack values; <code>rmp-serde</code> Serializer/Deserializer over a reader/writer<sup><cite data-ref="rmp-serde-docs"></cite></sup></td>
+          <td>TCP back-pressure only</td>
+          <td>App-defined</td>
+          <td>Not directly</td>
+        </tr>
+        <tr>
+          <td><strong>Cap'n Proto stream</strong></td>
+          <td>either</td>
+          <td>Framed Cap'n Proto messages via <code>capnp-futures</code><sup><cite data-ref="capnproto-rust-gh"></cite></sup></td>
+          <td>TCP back-pressure only</td>
+          <td>App-defined</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td><strong>Long-polling with NDJSON chunks</strong></td>
+          <td>server → client</td>
+          <td>HTTP response body, chunked transfer-encoding</td>
+          <td>TCP / window-based</td>
+          <td>Resume via header (<code>X-Cursor</code>); each poll cheap</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><strong>Tauri channels</strong></td>
+          <td>Rust → JS</td>
+          <td>Index-ordered messages over Tauri IPC<sup><cite data-ref="tauri-channel-streaming"></cite></sup></td>
+          <td>WebView buffering</td>
+          <td>None (in-process)</td>
+          <td>GUI only</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>Backpressure mechanics in detail</h2>
+
+    <h3>HTTP/2 window-based (gRPC)</h3>
+    <p>
+      Default per-stream send budget is 64 KiB; as the consumer reads, <code>WINDOW_UPDATE</code> frames credit more bytes back to the producer<sup><cite data-ref="grpc-flow-control"></cite></sup>. This is automatic and applies separately per stream, which means a slow log subscriber does not starve a parallel install-progress stream. gRPC layers a message-based view on top so producers see "message ready / not ready" rather than raw bytes<sup><cite data-ref="grpc-flow-control"></cite></sup>.
+    </p>
+
+    <h3>TCP-only (everything else over a raw socket)</h3>
+    <p>
+      With NDJSON / MessagePack / SSE / WebSocket over a single connection, backpressure is just the OS socket buffer plus the producer's <code>write</code> returning <code>EAGAIN</code> / pending. In Tokio that surfaces as the async <code>write</code> future not progressing. If the protocol is multiplexed onto a single connection (e.g. JSON-RPC subscriptions sharing the socket with unary calls), a single slow reader stalls unrelated calls — the same head-of-line blocking problem HTTP/1.1 has and HTTP/2 solves.
+    </p>
+
+    <h3>SSE: simple but server-buffered</h3>
+    <p>
+      SSE has no application-layer flow control; the spec doesn't define one<sup><cite data-ref="html-spec-sse"></cite></sup>. Servers must implement their own buffering / drop policies. The benefit is in the client: <code>EventSource</code> auto-reconnects with exponential backoff and re-sends the <code>Last-Event-ID</code> header — if the server actually implements replay-from-id this is "free"<sup><cite data-ref="mdn-eventsource"></cite></sup>.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>Reconnect &amp; replay</h2>
+    <p>
+      A cursor (opaque monotonic token attached to each frame) is the lowest common denominator that works across every transport. Kubernetes uses <code>resourceVersion</code> for exactly this purpose<sup><cite data-ref="k8s-watch"></cite></sup>: a watcher disconnected mid-stream reconnects with <code>resourceVersion=&lt;last_seen&gt;</code> and the server resumes from after that point — until the watch cache evicts the cursor, after which the client must do a fresh list. The MCP Manager event/log API can adopt the same envelope:
+    </p>
+<pre><code>// every frame:
+{ "cursor": "evt_01HEX...", "kind": "runtime.state_changed",
+  "instance_id": "inst_01HEX...", "from": "starting", "to": "running",
+  "ts": "2026-05-24T14:22:00.412Z" }
+
+// reconnect:
+event.subscribe(filter={...}, since_cursor="evt_01HEX...")</code></pre>
+    <p>
+      Server side, the daemon needs a bounded ring buffer per topic; clients receiving a <code>410 Gone</code>-equivalent error must do a fresh snapshot. Kubernetes' streaming-list feature in 1.32 packages this as a single response<sup><cite data-ref="k8s-streaming-blog"></cite></sup>.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>Mapping streams onto IPC choices</h2>
+
+    <details class="accordion" open>
+      <summary>JSON-RPC over UDS</summary>
+      <p>
+        JSON-RPC 2.0 itself defines only request/response/notification, but its widely-used "subscription" pattern (used by Ethereum nodes, jsonrpsee, LSP) is: a <code>subscribe</code> method returns an opaque subscription id; subsequent server-to-client <em>notifications</em> tagged with that id are the stream<sup><cite data-ref="jsonrpsee-github"></cite></sup>. The <code>jsonrpsee</code> Rust crate ships first-class subscription support<sup><cite data-ref="jsonrpsee-docs"></cite></sup>. Framing on UDS is typically NDJSON (one JSON value per line) — the same approach MCP itself uses for stdio<sup><cite data-ref="mcp-transports"></cite></sup>.
+      </p>
+    </details>
+
+    <details class="accordion">
+      <summary>gRPC over UDS (tonic)</summary>
+      <p>
+        gRPC's <code>server-streaming</code> and <code>bidi-streaming</code> map directly. Tonic's bidi pattern composes naturally with a tokio mpsc channel on each side<sup><cite data-ref="tonic-bidi-streaming"></cite></sup>; an example connecting tonic over a Unix socket exists in the tonic repo<sup><cite data-ref="tonic-uds-example"></cite></sup>. Backpressure is HTTP/2-window automatic<sup><cite data-ref="grpc-flow-control"></cite></sup>.
+      </p>
+    </details>
+
+    <details class="accordion">
+      <summary>HTTP loopback + SSE (axum / hyper)</summary>
+      <p>
+        Axum has a UDS example<sup><cite data-ref="axum-uds-example"></cite></sup>; SSE works the same over UDS or 127.0.0.1. Critical caveat: <code>EventSource</code> only exists in browsers. CLI/TUI clients written in Rust still need to read the chunked text body manually (it is just <code>text/event-stream</code> framed by blank lines).
+      </p>
+    </details>
+
+    <details class="accordion">
+      <summary>Tauri channels (GUI-only special case)</summary>
+      <p>
+        If the GUI ships core in-process, <code>tauri::ipc::Channel&lt;T&gt;</code> is the idiomatic streaming primitive — guaranteed ordering by index, fast post-v2 raw-bytes path<sup><cite data-ref="tauri-channel-streaming"></cite></sup><sup><cite data-ref="tauri-ipc-perf-discussion"></cite></sup>. But this only solves GUI; CLI and TUI still need a separate channel.
+      </p>
+    </details>
+  </section>
+
+  <section class="section">
+    <h2>Practical edge cases</h2>
+    <ul>
+      <li><strong>Slow client:</strong> producer needs a policy — block, drop oldest, or sever the subscription with <code>RESOURCE_EXHAUSTED</code>. gRPC's flow control makes "block" the default; over raw sockets the daemon must implement this explicitly.</li>
+      <li><strong>Daemon restart while client is subscribed:</strong> client gets EOF; cursor-based replay is the only way to recover without losing events.</li>
+      <li><strong>Log bursts:</strong> a chatty MCP server can emit thousands of log lines per second. JSON encoding cost dominates if every frame is parsed; consider per-frame batching (<code>{cursor, frames: [...]}</code>) for high-volume streams.</li>
+      <li><strong>Binary payloads:</strong> if any frame carries raw bytes (e.g. a downloaded blob from an install op), base64-in-JSON costs ~33%. MessagePack / protobuf / Cap'n Proto carry bytes natively.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

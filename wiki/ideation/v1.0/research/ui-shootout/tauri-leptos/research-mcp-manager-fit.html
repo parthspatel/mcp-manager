@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tauri 2 + Leptos — MCP Manager fit — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../index.html">ui-shootout</a> / <a href="./index.html">tauri-leptos</a> / research · MCP fit</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Research — Tauri 2 + Leptos fit for MCP Manager</h1>
+
+<p class="lede">
+The general stack research is on the <a href="research-stack.html">previous page</a>. This page is the concrete plumbing: how the Tauri+Leptos GUI dials mcpd, how the daemon-not-yet-running boot is handled, how live server/log updates flow, how secrets editing works, and what shared-types architecture buys us.
+</p>
+
+<nav class="toc">
+<h4>Contents</h4>
+<ul>
+<li><a href="#ipc">Dialing mcpd — UDS via Tauri command vs. HTTP/SSE from WASM</a></li>
+<li><a href="#boot">The "mcpd not yet running" boot case</a></li>
+<li><a href="#live">Live updates — server list, log tails, projection status</a></li>
+<li><a href="#secrets">Secrets editor flow</a></li>
+<li><a href="#types">Type sharing with the Rust core</a></li>
+<li><a href="#risks">Tauri+Leptos-specific risks for this app</a></li>
+</ul>
+</nav>
+
+<section class="section" id="ipc">
+<h2>Dialing mcpd — UDS via Tauri command vs. HTTP/SSE from WASM</h2>
+
+<p>
+There are two viable patterns. They are not mutually exclusive; a real implementation will probably use both depending on the call site.
+</p>
+
+<h3>Pattern A — Tauri command proxies UDS</h3>
+<p>
+The Leptos WASM cannot itself open a Unix-domain socket (the WebView's network APIs don't expose UDS). The clean path is to have Rust-side Tauri commands hold the <code>tokio::net::UnixStream</code> connection to mcpd, and expose typed commands (<code>list_servers</code>, <code>start_server</code>, <code>get_secret</code>, ...) that the Leptos frontend invokes via <code>wasm-bindgen</code><sup><a class="cite" href="#cite-tauri-calling-rust" data-ref="tauri-calling-rust">[?]</a></sup>. Community precedent for resident-daemon IPC in Tauri specifically discusses UDS-vs-pipe trade-offs and lands on UDS for multi-window apps<sup><a class="cite" href="#cite-tauri-uds-dev-to" data-ref="tauri-uds-dev-to">[?]</a></sup>.
+</p>
+
+<pre><code>// src-tauri/src/lib.rs — Rust holds the UDS connection.
+use tokio::net::UnixStream;
+use tauri::State;
+
+struct McpdConn(tokio::sync::Mutex&lt;UnixStream&gt;);
+
+#[tauri::command]
+async fn list_servers(state: State&lt;'_, McpdConn&gt;) -&gt; Result&lt;Vec&lt;Server&gt;, String&gt; {
+    let mut s = state.0.lock().await;
+    jsonrpc_call(&amp;mut *s, "servers.list", json!({})).await
+        .map_err(|e| e.to_string())
+}</code></pre>
+
+<p>
+Streaming responses (log tails, server status events) use Tauri's <code>tauri::ipc::Channel</code> API, which is the recommended mechanism for ordered, low-overhead streaming from Rust to the WebView<sup><a class="cite" href="#cite-tauri-calling-rust" data-ref="tauri-calling-rust">[?]</a></sup>.
+</p>
+
+<h3>Pattern B — Leptos hits mcpd's HTTP/SSE bridge directly</h3>
+<p>
+Since the orchestrator notes mcpd already exposes an HTTP/SSE bridge for browser-based clients, the Leptos WASM can use the WebView's native <code>fetch</code> and <code>EventSource</code> APIs to talk to <code>http://127.0.0.1:&lt;port&gt;</code> directly — exactly as a browser would. This skips the Tauri-command marshaling entirely, but loses the ability to enforce Tauri's ACL/capabilities security model on a per-call basis.
+</p>
+
+<pre><code>// Leptos resource against mcpd's HTTP/SSE bridge — no Tauri command in the loop.
+use leptos::prelude::*;
+use gloo_net::http::Request;
+
+fn servers_resource() -&gt; Resource&lt;Vec&lt;Server&gt;&gt; {
+    Resource::new(|| (), |_| async move {
+        Request::get("http://127.0.0.1:7777/v1/servers")
+            .send().await.unwrap()
+            .json::&lt;Vec&lt;Server&gt;&gt;().await.unwrap()
+    })
+}</code></pre>
+
+<h3>Trade-off summary</h3>
+<table class="compare">
+<thead><tr><th>Concern</th><th>Pattern A (Tauri cmd over UDS)</th><th>Pattern B (HTTP/SSE from WASM)</th></tr></thead>
+<tbody>
+<tr><td>Performance</td><td>Native UDS + binary Channel API; lowest overhead</td><td>HTTP-over-loopback; fine for human-scale traffic</td></tr>
+<tr><td>Security</td><td>UDS file perms gate access; Tauri ACL gates each command<sup><a class="cite" href="#cite-tauri-ipc-concept" data-ref="tauri-ipc-concept">[?]</a></sup></td><td>Loopback HTTP — anything on the box can hit mcpd unless mcpd auth-gates</td></tr>
+<tr><td>Streaming</td><td>Channel API — first-party, well-supported<sup><a class="cite" href="#cite-tauri-calling-rust" data-ref="tauri-calling-rust">[?]</a></sup></td><td>EventSource on WKWebView; WebKitGTK has historical quirks<sup><a class="cite" href="#cite-tauri-sse-feature-req" data-ref="tauri-sse-feature-req">[?]</a></sup></td></tr>
+<tr><td>Glue code</td><td>Two type definitions (Rust cmd + WASM call) — but both Rust</td><td>Just the HTTP client in WASM</td></tr>
+<tr><td>Recommended for MCP Manager</td><td>Server list, server actions, secrets, projection ops</td><td>Log tails and event streams (where SSE is already the protocol)</td></tr>
+</tbody>
+</table>
+</section>
+
+<section class="section" id="boot">
+<h2>The "mcpd not yet running" boot case</h2>
+
+<p>
+The orchestrator's constraint: <em>mcpd auto-spawns on first GUI launch; the GUI must handle "mcpd not yet running" with a brief startup spinner, not an error.</em> Tauri has clean primitives for this.
+</p>
+
+<ol>
+  <li><strong>Sidecar mcpd or detached spawn.</strong> Tauri's sidecar feature lets you embed mcpd as an external binary and run it via <code>app.shell().sidecar("mcpd").spawn()</code><sup><a class="cite" href="#cite-tauri-sidecar" data-ref="tauri-sidecar">[?]</a></sup><sup><a class="cite" href="#cite-tauri-plugin-shell" data-ref="tauri-plugin-shell">[?]</a></sup>. This makes the bundle ~5–10 MB heavier but guarantees a known-good mcpd binary ships with the GUI. Alternatively, the GUI can probe for a running mcpd (UDS file exists + socket accepts), and only spawn one if absent.</li>
+  <li><strong>Probe + retry loop.</strong> In the Tauri <code>setup</code> hook (Rust), open a UDS connection with exponential backoff (50ms → 100ms → 200ms ... up to 5s). Emit a <code>tauri::Event</code> to the frontend on each retry so Leptos can show "Starting mcpd…" instead of an error.</li>
+  <li><strong>Leptos UI shows the spinner.</strong> A top-level <code>&lt;Suspense&gt;</code> wraps the app's root; until the <code>boot_status</code> signal flips to <code>Ready</code>, it shows the spinner. On <code>Ready</code>, the rest of the app mounts.</li>
+</ol>
+
+<pre><code>// src-tauri/src/lib.rs — sidecar spawn + ready probe.
+tauri::Builder::default()
+  .setup(|app| {
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let _child = handle.shell().sidecar("mcpd")?.spawn()?;
+        wait_for_uds("/run/user/1000/mcpd.sock", Duration::from_secs(5)).await?;
+        handle.emit("mcpd-ready", ()).ok();
+        Ok::&lt;_, anyhow::Error&gt;(())
+    });
+    Ok(())
+  })
+  .run(tauri::generate_context!())?;</code></pre>
+</section>
+
+<section class="section" id="live">
+<h2>Live updates — server list, log tails, projection status</h2>
+
+<p>
+Three streams matter for the v1.0 GUI:
+</p>
+
+<ol>
+  <li><strong>Server list</strong> (rare updates, low fan-out) — best via <em>polling-on-event</em>: Leptos invalidates its <code>Resource</code> whenever mcpd emits a <code>servers.changed</code> event. Both Pattern A (Tauri event) and Pattern B (SSE) work; A is leaner.</li>
+  <li><strong>Log tails</strong> (high-frequency, append-only) — best via <em>Tauri Channel API streaming UDS bytes</em>. The Channel API is explicitly designed for ordered streamed data and is what Tauri itself uses internally for download progress and child-process output<sup><a class="cite" href="#cite-tauri-calling-rust" data-ref="tauri-calling-rust">[?]</a></sup>. Leptos appends each <code>LogLine</code> to a <code>RwSignal&lt;VecDeque&lt;LogLine&gt;&gt;</code> with a max length to cap memory.</li>
+  <li><strong>Projection status</strong> (periodic, structured) — same as server list. Mostly tens of events per minute; both patterns are fine.</li>
+</ol>
+
+<p>
+The SSE feature request for Tauri's plugin workspace (<a href="https://github.com/tauri-apps/plugins-workspace/issues/1002">#1002</a>)<sup><a class="cite" href="#cite-tauri-sse-feature-req" data-ref="tauri-sse-feature-req">[?]</a></sup> is open, which means there is no first-party Tauri SSE plugin yet. The WebView's built-in <code>EventSource</code> works on WKWebView; on WebKitGTK it has historically been more fragile (and the version differs between distros). For MCP Manager, that argues for Pattern A (Channel API) for log streams and reserving SSE for cases where the same code must also run in a plain browser.
+</p>
+</section>
+
+<section class="section" id="secrets">
+<h2>Secrets editor flow</h2>
+
+<p>
+Secrets are the most sensitive surface. The constraints:
+</p>
+<ul>
+  <li>Plaintext must never persist client-side; the canonical store is mcpd.</li>
+  <li>Editing should round-trip via mcpd's existing API; the GUI is a thin editor.</li>
+  <li>Pasting from the clipboard should not be blocked, but the secret should not be logged.</li>
+</ul>
+
+<p>
+Recommended flow in Tauri+Leptos:
+</p>
+<ol>
+  <li>User clicks "Edit secret <code>FOO</code>". Leptos invokes Tauri command <code>get_secret_redacted("FOO")</code> which returns a placeholder (e.g. <code>"●●●●●●"</code>) — never the plaintext.</li>
+  <li>User types the new value into a Leptos <code>&lt;input type="password"&gt;</code>. The signal is held only in-memory in the WASM heap.</li>
+  <li>On save, Leptos invokes <code>set_secret("FOO", value)</code>. The Tauri command writes through UDS to mcpd, which encrypts and persists.</li>
+  <li>The Rust command immediately drops the value; Leptos resets the input signal to a fresh placeholder.</li>
+</ol>
+<p>
+Tauri's ACL/capabilities layer lets you restrict which windows can invoke the secrets commands<sup><a class="cite" href="#cite-tauri-ipc-concept" data-ref="tauri-ipc-concept">[?]</a></sup> — useful if a future version of the app embeds a tools-panel that should not have secret read access.
+</p>
+</section>
+
+<section class="section" id="types">
+<h2>Type sharing with the Rust core</h2>
+
+<p>
+This is the single biggest win of the stack. mcpd's wire types — request/response structs, error enums, JSON-RPC envelopes — live in a workspace crate (e.g. <code>mcpd-protocol</code>). Both mcpd, the CLI/TUI, and the Leptos WASM crate depend on <code>mcpd-protocol</code> with default features. The same <code>struct Server { name: String, status: ServerStatus, ... }</code> is used in three places:
+</p>
+<ul>
+  <li>mcpd serializes <code>Server</code> when answering <code>servers.list</code>.</li>
+  <li>The Tauri Rust process deserializes it from UDS, validates Tauri ACL, re-serializes it across the IPC boundary as JSON.</li>
+  <li>The Leptos WASM deserializes it on the other side via <code>serde-wasm-bindgen</code> and binds it into its reactive signal graph.</li>
+</ul>
+<p>
+When the protocol changes — a new field, a renamed variant — the compiler tells you everywhere it broke. No TypeScript types file to keep in sync, no codegen step. This is a guarantee no JS/TS frontend on Tauri can match, and it is the headline reason to consider Tauri+Leptos over Tauri+React for an app that lives this close to its daemon.
+</p>
+
+<p>
+For typed IPC commands themselves, <strong>TauRPC</strong><sup><a class="cite" href="#cite-taurpc" data-ref="taurpc">[?]</a></sup> provides a trait-based abstraction over Tauri commands so you write the contract once and both sides type-check. With Leptos you skip its TS codegen and use the Rust bindings directly.
+</p>
+</section>
+
+<section class="section" id="risks">
+<h2>Tauri+Leptos-specific risks for this app</h2>
+
+<table class="compare">
+<thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr>
+  <td>WebKitGTK SSE/streaming quirks on Linux</td>
+  <td>Medium</td>
+  <td>Log tails or status streams glitch on specific distros</td>
+  <td>Prefer Tauri Channel API (Pattern A) over EventSource for hot paths; reserve SSE for cases where the GUI must also work in a browser.<sup><a class="cite" href="#cite-tauri-sse-feature-req" data-ref="tauri-sse-feature-req">[?]</a></sup></td>
+</tr>
+<tr>
+  <td>Tauri docs pinned to Leptos 0.6 while community is on 0.8</td>
+  <td>High (already true)</td>
+  <td>New devs follow stale guidance, hit confusing errors</td>
+  <td>Bookmark <code>michalvavra/tauri-leptos-example</code><sup><a class="cite" href="#cite-michalvavra-tauri-leptos" data-ref="michalvavra-tauri-leptos">[?]</a></sup> and the ForgeStream walkthrough<sup><a class="cite" href="#cite-forgestream-leptos-tauri" data-ref="forgestream-leptos-tauri">[?]</a></sup> as the working references.</td>
+</tr>
+<tr>
+  <td>3–4s incremental rebuilds for Rust changes</td>
+  <td>High</td>
+  <td>Slower iteration than a TS frontend; team friction</td>
+  <td>Use <code>--cfg=erase_components</code> dev mode<sup><a class="cite" href="#cite-leptos-080-release" data-ref="leptos-080-release">[?]</a></sup>; structure code so UI tweaks are CSS not Rust where possible.</td>
+</tr>
+<tr>
+  <td>No flagship app on this exact combo</td>
+  <td>High (today)</td>
+  <td>Fewer "we've seen this before" StackOverflow answers</td>
+  <td>Accept the trade; document our integration patterns clearly so we are the reference.</td>
+</tr>
+<tr>
+  <td>Hiring</td>
+  <td>High</td>
+  <td>Hard to staff a team beyond the founders</td>
+  <td>Onboard existing Rust devs into Leptos (precedent: 2 engineers ramped from React+TS in ~2 months<sup><a class="cite" href="#cite-leptos-vs-dioxus-2026" data-ref="leptos-vs-dioxus-2026">[?]</a></sup>). The Tauri Rust side is much more hireable than the Leptos WASM side.</td>
+</tr>
+<tr>
+  <td>macOS notarization breakage</td>
+  <td>Low</td>
+  <td>Ship blocked until cert renewed</td>
+  <td>Use App Store Connect API key (not interactive Apple ID), calendar the 5-year cert expiry<sup><a class="cite" href="#cite-tauri-macos-sign" data-ref="tauri-macos-sign">[?]</a></sup>.</td>
+</tr>
+</tbody>
+</table>
+</section>
+
+<section class="citations">
+<h3>Citations</h3>
+<ol>
+<li id="cite-tauri-calling-rust"><a href="https://v2.tauri.app/develop/calling-rust/">Calling Rust from the Frontend — Tauri 2</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-tauri-ipc-concept"><a href="https://v2.tauri.app/concept/inter-process-communication/">Inter-Process Communication — Tauri 2 concept</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-tauri-sidecar"><a href="https://v2.tauri.app/develop/sidecar/">Embedding External Binaries — Tauri 2</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-tauri-plugin-shell"><a href="https://v2.tauri.app/plugin/shell/">Shell plugin — Tauri 2</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-tauri-uds-dev-to"><a href="https://dev.to/hiyoyok/ipc-pipe-vs-unix-socket-for-a-resident-daemon-in-tauri-what-i-learned-fa6">IPC Pipe vs Unix Socket for a Resident Daemon in Tauri</a> (dev.to, 2026-05-24).</li>
+<li id="cite-tauri-sse-feature-req"><a href="https://github.com/tauri-apps/plugins-workspace/issues/1002">Tauri plugins-workspace #1002 — SSE</a> (github.com, 2026-05-24).</li>
+<li id="cite-tauri-macos-sign"><a href="https://v2.tauri.app/distribute/sign/macos/">Tauri 2 — macOS Code Signing</a> (tauri.app, 2026-05-24).</li>
+<li id="cite-taurpc"><a href="https://lib.rs/crates/taurpc">TauRPC — lib.rs</a> (lib.rs, 2026-05-24).</li>
+<li id="cite-michalvavra-tauri-leptos"><a href="https://github.com/michalvavra/tauri-leptos-example">michalvavra/tauri-leptos-example</a> (github.com, 2026-05-24).</li>
+<li id="cite-forgestream-leptos-tauri"><a href="https://forgestream.idverse.com/blog/20251020-getting-started-with-leptos-and-tauri/">Getting started with Leptos and Tauri — ForgeStream</a> (forgestream.idverse.com, 2026-05-24).</li>
+<li id="cite-leptos-080-release"><a href="https://github.com/leptos-rs/leptos/releases/tag/v0.8.0">Leptos v0.8.0 release notes</a> (github.com, 2026-05-24).</li>
+<li id="cite-leptos-vs-dioxus-2026"><a href="https://rustify.rs/articles/leptos-vs-dioxus-rust-frontend-2026">Leptos vs Dioxus 2026 — Rustify</a> (rustify.rs, 2026-05-24).</li>
+</ol>
+</section>
+
+</main>
+</body>
+</html>

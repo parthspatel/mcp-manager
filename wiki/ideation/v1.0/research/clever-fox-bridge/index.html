@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clever-fox-bridge — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / clever-fox-bridge</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Stream 6 &middot; clever-fox-bridge &mdash; Toolchain configuration projection</h1>
+
+<p class="lede">
+This stream owns the <em>outbound</em> half of MCP Manager's reason to exist. Given canonical server state inside <code>mcpd</code>, how do we write each user's actual MCP-consuming tool &mdash; Claude Code CLI, Codex CLI, Zed, the JetBrains family, VS Code, Cursor, Windsurf, Continue, Cline, Goose &mdash; so its agent picks the servers up, without trampling hand edits, leaking secrets, or requiring a new MCP Manager release every time a new editor adds MCP support? Stream 1 catalogued <em>what</em> each tool stores; this stream designs <em>how</em> we project into them safely.
+<span class="evidence-badge">55 citations</span>
+<span class="pill">12 tools catalogued</span>
+<span class="pill">7 sync strategies ranked</span>
+</p>
+
+<nav class="toc">
+  <h4>Pages</h4>
+  <div class="group-label">Research (neutral)</div>
+  <ul>
+    <li><a href="./research-toolchain-known-clients.html">research-toolchain-known-clients.html</a> &mdash; concrete catalog: paths, schemas, env syntax, transports, scopes for every supported tool</li>
+    <li><a href="./research-toolchain-projection.html">research-toolchain-projection.html</a> &mdash; projection mechanics: schema mapping, env translation, secret rewriting, idempotency</li>
+    <li><a href="./research-toolchain-sync-modes.html">research-toolchain-sync-modes.html</a> &mdash; prior-art survey of sync semantics (push, managed-block, pull, three-way, overlay, watch, symlink)</li>
+    <li><a href="./research-toolchain-discovery.html">research-toolchain-discovery.html</a> &mdash; how MCP Manager detects which tools the user has installed (cross-platform)</li>
+  </ul>
+  <div class="group-label">Analysis &amp; ranking</div>
+  <ul>
+    <li><a href="./analysis-toolchain-tradeoffs.html">analysis-toolchain-tradeoffs.html</a> &mdash; where each strategy hurts; security blast-radius; schema-version drift</li>
+    <li><a href="./matrix-toolchain-sync-strategy.html">matrix-toolchain-sync-strategy.html</a> &mdash; one interactive weighted matrix over 7 strategies and 9 criteria</li>
+  </ul>
+  <div class="group-label">Recommendation</div>
+  <ul>
+    <li><a href="./recommendation-toolchain-summary.html">recommendation-toolchain-summary.html</a> &mdash; tier-1/tier-2 lists, default sync mode, custom-toolchain escape-hatch TOML spec</li>
+  </ul>
+</nav>
+
+<section class="section">
+  <h2>Sibling streams</h2>
+  <div class="card-grid">
+    <a class="card" href="../curious-otter-survey/">
+      <h3>curious-otter-survey</h3>
+      <p>Stream 1 &mdash; The inbound side: how each host <em>stores</em> MCP config. This stream's research catalog references theirs and does not duplicate.</p>
+    </a>
+    <a class="card" href="../stoic-badger-sandbox/">
+      <h3>stoic-badger-sandbox</h3>
+      <p>Stream 2 &mdash; Nix isolation and sandbox model. A poisoned canonical entry projected into N editors is this stream's worst-case scenario; their threat model defines our blast-radius.</p>
+    </a>
+    <a class="card" href="../steady-bear-foundation/">
+      <h3>steady-bear-foundation</h3>
+      <p>Stream 3 &mdash; The daemon and state store that owns the canonical truth being projected outward.</p>
+    </a>
+    <a class="card" href="../precise-crane-conduit/">
+      <h3>precise-crane-conduit</h3>
+      <p>Stream 4 &mdash; IPC wire protocol. The projector is a client of the daemon's state subscription; reacts to <code>ServerUpdated</code> events.</p>
+    </a>
+    <a class="card" href="../nimble-raven-toolkit/">
+      <h3>nimble-raven-toolkit</h3>
+      <p>Stream 5 &mdash; The CLI/TUI/GUI surfaces that expose <em>this stream's</em> projection state to the user (diff preview, conflict resolution, opt-in toggles).</p>
+    </a>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Stream summary in one paragraph</h2>
+  <p>
+    Of seven candidate sync strategies surveyed across the dotfile and config-management ecosystem (chezmoi, home-manager, dotter, mise, kustomize, Ansible, Renovate's customManagers), the only one that simultaneously preserves hand-edits, stays idempotent, surfaces conflicts honestly, and works on every supported tool's file format is the <strong>managed-block</strong> pattern &mdash; a fenced region marked with <code>BEGIN MCP-MANAGER MANAGED BLOCK</code> / <code>END MCP-MANAGER MANAGED BLOCK</code> rewritten in place. Tools whose config format cannot embed comments (pure JSON) get a sibling-file projection (<code>.mcp.json</code> companion) instead. Cross-tool extensibility is solved by a TOML-based <code>toolchain.toml</code> spec that ships in <code>$XDG_CONFIG_HOME/mcp-manager/toolchains/</code> and is loaded at daemon start; users add a new tool by writing one file. Tier-1 (auto-detected, projected by default with user consent): Claude Code CLI, Codex CLI, VS Code, Cursor, Zed, the JetBrains family. Tier-2 (supported but opt-in): Windsurf, Continue, Cline, Goose, LibreChat, Claude Desktop. Open WebUI is explicitly excluded because its MCP integration runs through a separate proxy (MCPO) that breaks our projection invariants <cite data-ref="openwebui-mcp"></cite>.
+  </p>
+</section>
+</main>
+</body>
+</html>

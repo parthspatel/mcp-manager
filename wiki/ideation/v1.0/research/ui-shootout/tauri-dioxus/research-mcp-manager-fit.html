@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Manager fit — Tauri 2 + Dioxus — Ideation v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">ui-shootout</a> / <a href="./index.html">tauri-dioxus</a> / research · fit</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Fit research — Dioxus for the MCP Manager GUI</h1>
+
+<p class="lede">
+This page walks through MCP Manager's actual requirements — GUI ↔ <code>mcpd</code> dialing, secrets editing, daemon-not-yet-running boot, live updates, type sharing with the Rust core — and shows the concrete Dioxus shape for each. Throughout, "Dioxus" means <strong><code>dioxus-desktop</code></strong> standalone unless noted. The Tauri-wrapped variant and the Blitz/Native variant are flagged where they materially differ.
+</p>
+
+<nav class="toc">
+<h4>Contents</h4>
+<ul>
+<li><a href="#ipc">Dialing mcpd: UDS or HTTP/SSE bridge</a></li>
+<li><a href="#cold-start">Cold start: mcpd not yet ready</a></li>
+<li><a href="#live">Live updates from mcpd</a></li>
+<li><a href="#secrets">Secrets editor</a></li>
+<li><a href="#types">Type sharing with the Rust core</a></li>
+<li><a href="#shape">Putting it together — workspace shape</a></li>
+</ul>
+</nav>
+
+<section class="section" id="ipc">
+<h2>Dialing mcpd: UDS or HTTP/SSE bridge</h2>
+
+<p>mcpd exposes JSON-RPC over a Unix domain socket and an HTTP+SSE bridge over loopback. The GUI's question: which transport does it dial, and from which side of the WebView boundary?</p>
+
+<p><strong>Dioxus-desktop has a unique advantage here: there is no WebView IPC boundary.</strong> Event handlers and effects run as native Rust in the host process, so the UI code can construct a <code>hyper</code> client over a <code>tokio::net::UnixStream</code> or a <code>reqwest::Client</code> against loopback and drive it directly from a signal-tracked async task<sup><a class="cite" href="#cite-dioxus-platforms-desktop" data-ref="dioxus-platforms-desktop">[1]</a></sup>. There is no Tauri command to declare, no <code>#[tauri::command]</code> marshalling.</p>
+
+<pre><code>// Dioxus-desktop: dial mcpd's UDS directly from a use_resource
+use dioxus::prelude::*;
+use mcp_core::{ServerList, McpClient};  // shared crate
+
+fn ServerListView() -&gt; Element {
+    // Background-resolved async query, re-runs when deps change.
+    let servers = use_resource(|| async move {
+        let client = McpClient::connect_uds("/var/run/mcpd.sock").await?;
+        client.list_servers().await
+    });
+
+    match &amp;*servers.read_unchecked() {
+        Some(Ok(list))  =&gt; rsx! { ServerTable { servers: list.clone() } },
+        Some(Err(e))    =&gt; rsx! { ErrorBanner { message: "{e}" } },
+        None            =&gt; rsx! { Spinner {} },
+    }
+}</code></pre>
+
+<p>By contrast, the Tauri-wrapped variant must declare each call as a <code>#[tauri::command]</code> on the Rust side, register it in <code>.invoke_handler(...)</code>, and the WASM frontend invokes it via <code>tauri::invoke("list_servers", &amp;())</code>. That's an extra layer of serialization (always JSON-encoded by Tauri's IPC<sup><a class="cite" href="#cite-tauri-2-stable" data-ref="tauri-2-stable">[2]</a></sup>) for no benefit — the data was already going to be serde-encoded JSON-RPC on the wire to mcpd.</p>
+
+<p><strong>UDS vs HTTP/SSE bridge: pick UDS where possible.</strong> Local UDS skips TCP overhead, can use Unix file permissions for auth, and avoids port-conflict edge cases. <code>hyperlocal</code> or hyper's bundled UDS connector both work fine inside dioxus-desktop's Rust process<sup><a class="cite" href="#cite-tauri-sidecar-vs-uds" data-ref="tauri-sidecar-vs-uds">[3]</a></sup>. Use the HTTP/SSE bridge for remote/headless mcpd setups in the future.</p>
+</section>
+
+<section class="section" id="cold-start">
+<h2>Cold start: mcpd not yet ready</h2>
+
+<p>Per the orchestrator's constraints: mcpd auto-spawns on first GUI launch; the GUI must show a brief startup spinner, not an error. The clean shape in Dioxus:</p>
+
+<pre><code>// Boot sequence: ensure mcpd is up, then mount the app
+fn App() -&gt; Element {
+    let mcpd_ready = use_resource(|| async {
+        ensure_mcpd_running().await?;          // spawn if needed
+        wait_for_health(/* deadline = 10s */).await
+    });
+
+    match &amp;*mcpd_ready.read_unchecked() {
+        None              =&gt; rsx! { BootSplash { message: "Starting mcpd..." } },
+        Some(Err(e))      =&gt; rsx! { BootError { message: "{e}", retry: || mcpd_ready.restart() } },
+        Some(Ok(())) =&gt; rsx! { MainShell {} },
+    }
+}</code></pre>
+
+<p><code>ensure_mcpd_running</code> either spawns a sidecar binary or connects to an already-running instance. With dioxus-desktop, this is plain <code>tokio::process::Command::new("mcpd").spawn()</code> — no Tauri plumbing required. If wrapping in Tauri, use <code>app.shell().sidecar("mcpd").spawn()</code><sup><a class="cite" href="#cite-tauri-sidecar" data-ref="tauri-sidecar">[4]</a></sup>, which is more polished for bundling but functionally equivalent.</p>
+
+<p>The <code>use_resource</code> hook integrates cleanly with Suspense-style rendering — the spinner shows automatically while the future is pending, and the UI swaps in once <code>Ok(())</code> arrives.</p>
+</section>
+
+<section class="section" id="live">
+<h2>Live updates from mcpd: log tails, status, toolchain projection</h2>
+
+<p>This is where Dioxus's signal model and Dioxus Fullstack's streaming primitives shine. mcpd publishes events as SSE — log lines, server state transitions, toolchain projection status changes. The GUI subscribes and renders them live.</p>
+
+<p><strong>From dioxus-desktop's Rust process</strong>, the idiomatic shape is a background <code>tokio</code> task that owns the SSE connection and pushes events into signals<sup><a class="cite" href="#cite-dioxus-fullstack-streams" data-ref="dioxus-fullstack-streams">[5]</a></sup>:</p>
+
+<pre><code>// Subscribe to mcpd's SSE event stream; route each event into a signal.
+fn use_mcpd_events() -&gt; Signal&lt;Vec&lt;LogLine&gt;&gt; {
+    let mut log = use_signal(Vec::&lt;LogLine&gt;::new);
+
+    use_future(move || async move {
+        let mut events = McpClient::connect_uds("/var/run/mcpd.sock")
+            .await?
+            .subscribe_events()
+            .await?;          // returns futures::Stream&lt;Item = McpEvent&gt;
+
+        while let Some(ev) = events.next().await {
+            match ev {
+                McpEvent::Log(line) =&gt; log.write().push(line),
+                McpEvent::StateChange { .. } =&gt; { /* update other signals */ }
+                _ =&gt; {}
+            }
+        }
+    });
+
+    log
+}</code></pre>
+
+<p>Component code consumes the signal — no callback wiring, no <code>useEffect</code> dependency arrays. Dioxus's signals only re-render the subscribed components, so a log-tail panel scrolling thousands of lines doesn't trigger renders elsewhere.</p>
+
+<p><strong>Alternative — EventSource from the WebView side</strong>: the WebView has native <code>EventSource</code> for HTTP-based SSE, which works fine if mcpd's loopback HTTP bridge is preferred. But routing through the Rust process and signals keeps everything typed and avoids polyfills<sup><a class="cite" href="#cite-tauri-sse-issue" data-ref="tauri-sse-issue">[6]</a></sup>.</p>
+
+<p>Dioxus 0.7's fullstack story added first-class SSE and WebSocket helpers on the Axum side<sup><a class="cite" href="#cite-dioxus-fullstack-axum" data-ref="dioxus-fullstack-axum">[7]</a></sup>. For MCP Manager (where mcpd is the server, not Dioxus's Axum) we mostly use these as <em>client-side</em> consumers — but the same primitives apply if we ever serve the GUI as a web app.</p>
+</section>
+
+<section class="section" id="secrets">
+<h2>Secrets editor</h2>
+
+<p>The secret editor is the most security-sensitive surface. mcpd holds the canonical store; the GUI is just a form. Two transport considerations:</p>
+
+<ol>
+  <li><strong>Plaintext in flight</strong>: UDS with appropriate Unix permissions is sufficient for v1; if HTTP/SSE bridge is used, bind to loopback only.</li>
+  <li><strong>Storage at rest</strong>: mcpd's job, not the GUI's. The GUI should never persist secrets to disk.</li>
+</ol>
+
+<p>If the GUI needs to remember a local convenience credential (e.g., a passphrase for unlocking the mcpd vault), use the OS keychain via the Rust <code>keyring</code> crate directly — no need for a Tauri plugin since dioxus-desktop is native Rust. (If wrapping in Tauri, the community <code>tauri-plugin-keyring</code> wraps the same crate<sup><a class="cite" href="#cite-tauri-keyring-plugin" data-ref="tauri-keyring-plugin">[8]</a></sup>; Tauri's old Stronghold plugin is being deprecated in v3 in favor of OS-keychain approaches<sup><a class="cite" href="#cite-tauri-keychain-crate" data-ref="tauri-keychain-crate">[9]</a></sup>.)</p>
+
+<pre><code>// Secret edit form — values are sent to mcpd, never persisted locally
+fn SecretEditor(server_id: ReadOnlySignal&lt;ServerId&gt;) -&gt; Element {
+    let mut value = use_signal(String::new);
+    let mut status = use_signal(|| SaveStatus::Idle);
+
+    let on_save = move |_| async move {
+        status.set(SaveStatus::Saving);
+        match mcpd().set_secret(server_id(), value.read().clone()).await {
+            Ok(_)  =&gt; { value.set(String::new()); status.set(SaveStatus::Saved); }
+            Err(e) =&gt; status.set(SaveStatus::Failed(e.to_string())),
+        }
+    };
+
+    rsx! {
+        input { r#type: "password", value: "{value}", oninput: move |e| value.set(e.value()) }
+        button { onclick: on_save, "Save" }
+        StatusPill { status }
+    }
+}</code></pre>
+</section>
+
+<section class="section" id="types">
+<h2>Type sharing with the Rust core</h2>
+
+<p>The single biggest argument for any Rust-frontend stack over Tauri+TypeScript: <strong>one set of types</strong>. With dioxus-desktop the wins compound — no marshalling boundary at all.</p>
+
+<table class="compare">
+<thead><tr><th>Stack</th><th>Where types live</th><th>What crosses a boundary</th></tr></thead>
+<tbody>
+<tr>
+  <td>Tauri + React/TS</td>
+  <td>Rust structs in <code>mcp-core</code> &rarr; manually mirrored TS types (or via <code>ts-rs</code>, <code>specta</code>)</td>
+  <td>JSON over <code>tauri::invoke</code> &rarr; runtime type-checked by serde</td>
+</tr>
+<tr>
+  <td>Tauri + Dioxus-WASM</td>
+  <td>One Rust crate shared between Tauri host and WASM frontend</td>
+  <td>JSON over <code>tauri::invoke</code> &rarr; serde both sides, same types</td>
+</tr>
+<tr>
+  <td><strong>dioxus-desktop</strong></td>
+  <td>One Rust crate shared between UI components and core logic</td>
+  <td><em>Nothing</em> — UI and core are the same process. Boundary is only mcpd's JSON-RPC wire format.</td>
+</tr>
+</tbody>
+</table>
+
+<p>The practical shape: a <code>mcp-core</code> workspace member that defines <code>ServerSpec</code>, <code>ToolDescriptor</code>, <code>McpEvent</code>, etc., with <code>#[derive(Serialize, Deserialize)]</code>. Both <code>mcpd</code> and <code>mcp-gui</code> depend on it. The GUI passes <code>ServerSpec</code> values as Dioxus prop values directly — no FFI, no JSON-RPC stringification, no <code>ts-rs</code> codegen step<sup><a class="cite" href="#cite-leptos-vs-dioxus-2026" data-ref="leptos-vs-dioxus-2026">[10]</a></sup>.</p>
+</section>
+
+<section class="section" id="shape">
+<h2>Putting it together — workspace shape</h2>
+
+<pre><code>mcp-manager/
+├─ crates/
+│  ├─ mcp-core/           # shared types (ServerSpec, McpEvent, JSON-RPC client)
+│  ├─ mcpd/               # the daemon — bin
+│  ├─ mcp-cli/            # CLI client — bin
+│  └─ mcp-gui/            # Dioxus desktop app — bin
+│     ├─ Cargo.toml       # depends on dioxus, mcp-core, tokio
+│     ├─ Dioxus.toml      # dx config (bundle metadata, assets)
+│     ├─ src/
+│     │  ├─ main.rs       # LaunchBuilder::desktop().launch(App)
+│     │  ├─ boot.rs       # ensure_mcpd_running / health check
+│     │  ├─ ipc.rs        # thin wrapper around mcp-core's client
+│     │  └─ views/        # ServerList, LogTail, SecretEditor, ...
+│     └─ assets/          # CSS, icons, fonts
+└─ Cargo.toml             # workspace</code></pre>
+
+<p>To run during development: <code>dx serve --hotpatch</code> from <code>crates/mcp-gui/</code>. To ship a release: <code>dx bundle --release --package-types app,dmg</code> on macOS, <code>dx bundle --release --package-types deb,appimage</code> on Linux<sup><a class="cite" href="#cite-dioxus-bundle" data-ref="dioxus-bundle">[11]</a></sup>.</p>
+
+<p>That's the entire delta from a CLI-only mcp-manager workspace: one new crate. No <code>node_modules</code>, no separate <code>src-tauri/</code> directory, no two-toolchain build.</p>
+</section>
+
+<section class="citations">
+<h2>Citations</h2>
+<ol>
+<li id="cite-dioxus-platforms-desktop">Dioxus 0.7 docs — Desktop platform. <a href="https://dioxuslabs.com/learn/0.7/guides/platforms/desktop/">dioxuslabs.com/learn/0.7</a></li>
+<li id="cite-tauri-2-stable">Tauri 2.0 Stable Release. <a href="https://v2.tauri.app/blog/tauri-20/">v2.tauri.app/blog/tauri-20</a></li>
+<li id="cite-tauri-sidecar-vs-uds">IPC Pipe vs Unix Socket for a Resident Daemon in Tauri. <a href="https://dev.to/hiyoyok/ipc-pipe-vs-unix-socket-for-a-resident-daemon-in-tauri-what-i-learned-fa6">dev.to</a></li>
+<li id="cite-tauri-sidecar">Tauri 2 — Embedding External Binaries. <a href="https://v2.tauri.app/develop/sidecar/">v2.tauri.app/develop/sidecar</a></li>
+<li id="cite-dioxus-fullstack-streams">Dioxus 0.7 fullstack — Streaming and SSE. <a href="https://dioxuslabs.com/learn/0.7/essentials/fullstack/streams/">dioxuslabs.com/learn/0.7/essentials/fullstack/streams</a></li>
+<li id="cite-tauri-sse-issue">Tauri plugins — SSE feature request (#1002). <a href="https://github.com/tauri-apps/plugins-workspace/issues/1002">github.com</a></li>
+<li id="cite-dioxus-fullstack-axum">Dioxus 0.7 — Axum Router (fullstack). <a href="https://dioxuslabs.com/learn/0.7/essentials/fullstack/axum/">dioxuslabs.com/learn/0.7</a></li>
+<li id="cite-tauri-keyring-plugin">tauri-plugin-keyring (HuakunShen). <a href="https://github.com/HuakunShen/tauri-plugin-keyring">github.com/HuakunShen/tauri-plugin-keyring</a></li>
+<li id="cite-tauri-keychain-crate">tauri-plugin-keychain on docs.rs. <a href="https://docs.rs/crate/tauri-plugin-keychain/latest">docs.rs/crate/tauri-plugin-keychain</a></li>
+<li id="cite-leptos-vs-dioxus-2026">Leptos vs Dioxus — Rust Frontend in 2026. <a href="https://rustify.rs/articles/leptos-vs-dioxus-rust-frontend-2026">rustify.rs</a></li>
+<li id="cite-dioxus-bundle">Dioxus 0.7 bundle docs. <a href="https://dioxuslabs.com/learn/0.7/tutorial/bundle/">dioxuslabs.com/learn/0.7/tutorial/bundle</a></li>
+</ol>
+</section>
+</main>
+</body>
+</html>

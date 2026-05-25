@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GUI shootout ranking matrix</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/matrix.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ui-shootout · matrix</span></div>
+    <div class="crumbs">
+      <a href="./index.html">← shootout hub</a> · <a href="../index.html">v1.0 synthesis hub</a>
+    </div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>GUI shootout — interactive ranking matrix</h1>
+
+  <p class="lede">
+    Three GUI stacks × 13 weighted criteria. Drag the weight sliders to re-rank live. Default weighting reflects the "OBSESSED about UX" product direction — live updates, accessibility, dev experience, IPC ergonomics, and first-paint are up-weighted.
+  </p>
+
+  <p>
+    Each score is taken from the corresponding agent's <code>data/scorecard.json</code>. Numeric dimensions (binary size, memory at idle, first paint) are normalized to 1–10 with the conversion table at the bottom of the page.
+  </p>
+
+  <section class="section">
+    <h2>Ranking</h2>
+    <div data-matrix-src="./data/shootout-ranking.json"></div>
+  </section>
+
+  <section class="section">
+    <h2>Normalization (numeric → 1–10)</h2>
+    <table class="compare">
+      <thead>
+        <tr><th>Criterion</th><th>Mapping</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>first_paint_norm</code></td><td>60ms → 10; 350ms → 6; 450ms → 5 (10 = instant; 5 = acceptable)</td></tr>
+        <tr><td><code>binary_size_norm</code></td><td>8MB → 10; 12MB → 8 (smaller is better; 8MB is excellent)</td></tr>
+        <tr><td><code>memory_idle_norm</code></td><td>55MB → 10; 60MB → 9; 80MB → 7 (smaller is better)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>How to read this</h2>
+    <p>
+      Each column is one stack's score across all criteria; each row is one criterion's scores across all stacks; weights sum to 1.000. The weighted total at the bottom is sum(weight × score) per stack — the higher the better.
+    </p>
+    <p>
+      Use the sliders to test sensitivity: if you'd weight "feels like a real app" (the <code>theming_native_feel</code> row) much higher than the default 0.08, the ranking shifts. Specifically, around weight ≈ 0.30 on that single criterion, Dioxus-desktop overtakes Actix+Askama. See <a href="./index.html#sensitivity">the shootout hub's sensitivity analysis</a> for a discussion.
+    </p>
+  </section>
+</main>
+</body>
+</html>

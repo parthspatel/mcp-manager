@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prior art &mdash; terminal-first onboarding flows &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+    <div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">closing-gaps</a> / <a href="./index.html">onboarding</a> / prior art</div>
+    <button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+  </div>
+</header>
+
+<main class="container">
+<h1>Prior art for terminal-first onboarding flows</h1>
+
+<p class="lede">
+A working tour of thirteen comparable bootstrap commands &mdash; what each transcript looks like in 2026, what worked, what hurt, and the concrete pattern mcpm should borrow. Every tool here ships a real "first-run, do this one thing" command; the design space for <code>mcpm init</code> is the union of their good ideas minus their well-documented mistakes.
+</p>
+
+<nav class="toc">
+  <h4>Surveyed tools</h4>
+  <ul>
+    <li><a href="#gh-auth">gh auth login (GitHub CLI)</a></li>
+    <li><a href="#aws-configure">aws configure (AWS CLI)</a></li>
+    <li><a href="#mise">mise activate &amp; mise use</a></li>
+    <li><a href="#direnv">direnv hook + direnv allow</a></li>
+    <li><a href="#terraform">terraform init</a></li>
+    <li><a href="#cargo">cargo new / cargo init</a></li>
+    <li><a href="#pipx">pipx ensurepath</a></li>
+    <li><a href="#op">op account add / op signin (1Password CLI)</a></li>
+    <li><a href="#npm-pnpm">npm init &amp; pnpm init</a></li>
+    <li><a href="#kubectl">kubectl config set-context</a></li>
+    <li><a href="#poetry">poetry init</a></li>
+    <li><a href="#stripe">stripe login</a></li>
+    <li><a href="#create-next">create-next-app (the modern scaffolder shape)</a></li>
+    <li><a href="#meta">Cross-cutting patterns: what works, what fails</a></li>
+  </ul>
+</nav>
+
+<section class="section" id="gh-auth">
+<h2>gh auth login &mdash; GitHub CLI</h2>
+<p>The reference design for an interactive auth bootstrap that <em>also</em> exposes every choice as a flag. The interactive sequence is short, conversational, and never asks a question whose answer is obvious from context.<cite data-ref="gh-auth-login"></cite></p>
+
+<pre><code>$ gh auth login
+? What account do you want to log into?  [Use arrows to move, type to filter]
+&gt; GitHub.com
+  GitHub Enterprise Server
+
+? What is your preferred protocol for Git operations on this host?
+&gt; HTTPS
+  SSH
+
+? Authenticate Git with your GitHub credentials? (Y/n) Y
+? How would you like to authenticate GitHub CLI?
+&gt; Login with a web browser
+  Paste an authentication token
+
+! First copy your one-time code: ABCD-1234
+Press Enter to open https://github.com/login/device in your browser...
+
+&#10003; Authentication complete.
+- gh config set -h github.com git_protocol https
+&#10003; Configured git protocol
+&#10003; Logged in as octocat
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>Every prompt has a default highlighted by <code>&gt;</code>. Y/n capitalisation signals which is the default. The summary at the end enumerates exactly what was written. Non-interactive variant <code>gh auth login --with-token &lt; tok.txt</code> takes no other prompts.<cite data-ref="gh-auth-overview"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The browser-flow is the default and there's no way to ask for a paired device-code flow without first declining "Login with a web browser." If you're on a headless box you have to know that "Paste an authentication token" is the right branch.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Adopt the visible-default-with-<code>&gt;</code> pattern. Adopt the closing summary line ("wrote X, configured Y"). <em>Reject</em> the browser-flow default &mdash; mcpm has no authentication target, only local-machine state, so the equivalent is "what scope?" and the default is <code>user</code>.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="aws-configure">
+<h2>aws configure &mdash; AWS CLI</h2>
+<p>The most copied design in CLI history. Bracketed defaults, ENTER preserves existing values, four prompts max, idempotent re-run.<cite data-ref="aws-configure"></cite></p>
+
+<pre><code>$ aws configure
+AWS Access Key ID [None]: AKIAIOSFODNN7EXAMPLE
+AWS Secret Access Key [None]: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+Default region name [None]: us-east-2
+Default output format [None]: json
+$
+
+# Re-running shows current values in brackets; ENTER keeps them.
+$ aws configure
+AWS Access Key ID [****WXYZ]:
+AWS Secret Access Key [****EFGH]:
+Default region name [us-east-2]: us-west-2
+Default output format [json]:
+$
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>Bracketed <code>[None]</code> / <code>[****WXYZ]</code> / <code>[us-east-2]</code> defaults make the second run trivially fast.<cite data-ref="aws-configure-quickstart"></cite> The two files written (<code>~/.aws/config</code>, <code>~/.aws/credentials</code>) are documented and inspectable.<cite data-ref="aws-config-files"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>No <code>--yes</code> / non-interactive mode; you have to drop down to <code>aws configure set profile.default.region us-east-2</code> for scripting. No "what just happened?" output line &mdash; the command exits silently.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Adopt the bracketed-defaults pattern verbatim. <em>Fix</em> the silence by always printing a summary block. Add the <code>-y</code> flag that AWS lacks.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="mise">
+<h2>mise activate / mise use &mdash; mise-en-place</h2>
+<p>Separates "hook into my shell" (one-time, edits rc-file) from "set a tool version" (per-project, edits <code>mise.toml</code>). The split is the design lesson; mcpm uses the same two-phase model.<cite data-ref="mise-getting-started"></cite></p>
+
+<pre><code># Phase 1: shell activation (one-time, idempotent, modifies ~/.zshrc).
+$ mise activate zsh
+# bash output: an eval script. The recommended install line is shown
+# in the docs but mise itself does not write to the rc file.
+$ echo 'eval "$(~/.local/bin/mise activate zsh)"' &gt;&gt; ~/.zshrc
+
+# Phase 2: per-project pinning.
+$ cd ~/projects/myapp
+$ mise use node@22
+mise WARN  No untrusted config files found.
+mise ~/projects/myapp/mise.toml tools: node@22.4.0
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>Explicit, copy-pasteable install line; mise itself never silently edits your shell config. <code>mise use</code> writes <em>only</em> <code>mise.toml</code> in the cwd &mdash; nothing else.<cite data-ref="mise-activate"></cite><cite data-ref="mise-use"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>Some users miss the difference between "activate" (hook) and "use" (pin) and run them in the wrong order. The shim-vs-activate decision is a footgun for new users.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Split shell-init from config-init. <code>mcpm init</code> never edits a shell rc file; that's a separate <code>mcpm shell-init</code> that prints the line and (optionally, with confirmation) appends it.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="direnv">
+<h2>direnv hook + direnv allow</h2>
+<p>Two-step trust model: the shell hook is installed once, but <em>every</em> directory needs an explicit <code>direnv allow</code> before its <code>.envrc</code> runs. The consent gate is the lesson.<cite data-ref="direnv-hook"></cite></p>
+
+<pre><code>$ cd ~/projects/myapp
+direnv: error /Users/me/projects/myapp/.envrc is blocked. Run `direnv allow` to approve its content
+$ direnv allow
+direnv: loading ~/projects/myapp/.envrc
+direnv: export +DATABASE_URL +OPENAI_API_KEY
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>You cannot accidentally load an attacker's <code>.envrc</code> by cloning their repo. The blocked-by-default behaviour is a security property, not a friction tax.<cite data-ref="direnv-allow"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The error message names the right command but doesn't explain the security rationale; new users assume direnv is broken.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>For <code>mcpm project init</code>, adopt direnv's consent model: a project-scope config in someone else's repo is not trusted until the user runs <code>mcpm project allow</code> (or passes <code>--allow</code> at init). Loud, explanatory error message: "This project declares MCP servers from a registry you don't trust. Run <code>mcpm project allow</code> after reviewing <code>.mcp-manager/project.toml</code>."</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="terraform">
+<h2>terraform init</h2>
+<p>The gold standard for project-scoped init with staged, visible side effects.<cite data-ref="terraform-init"></cite> mcpm's project-scope <code>init</code> matches this UX almost line for line.</p>
+
+<pre><code>$ terraform init
+
+Initializing the backend...
+
+Initializing provider plugins...
+- Finding hashicorp/aws versions matching "~&gt; 5.0"...
+- Installing hashicorp/aws v5.41.0...
+- Installed hashicorp/aws v5.41.0 (signed by HashiCorp)
+
+Terraform has created a lock file .terraform.lock.hcl to record the provider
+selections it made above. Include this file in your version control repository
+so that Terraform can guarantee to make the same selections by default when
+you run "terraform init" in the future.
+
+Terraform has been successfully initialized!
+
+You may now begin working with Terraform. Try running "terraform plan" to see
+any changes that are required for your infrastructure. All commands are now
+safe to run because the working directory is initialized.
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>Each phase has a heading ("Initializing the backend..."). Side effects (created lock file, downloaded providers) are spelled out. The closing paragraph tells the user the next concrete command to run.<cite data-ref="terraform-init-tutorial"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The lock-file message is dense; users skim it and miss the "commit this file" guidance.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Steal the staged headings ("Detecting toolchains..." / "Writing config..." / "Registering audit log..."). Steal the closing "next command to run" line. <em>Avoid</em> the wall-of-text lock-file paragraph &mdash; mcpm shows that hint only on first run, not on every subsequent <code>init --force</code>.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="cargo">
+<h2>cargo new / cargo init</h2>
+<p>Project scaffolding done right. <code>cargo new foo</code> creates a directory; <code>cargo init</code> populates the current directory. Both are non-interactive and idempotent-by-refusal (won't clobber).<cite data-ref="cargo-new"></cite></p>
+
+<pre><code>$ cargo new --bin --vcs git mcpm-test
+     Created binary (application) `mcpm-test` package
+
+$ cd mcpm-test &amp;&amp; ls -a
+.  ..  .git  .gitignore  Cargo.toml  src
+
+$ cargo init --bin .
+warning: file `Cargo.toml` already exists in this directory: file exists
+error: `cargo init` cannot be run on existing Cargo packages
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>The "refuse to clobber" default is correct.<cite data-ref="cargo-init"></cite> The <code>--vcs git|none|hg</code> flag is a single decision-point with a sane default, not a prompt. <code>--quiet</code> exists for scripts.</td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The error message names the conflict but not the fix &mdash; a new user might not know to delete <code>Cargo.toml</code> or pass <code>--force</code> (which Cargo doesn't offer for init &mdash; you have to start over).</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Adopt refuse-to-clobber. <em>Add</em> a <code>--force</code> flag (with audit-log backup of the previous state) that Cargo lacks; users who deliberately want to re-init shouldn't be stuck.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="pipx">
+<h2>pipx ensurepath</h2>
+<p>The cleanest example of a CLI that does <em>one</em> rc-file mutation and tells you about it.<cite data-ref="pipx-ensurepath"></cite></p>
+
+<pre><code>$ pipx ensurepath
+Success! Added /Users/me/.local/bin to the PATH environment variable.
+
+Consider adding shell completions for pipx. Run 'pipx completions' for instructions.
+
+You will need to open a new terminal or re-login for the PATH changes to take effect.
+
+Otherwise pipx is ready to go! &#10024;
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>One-line summary of what was added and where. Explicit "open a new terminal" instruction. Idempotent: running twice is a no-op.<cite data-ref="pipx-ensurepath-fig"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>Doesn't show <em>which file</em> was edited &mdash; the user has to grep their rc files to find the diff.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Always print the path of every file we wrote. Always print the "what to do next" line. The emoji is optional; we'll keep our output plain by default.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="op">
+<h2>op account add &amp; op signin &mdash; 1Password CLI</h2>
+<p>A useful counter-example: 1Password's CLI does the interactive thing well but the non-interactive path is awkward (env-var-fed prompts plus a piped password).<cite data-ref="op-signin"></cite></p>
+
+<pre><code>$ op account add
+Enter your sign-in address (example.1password.com): myteam.1password.com
+Enter the email address for your account on myteam.1password.com: me@example.com
+Enter the Secret Key for me@example.com on myteam.1password.com: A3-XXXXXX-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX
+Enter the password for me@example.com at myteam.1password.com: ***************
+Now run 'eval $(op signin)' to sign in.
+
+# Multi-account flow uses an arrow-key selector at signin time:
+$ eval $(op signin)
+? Pick an account to sign in to:
+&gt; my-team
+  personal
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>The arrow-key account picker at signin is a clean UX for the multi-default case.<cite data-ref="op-multi-account"></cite> Prompts include context (the host being added) so the user knows which field they're filling.</td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The non-interactive bootstrap requires exporting four env vars then piping the password into <code>op signin</code> &mdash; awkward enough that a community write-up was needed to document it. There's no <code>--password-stdin</code> equivalent on <code>op account add</code>.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Every interactive prompt must have a corresponding long-form flag. <em>Never</em> require env-var setup as the non-interactive path; that's deferred to power-users.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="npm-pnpm">
+<h2>npm init / pnpm init</h2>
+<p>The canonical source of the <code>-y</code> / <code>--yes</code> flag. <code>npm init -y</code> is the most-typed three-character command in modern Node.js setup.<cite data-ref="npm-init"></cite></p>
+
+<pre><code>$ npm init
+This utility will walk you through creating a package.json file.
+It only covers the most common items, and tries to guess sensible defaults.
+
+package name: (myapp)
+version: (1.0.0)
+description:
+entry point: (index.js)
+test command:
+git repository:
+keywords:
+author:
+license: (ISC)
+About to write to /Users/me/myapp/package.json:
+{ ... }
+Is this OK? (yes)
+
+# Skip every prompt:
+$ npm init -y
+Wrote to /Users/me/myapp/package.json:
+{ "name": "myapp", "version": "1.0.0", ... }
+
+# pnpm flips the default: never interactive, just writes the file.
+$ pnpm init
+{ "name": "myapp", ... }
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>The <code>-y</code> flag is universally understood. <code>npm</code>'s interactive walk shows guessed defaults in parentheses. <code>pnpm</code> argues the opposite extreme: don't even ask &mdash; defaults are always fine for the metadata you can edit later.<cite data-ref="pnpm-init"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>npm's confirmation prompt at the end ("Is this OK? (yes)") is redundant in the <code>-y</code> path and a UX speedbump in the interactive path. pnpm's silent write surprises users who expected a wizard.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Adopt <code>-y</code> verbatim. Use guessed-defaults-in-parens for hostnames / paths. Drop the final "Is this OK?" &mdash; show the summary, write the files, return.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="kubectl">
+<h2>kubectl config set-context</h2>
+<p>The "no interactive command at all" extreme. kubectl ships no <code>kubectl init</code>; you compose your kubeconfig by hand or accept whatever the cluster install dumped at <code>~/.kube/config</code>.<cite data-ref="kubectl-set-context"></cite></p>
+
+<pre><code>$ kubectl config set-context prod --cluster=prod-cluster --user=me --namespace=default
+Context "prod" created.
+
+$ kubectl config use-context prod
+Switched to context "prod".
+
+$ kubectl config current-context
+prod
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>Composable from the get-go: every flag is its own setter; the file is fully under user control; scripts can stamp out clusters trivially.<cite data-ref="kubectl-use-context"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The new-user experience is bad: you can spend an afternoon trying to figure out how kubeconfig got into the state it's in. There's no "show me what you'd do if I ran the wizard" preview because there's no wizard.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Provide the interactive wizard <em>and</em> the flag-driven composition. kubectl's strength (every choice is a flag) is achievable without kubectl's weakness (no init at all).</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="poetry">
+<h2>poetry init</h2>
+<p>A mid-2020s gold standard: every prompt has a bracketed default, every default is a smart guess based on cwd, and the user can ENTER through the whole thing in three seconds.<cite data-ref="poetry-init"></cite></p>
+
+<pre><code>$ poetry init
+
+This command will guide you through creating your pyproject.toml config.
+
+Package name [myapp]:
+Version [0.1.0]:
+Description []:
+Author [Me &lt;me@example.com&gt;, n to skip]:
+License []:  MIT
+Compatible Python versions [^3.11]:
+
+Would you like to define your main dependencies interactively? (yes/no) [yes] no
+Would you like to define your development dependencies interactively? (yes/no) [yes] no
+
+Generated file:
+
+[tool.poetry]
+name = "myapp"
+...
+
+Do you confirm generation? (yes/no) [yes]
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>Bracketed defaults; smart guesses (package name from cwd, author from git config); branch-flattening prompts ("interactively? no" elides whole sub-questionnaires); generated-file preview before write.</td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The final "Do you confirm generation?" is an "are you sure you're sure" prompt &mdash; the user has already pressed ENTER ten times.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Adopt smart-default guessing (machine name, OS-detected service manager, detected editors). <em>Reject</em> the final confirm-confirmation prompt; preview-then-write is enough.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="stripe">
+<h2>stripe login</h2>
+<p>Worth surveying for one specific reason: it does both a device-pairing-code flow and a <code>--interactive</code> flag for no-browser environments. mcpm rejects the device flow but the <code>--interactive</code> escape hatch is instructive.<cite data-ref="stripe-login"></cite></p>
+
+<pre><code>$ stripe login
+Your pairing code is: lovely-cuddly-puppy-12
+This pairing code verifies your authentication with Stripe.
+Press Enter to open the browser (^C to quit) ...
+
+# CI-friendly path: paste an API key, no browser.
+$ stripe login --interactive
+Enter your API key: sk_test_***
+How would you like to identify this device in the Stripe Dashboard? [my-laptop]: ci-runner-prod
+You're configured and all set to use the Stripe CLI.
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>The <code>--interactive</code> flag (despite the slightly misleading name &mdash; it actually <em>avoids</em> the browser) is a real escape hatch. The human-readable pairing code reduces phishing risk in the browser path.<cite data-ref="stripe-cli-docs"></cite></td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The flag's name is wrong (<code>--interactive</code> opens fewer interactive prompts than the default!). The browser flow assumes a graphical session is reachable.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>mcpm has no remote service to authenticate against, so the entire device-flow concern is moot. The takeaway is that flag names matter: ours are <code>--defaults</code> (accept defaults) and <code>-y / --yes</code> (skip confirms), <em>not</em> <code>--interactive</code> which is overloaded and confusing.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="create-next">
+<h2>create-next-app &mdash; the "use defaults?" shortcut</h2>
+<p>A modern scaffolder that fronts every per-question prompt with one umbrella default-accept.<cite data-ref="create-next-app"></cite></p>
+
+<pre><code>$ npx create-next-app@latest myapp
+&#10003; Would you like to use the recommended Next.js defaults? &#8230; Yes
+Using defaults: TypeScript, ESLint, Tailwind, App Router, src/ dir, import alias @/*
+Creating a new Next.js app in /Users/me/myapp.
+...
+
+# Or, decline the shortcut and answer each:
+&#10003; Would you like to use TypeScript? &#8230; No / Yes
+&#10003; Would you like to use ESLint? &#8230; No / Yes
+&#10003; Would you like to use Tailwind CSS? &#8230; No / Yes
+...
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>What works</strong></td><td>The "accept all defaults?" front-door collapses ten prompts into one for the lucky-day case. Users who care can decline and answer per-item.</td></tr>
+    <tr><td><strong>What hurts</strong></td><td>The defaults change between releases (the React team's deprecation of <code>create-react-app</code> illustrates the broader fragility of scaffolders that bake too much policy<cite data-ref="react-deprecate-cra"></cite>). What was the right default last quarter may not be this quarter.</td></tr>
+    <tr><td><strong>For mcpm</strong></td><td>Adopt the umbrella-default-accept prompt. Document the current defaults in a stable file (<code>mcpm init --show-defaults</code>) so users in scripts can detect drift.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="meta">
+<h2>Cross-cutting patterns</h2>
+
+<h3>Patterns that work (steal these)</h3>
+<ul>
+  <li><strong>Bracketed defaults</strong> (aws, poetry): every prompt shows the value ENTER will accept.<cite data-ref="aws-configure"></cite><cite data-ref="poetry-init"></cite></li>
+  <li><strong>The <code>-y</code> / <code>--yes</code> contract</strong> (npm, apt, dnf): a single flag that skips every confirmation is universally understood.<cite data-ref="npm-init"></cite></li>
+  <li><strong>Idempotent re-run</strong> (terraform init, pipx ensurepath, aws configure): running the bootstrap a second time prints a diff or no-ops; never errors, never duplicates state.<cite data-ref="clig-dev"></cite></li>
+  <li><strong>Per-prompt corresponding flag</strong> (gh, kubectl): every interactive answer is also a long-form flag, so scripts and humans share one command surface.</li>
+  <li><strong>Staged, labelled output</strong> (terraform): each phase has a heading; the user knows what's happening, in order, in real time.<cite data-ref="terraform-init"></cite></li>
+  <li><strong>Closing summary + next-command hint</strong> (terraform, gh): the last lines tell the user what was written and what to try next.</li>
+  <li><strong>Consent-gated trust</strong> (direnv): a config file in someone else's repo doesn't auto-execute; it requires explicit user approval first.<cite data-ref="direnv-allow"></cite></li>
+  <li><strong>Smart defaults from context</strong> (poetry, cargo): infer the package name from the directory; infer the author from git config; offer them as bracketed defaults.</li>
+  <li><strong>XDG-compliant write locations</strong> (mise, direnv, modern Rust CLIs): <code>$XDG_CONFIG_HOME</code> / <code>$XDG_STATE_HOME</code> on Linux; <code>~/Library/Application Support</code> or <code>~/.config</code> on macOS by convention.<cite data-ref="xdg-basedir"></cite><cite data-ref="xdg-archwiki"></cite></li>
+  <li><strong>Conservative ANSI</strong> (clack): use escape sequences that work in macOS Terminal, iTerm2, and tmux/screen out of the box; never rely on truecolor or 24-bit colour for legibility.<cite data-ref="clack-design"></cite></li>
+</ul>
+
+<h3>Patterns that fail (avoid these)</h3>
+<ul>
+  <li><strong>Forced interactivity</strong>: a tool with no non-interactive path is unscriptable. (1Password's account-add is the most prominent recent offender.<cite data-ref="op-signin"></cite>)</li>
+  <li><strong>Implicit state writes</strong>: <code>aws configure</code>'s silent exit is a small example; the worst offender is any installer that edits your shell rc without saying so.</li>
+  <li><strong>Doctor commands</strong>: <code>flutter doctor</code>, <code>rustup show</code>, etc. &mdash; these compress nine unrelated checks into one wall of output that conceals which step actually failed. mcpm's strategy is the opposite: each setup step has its own command and its own clear pass/fail.</li>
+  <li><strong>Browser flows on headless boxes</strong>: <code>gh auth login</code> defaults to opening a browser; on a remote ssh session the user has to know to pick the "Paste a token" branch. Always offer the no-browser path as a flag, not a hidden branch.</li>
+  <li><strong>Confirmation theatre</strong>: poetry's "Do you confirm generation? (yes/no) [yes]" after the user has already pressed ENTER nine times.</li>
+  <li><strong>Wrong-named flags</strong>: stripe's <code>--interactive</code> meaning "no browser, more keystrokes" is the canonical example. Pick verbs that match what the user is asking for.</li>
+  <li><strong>Defaults that drift silently between releases</strong>: create-next-app's umbrella "use defaults" hides this. mcpm pins defaults in a documented file and bumps it as a SemVer-relevant change.</li>
+  <li><strong>Refusing to clobber without offering <code>--force</code></strong>: <code>cargo init</code> errors but provides no fix; you have to delete files by hand. We provide <code>--force</code> with a backup.</li>
+</ul>
+
+<h3>What this means for mcpm</h3>
+<p>The convergent design across thirteen comparable tools is consistent enough to lift wholesale: bracketed defaults, <code>-y</code> as the universal skip, staged labelled output, closing summary, per-prompt flags, XDG-compliant write paths, ratatui for the interactive layer<cite data-ref="ratatui"></cite> with a line-prompt fallback for non-TTY shells.<cite data-ref="cliclack-comparison"></cite> The <a href="./recommendation-onboarding-flow-summary.html">recommendation page</a> turns this into five concrete transcripts.</p>
+</section>
+
+</main>
+
+<footer class="page-footer">
+  <div class="container">
+    <p><a href="./index.html">&larr; onboarding index</a> &middot; <a href="./recommendation-onboarding-flow-summary.html">recommendation &rarr;</a></p>
+  </div>
+</footer>
+</body>
+</html>

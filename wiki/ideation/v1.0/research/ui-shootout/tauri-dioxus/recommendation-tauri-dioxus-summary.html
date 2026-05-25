@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recommendation — Tauri 2 + Dioxus — Ideation v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">ui-shootout</a> / <a href="./index.html">tauri-dioxus</a> / recommendation</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Recommendation — Tauri 2 + Dioxus</h1>
+
+<div class="callout">
+<p><strong>Verdict: recommend <code>dioxus-desktop</code> standalone, not Tauri-wrapped.</strong> Dioxus already uses Wry/Tao under the hood (the same WebView engine Tauri does)<sup><a class="cite" href="#cite-dioxus-platforms-desktop" data-ref="dioxus-platforms-desktop">[1]</a></sup>. Wrapping it in Tauri adds glue without changing the runtime profile for macOS+Linux v1.0. The case for Tauri-wrapping is mostly about bundling/plugins, and those wins don't outweigh the cost of an extra IPC boundary for an in-process Rust UI. Blitz/Dioxus Native is genuinely exciting but pre-alpha<sup><a class="cite" href="#cite-blitz-github" data-ref="blitz-github">[2]</a></sup> — revisit in 6–12 months.</p>
+</div>
+
+<nav class="toc">
+<h4>Contents</h4>
+<ul>
+<li><a href="#pros">Pros</a></li>
+<li><a href="#cons">Cons</a></li>
+<li><a href="#gotchas">Gotchas</a></li>
+<li><a href="#pick">When to pick this</a></li>
+<li><a href="#avoid">When NOT to pick this</a></li>
+<li><a href="#decision">Why dioxus-desktop, not Tauri-wrapped</a></li>
+</ul>
+</nav>
+
+<section class="section" id="pros">
+<h2>Pros</h2>
+<ul>
+  <li><strong>Best dev loop in Rust UI, period.</strong> Subsecond Rust hot-patching (<code>dx serve --hotpatch</code>) lets you edit Rust function bodies and see the change without losing app state<sup><a class="cite" href="#cite-subsecond-blog" data-ref="subsecond-blog">[3]</a></sup>. Combined with stable RSX hot-reload, the inner-loop iteration speed beats anything else in Rust GUI as of 2026<sup><a class="cite" href="#cite-dioxus-070-blog" data-ref="dioxus-070-blog">[4]</a></sup>.</li>
+  <li><strong>Single-language stack.</strong> Shared <code>mcp-core</code> crate, shared serde types, no <code>ts-rs</code> codegen, no <code>node_modules</code>. The UI and the rest of the workspace are one Cargo build<sup><a class="cite" href="#cite-leptos-vs-dioxus-2026" data-ref="leptos-vs-dioxus-2026">[5]</a></sup>.</li>
+  <li><strong>No IPC boundary in dioxus-desktop.</strong> Event handlers run as native Rust closures; you can construct a hyper client to mcpd's UDS directly inside <code>use_resource</code>. No <code>#[tauri::command]</code>, no JSON encode/decode round trip just to talk to your own process<sup><a class="cite" href="#cite-dioxus-platforms-desktop" data-ref="dioxus-platforms-desktop">[1]</a></sup>.</li>
+  <li><strong>WebView a11y for free.</strong> Dioxus inherits WKWebView's accessibility tree on macOS and WebKitGTK's on Linux. VoiceOver, Orca, and IME (CJK input) all work without per-component wiring — one of only four Rust GUIs that pass the boringcactus 2025 a11y+IME label test<sup><a class="cite" href="#cite-boringcactus-2025-survey" data-ref="boringcactus-2025-survey">[6]</a></sup>.</li>
+  <li><strong>Full CSS for theming.</strong> Tailwind v0.7 is zero-config<sup><a class="cite" href="#cite-dioxus-070-blog" data-ref="dioxus-070-blog">[4]</a></sup>; <code>@media (prefers-color-scheme: dark)</code> for system dark-mode; standard web layout primitives. No bespoke DSL to learn.</li>
+  <li><strong>Idiomatic live updates.</strong> Signals + <code>use_resource</code> + <code>use_future</code> compose naturally with async streams from mcpd's SSE events. Re-renders are component-scoped, so log-tail panels updating 10x/sec don't tax the rest of the UI<sup><a class="cite" href="#cite-dioxus-fullstack-streams" data-ref="dioxus-fullstack-streams">[7]</a></sup>.</li>
+  <li><strong>Clean license.</strong> MIT/Apache-2.0 dual everywhere — Dioxus core, Wry, Tao, Blitz — no GPL/commercial entanglement<sup><a class="cite" href="#cite-dioxus-github" data-ref="dioxus-github">[8]</a></sup>.</li>
+  <li><strong>Optional web build for free.</strong> The same component tree compiles to WASM if MCP Manager ever wants to expose the GUI against a remote mcpd<sup><a class="cite" href="#cite-dioxus-070-blog" data-ref="dioxus-070-blog">[4]</a></sup>.</li>
+</ul>
+</section>
+
+<section class="section" id="cons">
+<h2>Cons</h2>
+<ul>
+  <li><strong>Pre-1.0.</strong> Dioxus is at 0.7.9 as of May 2026<sup><a class="cite" href="#cite-dioxus-079" data-ref="dioxus-079">[9]</a></sup>. Minor-version upgrades (0.6→0.7) historically introduce macro/API breakage. Budget for a yearly migration sprint.</li>
+  <li><strong>The "Tauri + Dioxus" combo is community-supported only.</strong> No official <code>create-tauri-app</code> template; the canonical glue is the third-party <code>Desdaemon/tauri-dioxus</code> repo<sup><a class="cite" href="#cite-tauri-dioxus-template" data-ref="tauri-dioxus-template">[10]</a></sup>. Tauri maintainers explicitly say "Dioxus has its own desktop framework"<sup><a class="cite" href="#cite-tauri-dioxus-discussion" data-ref="tauri-dioxus-discussion">[11]</a></sup>. If you pick this combo, you own the integration.</li>
+  <li><strong>Blitz/Dioxus Native is not ready.</strong> Missing event types (mouseover, forms), missing input widget variants, no a11y, "performance has not been a focus"<sup><a class="cite" href="#cite-blitz-github" data-ref="blitz-github">[2]</a></sup>. Looking at the CSS support matrix<sup><a class="cite" href="#cite-blitz-css-status" data-ref="blitz-css-status">[12]</a></sup> still shows gaps in May 2026.</li>
+  <li><strong>Hiring pool is small.</strong> Rust developers who specifically know Dioxus are rare. React-shaped components soften the ramp, but it's still a project-specific dialect.</li>
+  <li><strong>WebView idle RAM (~60–100 MB) is higher than pure-native frameworks</strong> (egui/iced sit closer to 30–50 MB). Acceptable for a desktop daemon manager; not acceptable for an embedded device.</li>
+  <li><strong>Smaller ecosystem of vetted plugins.</strong> Tauri ships first-party HTTP, Store, FS, Shell, Updater, Notification, OS info, Stronghold/Keyring plugins. Dioxus relies on the broader Rust crate ecosystem, which is fine but less curated for desktop UX needs<sup><a class="cite" href="#cite-tauri-2-stable" data-ref="tauri-2-stable">[13]</a></sup>.</li>
+  <li><strong>No marquee Dioxus shipping app at scale.</strong> Named users (Huawei internal, Airbus/ESA collision-avoidance, Satellite.im<sup><a class="cite" href="#cite-ycombinator-dioxus" data-ref="ycombinator-dioxus">[14]</a></sup>) are credible but not Spacedrive-tier visible. Tauri has a longer public production track record.</li>
+</ul>
+</section>
+
+<section class="section" id="gotchas">
+<h2>Gotchas (the things that bite you in production)</h2>
+<ul>
+  <li><strong>Subsecond is experimental.</strong> Worth budgeting a 1-day spike to confirm it's reliable on the team's macOS Apple Silicon machines before depending on it. If it's flaky, you fall back to stable RSX hot-reload (which is still very good).</li>
+  <li><strong>WebKitGTK quirks on Linux.</strong> WebKit on Linux has historically lagged WebKit on macOS — font rendering, hardware acceleration, and tab focus edge cases. Test on all target distros early. (This is a WebView-family problem, not Dioxus-specific.)</li>
+  <li><strong>macOS notarization is your job.</strong> <code>dx bundle</code> produces .app/.dmg<sup><a class="cite" href="#cite-dioxus-bundle" data-ref="dioxus-bundle">[15]</a></sup> but you wire codesign + notarytool yourself. Tauri's bundler has slightly more polished notarization automation if you wrap.</li>
+  <li><strong>Don't subscribe to SSE from the WebView side if you can avoid it.</strong> Native <code>EventSource</code> works but reconnection logic, backpressure, and event-buffer growth are easier to manage in a tokio task in the Rust process<sup><a class="cite" href="#cite-tauri-sse-issue" data-ref="tauri-sse-issue">[16]</a></sup>.</li>
+  <li><strong>Secrets in URL fragments.</strong> If you ever pass secrets as Dioxus router params, they end up in WebView history. Use signals + <code>use_context</code> instead.</li>
+  <li><strong>Bundle size creeps with assets.</strong> The Dioxus runtime is small (~8 MB) but embedded CSS/fonts/icons compound quickly. Use <code>asset!()</code> with hashing rather than raw <code>include_str!</code> for cache-friendliness.</li>
+</ul>
+</section>
+
+<section class="section" id="pick">
+<h2>When to pick this stack</h2>
+<ul>
+  <li>You have a small (1–4 person) Rust-fluent team that wants one language for the whole project.</li>
+  <li>Iteration speed on UI is a P0 — log-tail layouts, server-row designs, secret-editor forms are going to change weekly.</li>
+  <li>You value the option to ship a web build of the GUI without rewriting.</li>
+  <li>You're comfortable with a pre-1.0 framework that ships breaking changes between minors but has commercial backing (YC + named institutional users).</li>
+  <li>You don't need an exhaustive plugin marketplace — most desktop needs are met by direct Rust crates.</li>
+</ul>
+</section>
+
+<section class="section" id="avoid">
+<h2>When NOT to pick this stack</h2>
+<ul>
+  <li>You need to ship to Windows in v1 with the smoothest possible packaging story — Tauri's Windows tooling is more mature (though out of scope per the orchestrator's constraint).</li>
+  <li>Your team has deep React/TypeScript expertise and zero Rust frontend experience — Tauri+React is faster to onboard for that profile.</li>
+  <li>You require AAA accessibility certifications beyond what a WebView provides (very rare).</li>
+  <li>You want to ship a fully native, non-WebView UI in v1 — Dioxus Native isn't ready; choose iced or egui instead.</li>
+  <li>You can't tolerate breaking changes between minor versions in a critical dependency.</li>
+</ul>
+</section>
+
+<section class="section" id="decision">
+<h2>Why dioxus-desktop standalone, not Tauri-wrapped</h2>
+
+<p>This is the load-bearing call, so let me lay it out explicitly.</p>
+
+<p><strong>Dioxus-desktop already uses Wry/Tao</strong> — the exact crates Tauri uses for WebView abstraction and windowing<sup><a class="cite" href="#cite-dioxus-platforms-desktop" data-ref="dioxus-platforms-desktop">[1]</a></sup>. So at the bottom of the stack, Tauri-wrapping doesn't change anything. What you'd be adding is:</p>
+
+<ol>
+  <li>An <strong>extra serialization boundary</strong> between WASM frontend and Rust host — Tauri commands are always JSON over IPC<sup><a class="cite" href="#cite-tauri-2-stable" data-ref="tauri-2-stable">[13]</a></sup>. Dioxus-desktop has no such boundary; components run as native Rust.</li>
+  <li>The Tauri <strong>capabilities/permissions ACL</strong> — useful for sandboxing untrusted frontend code, but Dioxus-desktop's frontend IS your Rust code; sandboxing yourself doesn't help.</li>
+  <li>The Tauri <strong>plugin ecosystem</strong> — Store, Shell, Updater, etc. These are real wins but most have direct Rust equivalents you can use without wrapping (e.g., the <code>keyring</code> crate, <code>tokio::process</code>, the <code>self_update</code> crate)<sup><a class="cite" href="#cite-tauri-keyring-plugin" data-ref="tauri-keyring-plugin">[17]</a></sup>.</li>
+  <li><strong>Tauri's bundler</strong> — more polished notarization automation. Marginal advantage over <code>dx bundle</code><sup><a class="cite" href="#cite-dioxus-bundle" data-ref="dioxus-bundle">[15]</a></sup>; not a deciding factor.</li>
+</ol>
+
+<p>None of these are worth paying the integration tax. The <code>Desdaemon/tauri-dioxus</code> template exists<sup><a class="cite" href="#cite-tauri-dioxus-template" data-ref="tauri-dioxus-template">[10]</a></sup> but is community-maintained — you'd own keeping it current as both projects evolve.</p>
+
+<p><strong>The only scenario where Tauri-wrapping wins:</strong> if you decide v1.0's GUI should be web-tech-built (React/Vue/Svelte) and v2.0 might migrate <em>part</em> of the frontend to WASM/Dioxus. Then a Tauri shell lets you mix. That's not the MCP Manager v1 reality — the project is Rust-first, the team is small, and the GUI is the visual front door for an all-Rust workspace.</p>
+
+<p><strong>So: <code>dioxus-desktop</code> standalone is the recommendation.</strong> Tauri-wrapping is a viable second-best if the team wants the plugin ecosystem badly enough to absorb the IPC overhead. Blitz/Dioxus Native is a future option to track but explicitly not for v1.</p>
+</section>
+
+<section class="citations">
+<h2>Citations</h2>
+<ol>
+<li id="cite-dioxus-platforms-desktop">Dioxus 0.7 docs — Desktop platform. <a href="https://dioxuslabs.com/learn/0.7/guides/platforms/desktop/">dioxuslabs.com/learn/0.7</a></li>
+<li id="cite-blitz-github">DioxusLabs/blitz. <a href="https://github.com/DioxusLabs/blitz">github.com/DioxusLabs/blitz</a></li>
+<li id="cite-subsecond-blog">Hot Reloading in Rust? Subsecond and Dioxus. <a href="https://codethoughts.io/posts/2026-02-07-rust-hot-reloading/">codethoughts.io</a></li>
+<li id="cite-dioxus-070-blog">Dioxus 0.7 release blog. <a href="https://dioxuslabs.com/blog/release-070/">dioxuslabs.com/blog/release-070</a></li>
+<li id="cite-leptos-vs-dioxus-2026">Leptos vs Dioxus in 2026. <a href="https://rustify.rs/articles/leptos-vs-dioxus-rust-frontend-2026">rustify.rs</a></li>
+<li id="cite-boringcactus-2025-survey">boringcactus 2025 Survey of Rust GUI Libraries. <a href="https://www.boringcactus.com/2025/04/13/2025-survey-of-rust-gui-libraries.html">boringcactus.com</a></li>
+<li id="cite-dioxus-fullstack-streams">Dioxus 0.7 streaming/SSE docs. <a href="https://dioxuslabs.com/learn/0.7/essentials/fullstack/streams/">dioxuslabs.com/learn/0.7/essentials/fullstack/streams</a></li>
+<li id="cite-dioxus-github">DioxusLabs/dioxus GitHub. <a href="https://github.com/DioxusLabs/dioxus">github.com/DioxusLabs/dioxus</a></li>
+<li id="cite-dioxus-079">dioxus 0.7.9 on docs.rs. <a href="https://docs.rs/crate/dioxus/latest">docs.rs/crate/dioxus</a></li>
+<li id="cite-tauri-dioxus-template">Desdaemon/tauri-dioxus. <a href="https://github.com/Desdaemon/tauri-dioxus">github.com/Desdaemon/tauri-dioxus</a></li>
+<li id="cite-tauri-dioxus-discussion">Tauri Dioxus integration discussion #9169. <a href="https://github.com/orgs/tauri-apps/discussions/9169">github.com/orgs/tauri-apps</a></li>
+<li id="cite-blitz-css-status">Blitz CSS status. <a href="https://blitz.is/status/css">blitz.is/status/css</a></li>
+<li id="cite-tauri-2-stable">Tauri 2.0 Stable Release. <a href="https://v2.tauri.app/blog/tauri-20/">v2.tauri.app/blog/tauri-20</a></li>
+<li id="cite-ycombinator-dioxus">YC: Dioxus Labs. <a href="https://www.ycombinator.com/launches/JBK-dioxus-labs-web-desktop-and-mobile-apps-with-one-codebase">ycombinator.com</a></li>
+<li id="cite-dioxus-bundle">Dioxus 0.7 bundle docs. <a href="https://dioxuslabs.com/learn/0.7/tutorial/bundle/">dioxuslabs.com/learn/0.7/tutorial/bundle</a></li>
+<li id="cite-tauri-sse-issue">Tauri SSE feature request #1002. <a href="https://github.com/tauri-apps/plugins-workspace/issues/1002">github.com</a></li>
+<li id="cite-tauri-keyring-plugin">tauri-plugin-keyring. <a href="https://github.com/HuakunShen/tauri-plugin-keyring">github.com/HuakunShen/tauri-plugin-keyring</a></li>
+</ol>
+</section>
+</main>
+</body>
+</html>

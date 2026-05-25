@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tool discovery &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">clever-fox-bridge</a> / discovery</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Tool discovery</h1>
+
+<p class="lede">
+Before MCP Manager can project into a tool, it has to know the tool is installed. This page documents the cross-platform mechanisms for detecting each Tier-1/Tier-2 client, in order of preference: well-known paths first, executable on PATH second, OS metadata (Spotlight / registry / desktop entries) third. The goal is high precision with zero spawning of the target application during discovery.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#strategy">Discovery strategy hierarchy</a></li>
+    <li><a href="#macos">macOS-specific</a></li>
+    <li><a href="#linux">Linux-specific</a></li>
+    <li><a href="#windows">Windows-specific</a></li>
+    <li><a href="#per-tool">Per-tool detection recipes</a></li>
+  </ul>
+</nav>
+
+<h2 id="strategy">Discovery strategy hierarchy</h2>
+<ol>
+  <li><strong>Well-known config path exists.</strong> Most reliable signal. If <code>~/.cursor/mcp.json</code> exists, Cursor is installed; if <code>~/.codex/config.toml</code> exists, Codex CLI is installed.</li>
+  <li><strong>Well-known config <em>directory</em> exists.</strong> Lower-confidence than a file but precedes first-time MCP config. <code>~/.config/zed/</code> indicates Zed is installed even before the user touches MCP.<cite data-ref="xdg-basedir"></cite></li>
+  <li><strong>Executable on PATH.</strong> <code>which code</code>, <code>which cursor</code>, <code>which claude</code>. Cross-platform via <code>which</code> crate.</li>
+  <li><strong>Application bundle / install metadata.</strong> macOS Launch Services<cite data-ref="macos-launchservices"></cite>, Windows App Paths registry<cite data-ref="windows-app-paths"></cite>, Linux <code>.desktop</code> files.</li>
+  <li><strong>Extension marketplace query.</strong> For VS-Code-hosted tools (Cline) we run <code>code --list-extensions</code><cite data-ref="vscode-extension-discovery"></cite> and look for the publisher ID.</li>
+</ol>
+
+<h2 id="macos">macOS-specific</h2>
+<table class="compare">
+<thead><tr><th>Technique</th><th>API</th><th>Use case</th></tr></thead>
+<tbody>
+<tr><td>Bundle ID query</td><td><code>LSCopyApplicationURLsForBundleIdentifier</code> via the <code>core-foundation</code> crate<cite data-ref="macos-launchservices"></cite></td><td>Detect Claude Desktop (<code>com.anthropic.claude</code>), VS Code (<code>com.microsoft.VSCode</code>), Cursor (<code>com.todesktop.230313mzl4w4u92</code>), Zed (<code>dev.zed.Zed</code>), JetBrains products (<code>com.jetbrains.intellij</code> etc.)</td></tr>
+<tr><td>Spotlight</td><td><code>mdfind &quot;kMDItemCFBundleIdentifier == &lt;id&gt;&quot;</code></td><td>Fallback when LaunchServices not available</td></tr>
+<tr><td>App Support directory walk</td><td><code>~/Library/Application Support/&lt;App&gt;/</code></td><td>Cross-check with bundle ID</td></tr>
+</tbody>
+</table>
+
+<h2 id="linux">Linux-specific</h2>
+<table class="compare">
+<thead><tr><th>Technique</th><th>API</th><th>Use case</th></tr></thead>
+<tbody>
+<tr><td>XDG desktop entries</td><td>Walk <code>/usr/share/applications</code>, <code>~/.local/share/applications</code>, Flatpak's <code>~/.local/share/flatpak/exports/share/applications</code><cite data-ref="xdg-basedir"></cite></td><td>Most editors ship a <code>.desktop</code> file</td></tr>
+<tr><td>Flatpak / Snap</td><td><code>flatpak list</code>, <code>snap list</code></td><td>Cursor, VS Code, Zed are often Flatpak-installed on Linux; their config paths live under per-package sandbox roots and must be discovered separately</td></tr>
+<tr><td>PATH lookup</td><td><code>which</code> crate</td><td>CLI tools (Claude Code, Codex)</td></tr>
+<tr><td>XDG config directories</td><td><code>$XDG_CONFIG_HOME</code> (defaults to <code>~/.config</code>)<cite data-ref="xdg-basedir"></cite></td><td>Per-tool config probe</td></tr>
+</tbody>
+</table>
+<p>
+Flatpak/Snap sandboxing is the trickiest Linux concern: a Flatpak-installed Cursor reads its config from <code>~/.var/app/com.cursor.cursor/config/Cursor/</code> rather than <code>~/.config/Cursor/</code>. Discovery must enumerate Flatpak app IDs and rewrite paths accordingly.
+</p>
+
+<h2 id="windows">Windows-specific</h2>
+<table class="compare">
+<thead><tr><th>Technique</th><th>API</th><th>Use case</th></tr></thead>
+<tbody>
+<tr><td>App Paths registry</td><td><code>HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths</code> and HKCU equivalent<cite data-ref="windows-app-paths"></cite></td><td>Per-app install path lookup</td></tr>
+<tr><td>Uninstall registry</td><td><code>HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall</code></td><td>Detect MSI/MSIX-installed editors with stable display names</td></tr>
+<tr><td>MSIX package query</td><td><code>Get-AppxPackage</code> via PowerShell or COM</td><td>Claude Desktop on Windows is frequently MSIX-installed; the config path is virtualized<cite data-ref="claude-desktop-config"></cite></td></tr>
+<tr><td>%APPDATA% probes</td><td><code>%APPDATA%\&lt;Tool&gt;</code></td><td>Per-tool config probe</td></tr>
+</tbody>
+</table>
+<p>
+Windows MSIX virtualization is the single most painful discovery scenario. The Claude Desktop file the user sees in <code>%APPDATA%\Claude\</code> may not be the file the app reads &mdash; the real read path is under <code>%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\</code>. Our discovery layer must detect MSIX install and project to the virtualized path. Stream 1's pain-points page documents this footgun in more detail.<cite data-ref="claude-desktop-config"></cite>
+</p>
+
+<h2 id="per-tool">Per-tool detection recipes</h2>
+
+<details class="accordion" open>
+  <summary>Claude Code CLI</summary>
+  <p>Primary: <code>which claude</code> on PATH. Secondary: <code>~/.claude/</code> directory existence. The CLI also writes an install marker at <code>~/.claude/install.json</code> on first run.<cite data-ref="claude-code-config-paths"></cite></p>
+</details>
+<details class="accordion" open>
+  <summary>Codex CLI</summary>
+  <p>Primary: <code>which codex</code>. Secondary: <code>~/.codex/</code> directory.<cite data-ref="codex-mcp"></cite></p>
+</details>
+<details class="accordion" open>
+  <summary>VS Code</summary>
+  <p>Primary: <code>code --version</code> for executable detection and version. Per-OS app-bundle/registry checks for non-PATH installs.<cite data-ref="vscode-extension-discovery"></cite></p>
+</details>
+<details class="accordion" open>
+  <summary>Cursor</summary>
+  <p>Primary: <code>cursor --version</code>. Secondary: <code>~/.cursor/</code> directory. App-bundle ID on macOS.<cite data-ref="cursor-mcp"></cite></p>
+</details>
+<details class="accordion" open>
+  <summary>Zed</summary>
+  <p>Primary: <code>zed --version</code>. Secondary: <code>~/.config/zed/</code> directory.<cite data-ref="zed-settings"></cite></p>
+</details>
+<details class="accordion" open>
+  <summary>JetBrains family</summary>
+  <p>
+    Primary: enumerate <code>~/Library/Application Support/JetBrains/&lt;Product&gt;&lt;Year.x&gt;/</code> directories on macOS, <code>~/.config/JetBrains/</code> on Linux, <code>%APPDATA%\JetBrains\</code> on Windows.<cite data-ref="jetbrains-mcp"></cite>
+    Secondary: JetBrains Toolbox keeps an installed-IDE inventory at <code>~/.local/share/JetBrains/Toolbox/state.json</code> we can parse.<cite data-ref="jetbrains-toolbox"></cite>
+  </p>
+</details>
+<details class="accordion">
+  <summary>Cline</summary>
+  <p>Cline is a VS Code extension. Detection: run <code>code --list-extensions | grep saoudrizwan.claude-dev</code>.<cite data-ref="vscode-extension-discovery"></cite> If VS Code is not installed, Cline cannot be installed.</p>
+</details>
+<details class="accordion">
+  <summary>Windsurf</summary>
+  <p>Primary: <code>~/.codeium/windsurf/</code> directory. Secondary: <code>windsurf --version</code> if on PATH.<cite data-ref="windsurf-config-path"></cite></p>
+</details>
+<details class="accordion">
+  <summary>Continue</summary>
+  <p>Continue is a VS Code/JetBrains extension. Probe <code>~/.continue/</code> (created on first run); cross-check with VS Code extension list (<code>Continue.continue</code>) or JetBrains plugin directory.<cite data-ref="continue-config-yaml"></cite></p>
+</details>
+<details class="accordion">
+  <summary>Goose</summary>
+  <p>Primary: <code>which goose</code>. Secondary: <code>~/.config/goose/</code>.<cite data-ref="goose-config"></cite></p>
+</details>
+
+<section class="section">
+<h2>Discovery cadence</h2>
+<p>
+Discovery is run once at <code>mcpd</code> startup and again on a file-system watcher signal targeting the parent directories of all known well-known paths. We don't poll. The watcher uses <code>notify-rs</code> on Linux/macOS and <code>ReadDirectoryChangesW</code> on Windows. New tools appearing on disk (e.g. the user installs Cursor mid-session) trigger an opt-in prompt in the CLI/TUI/GUI; we do not auto-project without consent.
+</p>
+</section>
+
+<section class="citations">
+  <h2>Citations</h2>
+  <p>All sources for this page are listed in <a href="./data/citations.json">data/citations.json</a> and rendered at the bottom of every page via the shared citations module.</p>
+</section>
+</main>
+</body>
+</html>

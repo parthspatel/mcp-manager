@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recommendation — Actix + Askama (localhost SSR) — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">ui-shootout</a> / <a href="./index.html">actix-tera</a> / recommendation</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Recommendation — Actix-Web + Askama + HTMX (localhost SSR)</h1>
+
+<p class="lede">
+The opinionated bottom line: <strong>this is the lowest-risk, highest-leverage stack for MCP Manager v1.0</strong>. Pick this if shipping working software fast matters more than feeling-like-a-native-app, and if you trust that the homelab world (Jellyfin, Sonarr, Pi-hole) has already proven the architecture at scale. Don't pick this if the product story demands a native window with deep OS integration.
+</p>
+
+<section class="section">
+<h2>The verdict</h2>
+<div class="callout">
+<p><strong>Architecture: GUI lives inside mcpd as an Actix-Web server on 127.0.0.1.</strong> The "GUI" is a browser tab. No IPC, no serialization boundary between handlers and mcpd state. One Rust binary that owns daemon, CLI, and UI.</p>
+<p><strong>Template engine: Askama (compile-time, type-checked) over Tera.</strong> The mcpd domain types (Server, Tool, LogLine, Status) are stable; we want the compiler to scream when we rename a field. We pay for that with a ~2–4s rebuild on every template edit instead of Tera's sub-second auto-reload <cite data-ref="askama-home"></cite><cite data-ref="tera-home"></cite>. Worth it. If hot-template-iteration starts hurting team velocity, switching to Tera is a mechanical port — both engines use Jinja-style syntax <cite data-ref="leapcell-template-tradeoffs"></cite>.</p>
+<p><strong>Interactivity: HTMX + Alpine.js.</strong> ~27 KB total client JS, no build step, no node_modules. HTMX for SSE log tails and partial swaps; Alpine for client-only UI state <cite data-ref="htmx-sse-ext"></cite><cite data-ref="htmx-vs-alpine-2026"></cite>.</p>
+</div>
+</section>
+
+<section class="section">
+<h2>Pros</h2>
+<ul>
+<li><strong>Accessibility for free.</strong> The browser is the most accessible runtime ever shipped. VoiceOver, NVDA, Orca, IME, zoom, high-contrast, reader mode — all work without us writing a line of AccessKit glue. This is the strongest single argument for the SSR stack: the 2025 boringcactus survey showed 94% of Rust GUI toolkits fail a basic screen-reader + IME test that the browser passes trivially <cite data-ref="boringcactus-2025-survey"></cite>.</li>
+<li><strong>SSE is the native idiom.</strong> Log tails, status updates, resource graphs all map directly to <code>actix-web-lab::sse</code> + <code>tokio::sync::broadcast</code> + a 10-second heartbeat. With <code>hx-ext="sse"</code> on the client, a live log view is one HTML attribute <cite data-ref="actix-web-lab-sse"></cite><cite data-ref="actix-sse-example"></cite>.</li>
+<li><strong>Zero IPC.</strong> GUI handlers call mcpd modules directly. No JSON-RPC, no <code>Channel</code>, no command derivation, no serialization round-trips. Function-call latency.</li>
+<li><strong>Type safety from DB to DOM.</strong> Askama templates fail to compile when the struct they bind to changes shape. Rename <code>ServerSummary.name</code> to <code>ServerSummary.id</code> and the build catches every template that referenced it <cite data-ref="askama-home"></cite>.</li>
+<li><strong>Mobile path on day one.</strong> Opt-in <code>--bind 0.0.0.0</code> (with bearer token) makes MCP Manager reachable from any phone on the LAN. No iOS app build, no Play Store. The Tauri stacks would need a full mobile target to match this.</li>
+<li><strong>Distribution is trivial.</strong> One binary, <code>brew install mcpm</code> or <code>cargo install</code>. No DMG, no AppImage, no signing/notarization, no auto-updater story — for v1.0 we just <code>brew upgrade</code> like every other CLI <cite data-ref="actix-web-github"></cite>.</li>
+<li><strong>Boring, mature pieces.</strong> Actix is 9 years old, 68M+ downloads. Askama is the post-rinja unified line, stable on 0.14. HTMX/Alpine are widely deployed. No bleeding-edge surprises <cite data-ref="actix-web-crates"></cite><cite data-ref="askama-docsrs"></cite>.</li>
+<li><strong>Hiring is easy.</strong> "Knows HTML + a little Rust" is a much larger pool than "writes reactive Rust with signals/RSX." Templates are HTML; anyone on the team can fix the dashboard.</li>
+<li><strong>Smaller idle footprint than a WebView app.</strong> No WebView2/WKWebView runtime — Actix at rest is ~50–80 MB, comparable to or smaller than the Tauri options once you account for the OS WebView's RSS share <cite data-ref="actix-web-vs-axum-2026"></cite>.</li>
+<li><strong>The license posture is clean.</strong> MIT-or-Apache-2.0 across the whole stack; no GPL contamination, no commercial-license surprises <cite data-ref="actix-web-github"></cite><cite data-ref="askama-github"></cite>.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Cons</h2>
+<ul>
+<li><strong>It's a browser tab.</strong> No native window, no dock icon out of the box, no Spotlight presence. PWA install (Chrome/Edge) recovers some of this but not on Safari <cite data-ref="pwa-installable"></cite>.</li>
+<li><strong>Focus stealing is real.</strong> Opening the GUI yanks focus to the browser; the browser may decide to open a new window instead of focusing the existing tab.</li>
+<li><strong>Accidentally closeable.</strong> Cmd-w closes the tab mid-edit. <code>beforeunload</code> partially mitigates.</li>
+<li><strong>Template hot-reload is worse than Vite.</strong> Askama rebuilds on every template change (~2–4s with cargo-watch). Vite/Trunk HMR is sub-200ms. Tera mitigates by trading away the type safety <cite data-ref="cargo-watch-releases"></cite><cite data-ref="actix-autoreload"></cite>.</li>
+<li><strong>No global hotkeys, no native notifications, no system file picker drag-drop.</strong> Browser sandboxes.</li>
+<li><strong>The askama_actix integration crate was deprecated.</strong> Not a real cost — calling <code>.render()</code> manually is two lines — but worth knowing during onboarding <cite data-ref="askama-actix-deprecated"></cite>.</li>
+<li><strong>Discoverability problem for non-developer users.</strong> "How do I open MCP Manager?" requires a CLI, a tray icon, or a PWA install — all of which need explanation.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Gotchas</h2>
+<ul>
+<li><strong>DNS rebinding</strong> is a real attack against localhost web servers. Defense in depth: bind 127.0.0.1, validate the Host header, require a bearer token. None of the three alone is sufficient <cite data-ref="dns-rebinding-blog"></cite>.</li>
+<li><strong>SSE through corporate proxies / VPNs</strong> can stall or be buffered. We control the network in dev but if a user reaches the LAN-bound mcpd through their work VPN, SSE may need a polling fallback.</li>
+<li><strong>Browser tab limits</strong>: most browsers cap concurrent connections to the same host at ~6. A page with 6+ open SSE streams will starve. Multiplex log/status updates over a single SSE connection if you have many sources.</li>
+<li><strong>Tray icon main-thread requirement on macOS</strong> conflicts with mcpd's Tokio runtime. Either ship a separate <code>mcpd-tray</code> binary or thread carefully <cite data-ref="tray-icon-docs"></cite>.</li>
+<li><strong>PWA install UX varies wildly</strong> across browsers. Chrome/Edge are great; Safari is iffy; Firefox doesn't support desktop PWA install at all. Document "use Chrome to install."</li>
+<li><strong>Browser-tab state loss on refresh</strong>. SSE connections drop and re-establish; in-flight log buffer may have gaps. Server-side persistence (write logs to a ring buffer mcpd holds) handles this.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>When to pick this stack</h2>
+<ul>
+<li>The user model is "power user managing local infrastructure" — they're already comfortable with localhost admin UIs from Jellyfin, Sonarr, Portainer, Pi-hole.</li>
+<li>Accessibility is a real requirement (a11y-conscious orgs, screen-reader users, CJK input).</li>
+<li>You want a mobile/LAN management story without building a mobile app.</li>
+<li>The team has more web-frontend muscle than reactive-Rust muscle.</li>
+<li>Time-to-v1.0 matters more than feeling-like-a-Mac-app.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>When NOT to pick this stack</h2>
+<ul>
+<li>The product positioning is "Docker Desktop quality native app" with deep OS integration (file pickers, drag-drop, dock badges, global hotkeys, native notifications without permission prompts).</li>
+<li>App Store distribution is a hard requirement.</li>
+<li>Users will object on principle to "it's just a browser tab" — for some audiences this signals 'unfinished' regardless of capability.</li>
+<li>The team wants to do most of the UI work in reactive Rust (Leptos/Dioxus) for type-safety-everywhere reasons. The SSR stack has type-safe templates, but reactive state is on the client in JS.</li>
+<li>Real-time updates need bi-directional streaming (SSE is one-way). Most MCP Manager needs are one-way; this is unlikely to bite, but if it does we'd need WebSockets.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Tera or Askama? — the call</h2>
+<p>
+<strong>Pick Askama.</strong> Here's the argument:
+</p>
+<ol>
+<li>The mcpd domain types are stable and we'll rename fields. Compile-time template checks turn "broken UI in production" into "broken build on the dev's machine" <cite data-ref="askama-home"></cite>.</li>
+<li>The syntax is Jinja-compatible with Tera, so the team's mental model transfers. We can switch to Tera later with mechanical effort if hot-iteration becomes the bottleneck <cite data-ref="leapcell-template-tradeoffs"></cite>.</li>
+<li>Performance: Askama compiles templates to specialized Rust code; runtime cost is essentially zero. Tera parses and interprets at runtime — fine for our load, but Askama is strictly faster.</li>
+<li>The deprecation of <code>askama_actix</code> is not a real problem — calling <code>.render()</code> + <code>HttpResponse::Ok().content_type("text/html").body(...)</code> is two lines <cite data-ref="askama-actix-deprecated"></cite>.</li>
+<li>The 2026 dev-loop gap shrinks: <code>cargo-watch</code> + <code>listenfd</code> gives ~2–4s reload; the browser's auto-refresh extensions close the gap further <cite data-ref="actix-autoreload"></cite>.</li>
+</ol>
+<p>The only scenario where Tera wins is if a non-Rust designer is editing templates frequently and the rebuild cycle becomes a chronic interruption. That's not the v1.0 reality.</p>
+</section>
+
+<section class="section">
+<h2>The architectural call: GUI inside mcpd</h2>
+<p>
+For v1.0, the Actix server lives inside the mcpd process. Reasons summarized:
+</p>
+<ul>
+<li>The zero-IPC story is the SSR stack's unique strength vs. Tauri — splitting GUI into a separate process throws it away.</li>
+<li>Single binary, single config file, single auth token, single log stream.</li>
+<li>The "daemon not yet running" problem evaporates: launching the GUI <em>is</em> launching the daemon.</li>
+<li>If/when blast-radius (UI bug crashes daemon) becomes painful, extracting to a separate <code>mcpd-ui</code> that talks to mcpd via the existing UDS JSON-RPC is a clean refactor — the HTTP API doesn't change.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Risk register</h2>
+<table class="compare">
+<thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td>Users perceive "just a web app" as unfinished</td><td>Medium</td><td>PWA install path + brand polish in CSS + tray icon in v1.1</td></tr>
+<tr><td>DNS rebinding attack on a user's machine</td><td>Low but real</td><td>Bind 127.0.0.1 only + Host validation + bearer token <cite data-ref="dns-rebinding-blog"></cite></td></tr>
+<tr><td>Askama rebuild loop too slow for designers</td><td>Medium</td><td>cargo-watch + listenfd; fall back to Tera if it bites <cite data-ref="actix-autoreload"></cite></td></tr>
+<tr><td>SSE behind corporate proxy stalls</td><td>Low (localhost) / Medium (LAN)</td><td>Polling fallback; document Tailscale as preferred LAN exposure</td></tr>
+<tr><td>Tray-icon macOS main-thread quirks</td><td>Medium</td><td>Ship tray as a separate helper binary, not embedded in mcpd <cite data-ref="tray-icon-docs"></cite></td></tr>
+<tr><td>Browser tab accidentally closed mid-edit</td><td>Medium</td><td>beforeunload hook + server-side draft persistence</td></tr>
+</tbody>
+</table>
+</section>
+
+<section class="section">
+<h2>The two-sentence summary</h2>
+<p>
+The SSR stack is what you build when you've internalized that the browser is the most-deployed, most-accessible UI runtime in human history, and you have a long-lived daemon already — so you might as well have it serve the UI. The trade is that the result is a browser tab, not a native window, and the design has to be at peace with that.
+</p>
+</section>
+</main>
+</body>
+</html>

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Versioning — Client API · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">precise-crane-conduit</a> / Versioning</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Schema evolution &amp; versioning</h1>
+
+  <p class="lede">
+    The MCP Manager core and its three clients are versioned independently: a user might upgrade the GUI without realizing the daemon is older, or vice versa, or have a long-running CLI script pinned to an old format. Each wire-format candidate has its own story for adding fields, removing fields, evolving enums, and negotiating compat between mismatched versions. This page collects those stories neutrally.
+  </p>
+
+  <section class="section">
+    <h2>Wire-format options &amp; their evolution model</h2>
+
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Format</th>
+          <th>Self-describing?</th>
+          <th>Adding a field</th>
+          <th>Removing a field</th>
+          <th>Wire compat rules</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>JSON (+ JSON Schema)</strong></td>
+          <td>Yes — keys carry meaning</td>
+          <td>Safe; old client ignores it</td>
+          <td>Safe if old client tolerates absence</td>
+          <td>By convention; <code>additionalProperties</code> can be loose or strict</td>
+        </tr>
+        <tr>
+          <td><strong>Protobuf (proto3)</strong></td>
+          <td>Partially — field <em>numbers</em> only<sup><cite data-ref="proto3-guide"></cite></sup></td>
+          <td>Safe iff new field gets new number; lower numbers cheaper to encode (1–15 take 1 byte)<sup><cite data-ref="proto3-guide"></cite></sup></td>
+          <td>Don't change numbers, don't reuse; <code>reserved</code> keyword prevents accidental reuse<sup><cite data-ref="proto3-guide"></cite></sup></td>
+          <td>Adding fields is the safest operation; never reuse field numbers<sup><cite data-ref="proto3-guide"></cite></sup></td>
+        </tr>
+        <tr>
+          <td><strong>Cap'n Proto</strong></td>
+          <td>No — schema-driven offsets</td>
+          <td>Safe; new <code>@N</code> ordinals appended<sup><cite data-ref="capnp-language"></cite></sup></td>
+          <td>Don't reorder ordinals; values keep deserializing</td>
+          <td>Built-in <code>SchemaLoader</code> compatibility check<sup><cite data-ref="capnp-roadmap"></cite></sup></td>
+        </tr>
+        <tr>
+          <td><strong>MessagePack</strong></td>
+          <td>Yes for maps; no for arrays</td>
+          <td>Safe if map-encoded; arrays are positional</td>
+          <td>Safe if map-encoded</td>
+          <td>By convention; depends entirely on encoder choices</td>
+        </tr>
+        <tr>
+          <td><strong>OpenAPI 3.1 + JSON Schema 2020-12</strong></td>
+          <td>Yes (via schema)</td>
+          <td>Yes</td>
+          <td>Yes (breaking, document semver)</td>
+          <td>Spec endorses JSON Schema 2020-12 directly<sup><cite data-ref="openapi-spec"></cite></sup></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>Protobuf — the rule-of-five</h2>
+    <ol>
+      <li><strong>Never change a field number</strong> — equivalent to deleting + re-adding<sup><cite data-ref="proto3-guide"></cite></sup>.</li>
+      <li><strong>Never reuse a number</strong> — old binaries decoding under the old type get silent corruption<sup><cite data-ref="proto3-guide"></cite></sup>.</li>
+      <li><strong>Reserve removed numbers</strong> with the <code>reserved</code> keyword to prevent accident.</li>
+      <li><strong>Use numbers 1–15 for hot fields</strong> — they take one wire byte<sup><cite data-ref="proto3-guide"></cite></sup>.</li>
+      <li><strong>Don't change required-ness or types</strong> — only safe to widen <code>int32 → int64</code> in a single direction.</li>
+    </ol>
+    <p>
+      In Rust, <code>prost</code> assigns tags sequentially starting at 1 by default; explicit <code>#[prost(tag = "...")]</code> attributes are needed to skip reserved numbers<sup><cite data-ref="prost-gh"></cite></sup>.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>Cap'n Proto — schema as forward-compat machinery</h2>
+    <p>
+      Cap'n Proto's design philosophy explicitly pushes validation to application layer and frames evolution as a first-class concern<sup><cite data-ref="capnp-roadmap"></cite></sup>. Compatibility rules<sup><cite data-ref="capnp-language"></cite></sup>:
+    </p>
+    <ul>
+      <li>Add new fields/methods/enumerants only at the end (higher ordinals).</li>
+      <li>New method parameters must be added at the end and have defaults.</li>
+      <li><code>SchemaLoader</code> auto-detects compatible vs incompatible schema pairs at runtime.</li>
+      <li>No "required" — every field has a zero value and silently fills in if absent.</li>
+    </ul>
+    <p>
+      Tradeoff: this is the strongest static evolution story, paid for with a code-generation step and a tooling ecosystem that is smaller than protobuf's.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>JSON Schema / OpenAPI — schema-first for JSON wire</h2>
+    <p>
+      OpenAPI 3.1 is 100% compatible with JSON Schema draft 2020-12<sup><cite data-ref="openapi-spec"></cite></sup>; in 3.1 the legacy <code>nullable</code> attribute is gone in favor of plain <code>type: [..., "null"]</code> arrays. The Schema Object can declare its <code>$schema</code> dialect explicitly. For a JSON-based API this provides: editor tooling, codegen, mock servers, request validation, contract testing.
+    </p>
+    <p>
+      Versioning policy with a schema-first JSON API typically uses URL versioning (<code>/v1</code>) or media-type versioning (<code>Accept: application/vnd.mcp-manager.v1+json</code>). Within a major version, additive changes are non-breaking by convention; removals require a new major.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>Semver of the API surface</h2>
+    <p>A separate version from the daemon binary version:</p>
+    <ul>
+      <li><strong>Major:</strong> bumped on any removal or shape change — old client refuses to talk.</li>
+      <li><strong>Minor:</strong> bumped on additive change (new method, new optional field, new event topic). Old clients keep working.</li>
+      <li><strong>Patch:</strong> docs / clarifications only.</li>
+    </ul>
+    <p>
+      The <code>system.version</code> method returns both the daemon's build version (semver of the binary) and the API version (semver of the wire surface). Clients should compare API major before making any other call and refuse if they don't match.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>Negotiation patterns</h2>
+
+    <details class="accordion" open>
+      <summary>Header / parameter (REST + JSON-RPC)</summary>
+      <p>
+        Client sends <code>X-MCP-API-Version: 1</code> (or JSON-RPC param <code>"api_version": 1</code>). Server rejects with a defined error code if the major doesn't match. This is the lowest-effort approach.
+      </p>
+    </details>
+
+    <details class="accordion">
+      <summary>Reflection + capability discovery (gRPC)</summary>
+      <p>
+        gRPC reflection lets clients fetch the server's proto descriptors at runtime<sup><cite data-ref="grpc-reflection"></cite></sup>, used by tooling like <code>grpcurl</code><sup><cite data-ref="grpcurl"></cite></sup>. For runtime compat checks, a typed <code>SystemService.GetCapabilities</code> returning a feature-flag set is the more common pattern.
+      </p>
+    </details>
+
+    <details class="accordion">
+      <summary>Schema attached to every message (Cap'n Proto SchemaLoader)</summary>
+      <p>
+        Cap'n Proto can compare the schema embedded in a binary against the one the consumer knows<sup><cite data-ref="capnp-roadmap"></cite></sup>. This is heavier than a version number but catches semantic skew (e.g. enum widening) automatically.
+      </p>
+    </details>
+
+    <details class="accordion">
+      <summary>Versioned envelopes (MessagePack / NDJSON)</summary>
+      <p>
+        With no native schema mechanism, the only durable approach is to wrap every payload:
+      </p>
+<pre><code>{ "v": 1, "type": "runtime.state_changed", "payload": { ... } }</code></pre>
+      <p>
+        Consumers branch on <code>v</code>. Pragmatic but easy to drift without discipline.
+      </p>
+    </details>
+  </section>
+
+  <section class="section">
+    <h2>Compatibility matrix the daemon must support</h2>
+    <table class="compare">
+      <thead>
+        <tr><th>Scenario</th><th>Expected behavior</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Newer client, older daemon</td>
+          <td>Daemon rejects unknown methods with a stable error code; client falls back to documented compatibility plan or refuses to start.</td>
+        </tr>
+        <tr>
+          <td>Older client, newer daemon</td>
+          <td>Daemon must keep old methods working until next major. New fields in responses are tolerated — old client ignores them.</td>
+        </tr>
+        <tr>
+          <td>Same major, drifted minor</td>
+          <td>Always allowed. Client may not see new event topics introduced after its release; that's fine.</td>
+        </tr>
+        <tr>
+          <td>Different major</td>
+          <td>Daemon rejects <code>v0</code> if it now speaks <code>v2</code>. Surface a clear error: "update your client".</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>

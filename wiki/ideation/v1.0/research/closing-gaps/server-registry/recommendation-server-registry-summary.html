@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recommendation &mdash; mcpm search/install/registry &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../index.html">closing-gaps</a> / <a href="./index.html">server-registry</a> / recommendation</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Recommendation &mdash; <code>mcpm search</code> / <code>install</code> / <code>registry</code></h1>
+
+<p class="lede">
+Concrete CLI surface, default sources, trust posture, and the four worked transcripts that prove the design fits a real user's day. Everything below assumes mcpd is already installed (curl-installer or Nix flake) and the user has run <code>mcpm init</code> once.
+</p>
+
+<div class="recommendation-callout">
+<h3>One-line summary</h3>
+<p>
+<strong>Multi-source federation</strong> seeded with <strong>official MCP Registry</strong><sup><a class="cite" href="#cite-official-mcp-registry" data-ref="official-mcp-registry">[1]</a></sup> + <strong>GitHub MCP Registry</strong><sup><a class="cite" href="#cite-github-mcp-registry" data-ref="github-mcp-registry">[2]</a></sup>; optional Docker MCP Catalog if Docker is detected on the system<sup><a class="cite" href="#cite-docker-mcp-catalog" data-ref="docker-mcp-catalog">[3]</a></sup>. Per-source <strong>minisign</strong> pubkeys for index attestation<sup><a class="cite" href="#cite-minisign" data-ref="minisign">[4]</a></sup>; <strong>Sigstore / cosign</strong> verification of underlying packages where attestations exist<sup><a class="cite" href="#cite-npm-provenance" data-ref="npm-provenance">[5]</a></sup>. Search is local BM25 over a refreshed cache; queries never leave the machine.
+</p>
+</div>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#defaults">Default sources for v1.0</a></li>
+    <li><a href="#cli">CLI surface in full</a></li>
+    <li><a href="#trust">Trust &amp; provenance posture</a></li>
+    <li><a href="#flow">Install flow (state-transition view)</a></li>
+    <li><a href="#transcripts">Worked transcripts</a></li>
+    <li><a href="#tui">TUI integration</a></li>
+    <li><a href="#config">On-disk config shape</a></li>
+    <li><a href="#open">Open questions for the orchestrator</a></li>
+  </ul>
+</nav>
+
+<h2 id="defaults">Default sources seeded in v1.0</h2>
+
+<table class="compare">
+<thead><tr><th>Name</th><th>URL</th><th>Trust anchor</th><th>Notes</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>official</code></td>
+  <td><code>https://registry.modelcontextprotocol.io</code></td>
+  <td>minisign pubkey baked into mcpd binary</td>
+  <td>Default source. Vendor-neutral Linux Foundation governance<sup><a class="cite" href="#cite-mcp-donation-aaf" data-ref="mcp-donation-aaf">[6]</a></sup>. Uses official OpenAPI spec.<sup><a class="cite" href="#cite-mcp-registry-openapi" data-ref="mcp-registry-openapi">[7]</a></sup></td>
+</tr>
+<tr>
+  <td><code>github</code></td>
+  <td><code>https://github.com/mcp</code> (JSON feed)</td>
+  <td>HTTPS + repo GPG verification</td>
+  <td>Curated, GitHub-identity-backed. Heavy overlap with official source &mdash; merge dedupes by canonical <code>server.json#name</code>.</td>
+</tr>
+<tr>
+  <td><code>docker</code> <em>(opt-in default)</em></td>
+  <td><code>https://github.com/docker/mcp-registry</code></td>
+  <td>cosign on the OCI images</td>
+  <td>Auto-enabled if Docker is detected at <code>mcpm init</code> time; user can disable.</td>
+</tr>
+</tbody>
+</table>
+
+<p>
+<strong>Not bundled by default but documented in a one-liner:</strong> Smithery<sup><a class="cite" href="#cite-smithery-ai" data-ref="smithery-ai">[8]</a></sup>, Glama<sup><a class="cite" href="#cite-glama-mcp" data-ref="glama-mcp">[9]</a></sup>, PulseMCP<sup><a class="cite" href="#cite-pulsemcp" data-ref="pulsemcp">[10]</a></sup>. Each has a copy-pasteable <code>mcpm registry add</code> line in our docs.
+</p>
+
+<h2 id="cli">CLI surface in full</h2>
+
+<h3><code>mcpm search</code></h3>
+<pre><code>mcpm search &lt;query&gt; [--source &lt;name&gt;] [--language py|ts|go|...] [--transport stdio|http]
+                    [--limit N=20] [--json] [--no-cache]
+                    [--include-experimental] [--has-secret] [--license &lt;spdx&gt;]</code></pre>
+<ul>
+  <li><strong>Default behaviour:</strong> queries the local cache of every enabled source, scored locally with BM25 over <code>name + description + tags + capabilities</code>, results union-merged across sources, dedupe key is <code>server.json#name</code>.</li>
+  <li><strong>Query is never sent to a third party.</strong> The only network traffic <code>search</code> generates is the periodic <em>index refresh</em>, which fetches the source's published manifest in full and is the same request every user makes regardless of query.</li>
+  <li><strong>Output</strong>: one row per server: name, source(s), one-line description, latest version, language, transport, license, trust pills (signed / provenance / curated).</li>
+  <li><strong>Cache freshness:</strong> indexes refresh on-demand if older than 6h; <code>--no-cache</code> forces refresh. Air-gap users pin to <code>--cache=full</code> at registry-add time and refresh manually.</li>
+</ul>
+
+<h3><code>mcpm install</code></h3>
+<pre><code>mcpm install &lt;server&gt;[@version] [--source &lt;name&gt;]
+                     [--runtime devenv|docker|podman|uvx|npx]
+                     [--scope user|project] [--name &lt;alias&gt;]
+                     [--dry-run] [--accept-unsigned] [--review]</code></pre>
+<ul>
+  <li>Resolves <code>server</code> against the local cache. If ambiguous across sources, prompts (or fails with <code>--source</code> required in non-interactive mode).</li>
+  <li>Verifies the source's index signature, then verifies the package's own attestation if present (npm Sigstore<sup><a class="cite" href="#cite-npm-provenance" data-ref="npm-provenance">[5]</a></sup>, cosign for OCI<sup><a class="cite" href="#cite-sigstore-cosign" data-ref="sigstore-cosign">[11]</a></sup>). If <em>neither</em> exists, the user must pass <code>--accept-unsigned</code>.</li>
+  <li>Picks an isolation runtime per the rules in stoic-badger-sandbox: <code>devenv + sandbox-exec/bwrap</code> by default; Docker if the user passed <code>--runtime docker</code> or the package's <code>packages[].registryType == "oci"</code>; uvx/npx pinned-version escape hatch only with <code>--accept-unsigned</code> or explicit <code>--runtime</code>.</li>
+  <li>Renders a sandbox spec for stoic-badger-sandbox, writes the canonical <code>[servers.&lt;name&gt;]</code> block to <code>~/.config/mcpd/servers.toml</code>, and emits the secret-reference placeholders for any declared env var that has <code>secret: true</code> in the manifest. (Resolution is secrets-lifecycle's job.)</li>
+  <li><strong>Does NOT</strong> push to client config files &mdash; that's clever-fox-bridge's projection step, which runs on the next reconciliation.</li>
+  <li><code>--review</code> opens the resolved server.json in <code>$EDITOR</code> before writing &mdash; the security-conscious user's "I want to read what I'm about to run" affordance.<sup><a class="cite" href="#cite-mcp-security-supply-chain" data-ref="mcp-security-supply-chain">[12]</a></sup></li>
+</ul>
+
+<h3><code>mcpm registry</code></h3>
+<pre><code>mcpm registry add &lt;name&gt; &lt;url&gt; [--signed-by &lt;pubkey-file|fingerprint&gt;]
+                              [--auth-header &lt;header&gt;] [--api-key-env &lt;VAR&gt;]
+                              [--cache full|index] [--priority N]
+                              [--license-flag] [--telemetry-acknowledge]
+
+mcpm registry list [--json]
+mcpm registry remove &lt;name&gt;
+mcpm registry refresh [&lt;name&gt;]      # force re-fetch index now
+mcpm registry verify [&lt;name&gt;]       # validate signatures + schema</code></pre>
+<ul>
+  <li><strong><code>--signed-by</code></strong> mirrors apt's signed-by<sup><a class="cite" href="#cite-apt-third-party-signed" data-ref="apt-third-party-signed">[13]</a></sup>. Without it, the user is opting into <em>maintainer-trust-only</em> and we emit a warning at <code>add</code> time, every <code>install</code> from that source, and on every <code>list</code>.</li>
+  <li><strong><code>--telemetry-acknowledge</code></strong> is required to add any source that ships telemetry (we detect this via a flag in the source's OpenAPI metadata, where present, and otherwise via our maintained "known-telemetry sources" list). Per our no-telemetry constraint, the default is always-refuse; <code>--telemetry-acknowledge</code> is the explicit per-source opt-in.</li>
+  <li><strong><code>--cache=full</code></strong> downloads the entire source index for air-gap; <code>index</code> downloads just the manifest with names+versions.</li>
+  <li><strong><code>--priority</code></strong> breaks ties in result merging (lower number = higher priority); default 100.</li>
+</ul>
+
+<h2 id="trust">Trust &amp; provenance posture</h2>
+
+<p>
+Three independently-verifiable layers, with v1.0 only <em>enforcing</em> layer A:
+</p>
+
+<table class="compare">
+<thead><tr><th>Layer</th><th>What's signed</th><th>Tool</th><th>v1.0 enforcement</th></tr></thead>
+<tbody>
+<tr><td><strong>A. Registry index</strong></td><td>Whole source manifest (the JSON we cache)</td><td>minisign (Ed25519)<sup><a class="cite" href="#cite-minisign" data-ref="minisign">[4]</a></sup></td><td><strong>Required for default sources.</strong> User-added sources warn loudly if absent.</td></tr>
+<tr><td><strong>B. Package provenance</strong></td><td>The npm/PyPI/OCI package the server runs from</td><td>Sigstore + Fulcio + Rekor<sup><a class="cite" href="#cite-sigstore-cosign" data-ref="sigstore-cosign">[11]</a></sup><sup><a class="cite" href="#cite-github-blog-npm-sigstore" data-ref="github-blog-npm-sigstore">[14]</a></sup></td><td><strong>Verified when present</strong>, never required. Absence shown as a pill.</td></tr>
+<tr><td><strong>C. Container image</strong></td><td>OCI artifact</td><td>cosign<sup><a class="cite" href="#cite-sigstore-cosign" data-ref="sigstore-cosign">[11]</a></sup></td><td><strong>Verified for <code>docker</code> source</strong>; absence aborts install on the docker source.</td></tr>
+</tbody>
+</table>
+
+<p>
+We <em>do not</em> stand up a Sigstore-like service ourselves. We do not maintain a key escrow. The official registry's minisign pubkey ships baked into the mcpd binary &mdash; <strong>same model as how OS package managers ship trusted-keys.gpg</strong>. Rotation requires a mcpd release. This is acceptable at v1.0 cadence.
+</p>
+
+<h2 id="flow">Install flow (state-transition view)</h2>
+
+<pre><code>$ mcpm install linear@1.4.2
+      |
+      v
+  +-------------------------------+
+  | resolve from cache (federate) |  &lt;-- search.index across sources
+  +-------------------------------+
+      |
+      v
+  +-------------------------------+
+  | verify source-index signature |  &lt;-- minisign pubkey  [layer A]
+  +-------------------------------+
+      |
+      v
+  +-------------------------------+
+  | fetch server.json manifest    |  &lt;-- per official schema [cite-mcp-server-json-schema]
+  +-------------------------------+
+      |
+      v
+  +-------------------------------+
+  | verify package provenance     |  &lt;-- Sigstore / cosign  [layer B/C]
+  +-------------------------------+
+      |
+      v
+  +-------------------------------+
+  | choose isolation runtime      |  &lt;-- stoic-badger-sandbox rules
+  +-------------------------------+
+      |
+      v
+  +-------------------------------+
+  | render sandbox spec           |  &lt;-- handed to stoic-badger-sandbox
+  +-------------------------------+
+      |
+      v
+  +-------------------------------+
+  | emit secret refs              |  &lt;-- handed to secrets-lifecycle
+  +-------------------------------+
+      |
+      v
+  +-------------------------------+
+  | write [servers.linear] in     |  &lt;-- canonical TOML state
+  | ~/.config/mcpd/servers.toml   |
+  +-------------------------------+
+      |
+      v
+  next `mcpm reconcile` projects to client configs (clever-fox-bridge)</code></pre>
+
+<h2 id="transcripts">Worked transcripts</h2>
+
+<h3>Transcript 1 &mdash; "I want a Linear server"</h3>
+<pre><code>$ mcpm search linear
+Refreshing official (last refresh 7h ago)... done [832 servers]
+Refreshing github      (last refresh 7h ago)... done [241 servers]
+Refreshing docker      (last refresh 7h ago)... done [318 servers]
+
+Results (3):
+  io.github.linear/mcp-server              v1.4.2   ts   stdio   official, github   signed  curated
+    Linear issues, projects, and cycles via the Linear API
+  com.linear/official                      v0.9.1   ts   http    github             signed  curated
+    First-party HTTP server hosted by Linear. Requires API key.
+  community.tooling/linear-search-only     v0.2.0   py   stdio   official           unsigned
+    Read-only Linear search. Lightweight alternative.
+
+$ mcpm install io.github.linear/mcp-server
+Resolving across enabled sources...
+  found in: official, github  (preferring official)
+Verifying source index signature (minisign)... ok
+Fetching server.json... ok (schema 2025-10-17)
+Verifying npm package provenance (Sigstore)... ok
+  attestation: github.com/linear/mcp-server@v1.4.2, GitHub Actions run #884
+Choosing isolation runtime: devenv + sandbox-exec (macOS default)
+Declared env vars:
+  LINEAR_API_KEY  (secret: true)
+
+Wrote [servers.linear] to ~/.config/mcpd/servers.toml
+Pending: 1 unresolved secret reference (LINEAR_API_KEY)
+Next:    mcpm secret set linear LINEAR_API_KEY     (see: secrets-lifecycle)
+         mcpm reconcile                            (project to clients)</code></pre>
+
+<h3>Transcript 2 &mdash; "I work at BigCorp and need our internal registry"</h3>
+<pre><code>$ mcpm registry add bigcorp https://mcp-registry.bigcorp.internal/v0.1 \
+    --signed-by /etc/bigcorp/mcp-registry.pub \
+    --auth-header "X-BigCorp-Cert: $(cat /etc/bigcorp/cert.pem)" \
+    --priority 50
+Validating endpoint... ok (advertises Generic Registry API v0.1)
+Loading pubkey /etc/bigcorp/mcp-registry.pub... ok (Ed25519, minisign)
+Fetching initial index... ok [47 servers]
+Verifying index signature... ok
+Added registry 'bigcorp' (priority 50, signed)
+
+$ mcpm registry list
+NAME      PRIORITY  URL                                              SIGNED  STATUS
+bigcorp   50        https://mcp-registry.bigcorp.internal/v0.1       yes     47 servers, refreshed 12s ago
+official  100       https://registry.modelcontextprotocol.io         yes     832 servers, refreshed 7h ago
+github    100       https://github.com/mcp                           yes     241 servers, refreshed 7h ago
+docker    100       https://github.com/docker/mcp-registry           yes     318 servers, refreshed 7h ago
+
+$ mcpm search jira
+Results (2):
+  jira-cloud               v3.1   ts   stdio   bigcorp           signed  curated     [internal]
+    Jira Cloud, scoped to bigcorp.atlassian.net. Approved by SecEng.
+  community.atlassian/jira v0.8   py   stdio   official, github  signed
+    Community-maintained Jira tool.
+
+$ mcpm install jira-cloud
+[...]</code></pre>
+
+<h3>Transcript 3 &mdash; "I want to opt into Smithery for semantic search"</h3>
+<pre><code>$ mcpm registry add smithery https://registry.smithery.ai/v1 \
+    --api-key-env SMITHERY_API_KEY \
+    --telemetry-acknowledge
+WARNING: 'smithery' is a known-telemetry source.
+  - Adding implies you have read https://smithery.ai/privacy.
+  - Search queries against this source ARE sent to smithery.ai.
+  - This warning is repeated on every install from this source.
+  - To use offline-only search, set --cache=full at add time and refresh manually.
+Continue? [y/N]: y
+Added registry 'smithery' (telemetry acknowledged, priority 100)
+
+$ mcpm search "issue tracker that supports custom fields"  --source smithery
+Sending query to smithery (semantic search)... 17 results
+[...]</code></pre>
+
+<h3>Transcript 4 &mdash; "I'm air-gapped on a research laptop"</h3>
+<pre><code>$ mcpm registry refresh official --cache=full
+Downloading full index from registry.modelcontextprotocol.io...
+  manifests: 832/832
+  size: 38.4 MB
+  cached at: ~/.cache/mcpd/sources/official/
+Verifying minisign signature over bundle... ok
+
+$ # ... transfer laptop to airgap ...
+
+$ mcpm search filesystem
+[from local cache only; no network needed]
+Results (4): [...]
+
+$ mcpm install fs/local --offline
+Resolving from local cache (offline mode)... ok
+Skipping provenance check: no network
+WARNING: provenance not verified (--offline). Package will run sandboxed
+         but you are trusting the cached index alone.
+Continue? [y/N]: y
+[...]</code></pre>
+
+<h2 id="tui">TUI integration</h2>
+<p>
+The TUI's "Add server" pane reuses the same registry adapters and the same local index. From the TUI:
+</p>
+<ul>
+  <li><kbd>/</kbd> opens an incremental search bar &mdash; same BM25 backend, same dedupe, same trust pills.</li>
+  <li>Selecting a result reveals an expanded <code>server.json</code> preview pane (the <code>--review</code> equivalent).</li>
+  <li><kbd>Enter</kbd> triggers the same install flow.</li>
+  <li>Telemetry sources are shown with a glowing pill; first install from one re-prompts.</li>
+</ul>
+
+<h2 id="config">On-disk config shape</h2>
+
+<p>Registry config lives in <code>~/.config/mcpd/registries.toml</code> (separate file from <code>servers.toml</code> to keep schemas independent and make secrets-lifecycle's job easier):</p>
+
+<pre><code>schema = "mcpd.registries.v1"
+
+[registries.official]
+url       = "https://registry.modelcontextprotocol.io"
+signed_by = "builtin:official-v1"      # baked into mcpd binary
+priority  = 100
+cache     = "index"
+
+[registries.github]
+url       = "https://github.com/mcp"
+signed_by = "builtin:github-mcp-v1"
+priority  = 100
+cache     = "index"
+
+[registries.docker]
+url       = "https://github.com/docker/mcp-registry"
+signed_by = "builtin:docker-mcp-v1"
+priority  = 100
+cache     = "index"
+enabled   = true                       # auto-set true if `docker` in PATH at init
+
+[registries.bigcorp]
+url            = "https://mcp-registry.bigcorp.internal/v0.1"
+signed_by      = "file:/etc/bigcorp/mcp-registry.pub"
+priority       = 50
+cache          = "full"
+auth_header    = "X-BigCorp-Cert: ${file:/etc/bigcorp/cert.pem}"
+telemetry_ack  = false
+license_flag   = "Apache-2.0"</code></pre>
+
+<h2 id="open">Open questions for the orchestrator</h2>
+<ol>
+  <li><strong>Pubkey rotation cadence.</strong> If the official registry rotates its minisign key, do we ship a hotfix mcpd release or fetch a key-rotation manifest at runtime? The latter is more flexible but adds a bootstrap-trust question. Recommend: hotfix release for v1.0.</li>
+  <li><strong>What is the threshold for auto-enabling the <code>docker</code> source?</strong> "Docker in PATH" is the obvious heuristic, but a user might have Docker installed for unrelated reasons and not want a third source by default. Recommend: ask once during <code>mcpm init</code> rather than auto-enable.</li>
+  <li><strong>How does <code>mcpm install</code> interact with the onboarding stream's first-run wizard?</strong> First-run probably wants to <em>show</em> the top-10 most-likely-useful servers from the seeded sources; that needs a "featured" tag in the manifest that the official registry doesn't yet expose. Coordinate with onboarding-flow.</li>
+  <li><strong>Should we expose a <code>mcpm registry trust &lt;name&gt;</code> verb</strong> to upgrade a maintainer-trust-only source to signed-by after the fact? Useful when the user knows the registry just hasn't shipped signing yet. Recommend: yes, but v1.1.</li>
+  <li><strong>Search-query privacy when using semantic-search sources.</strong> Even with explicit <code>--telemetry-acknowledge</code>, do we want a "private mode" envelope (Tor / proxy) for high-paranoia users? Probably no for v1.0 &mdash; this is what "don't add the source" is for.</li>
+  <li><strong>Dedupe key for cross-source results.</strong> The official spec's <code>name</code> field (e.g. <code>io.github.linear/mcp-server</code>) is the natural key, but Smithery/Glama use their own slugs. Do we re-key on first observation or maintain per-source name? Recommend: maintain per-source name but offer canonical alias via the source adapter.</li>
+  <li><strong>Per-project vs user scope</strong> for installed servers. <code>--scope project</code> writes to <code>./.mcpd/servers.toml</code> alongside the repo. This conflicts with the secrets-lifecycle stream's choices about per-project secret stores &mdash; need alignment.</li>
+</ol>
+
+<section class="citations">
+  <h2>Citations</h2>
+  <p>All sources are listed in <a href="./data/citations.json">data/citations.json</a> and rendered inline.</p>
+</section>
+</main>
+</body>
+</html>

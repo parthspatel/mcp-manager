@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version management &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">closing-gaps</a> / version-management</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Closing-gap &middot; Version management</h1>
+
+<p class="lede">
+Two version axes intersect inside MCP Manager and they are not the same problem. <strong>Axis A &mdash; server pins:</strong> when a user types <code>mcpm install github-mcp</code>, do they get the latest <code>github-mcp-server</code> build, or the one a teammate had last Tuesday? <strong>Axis B &mdash; spec compatibility:</strong> the MCP wire protocol itself versions on a date string (currently <code>2025-11-25</code> stable, <code>2026-07-28</code> on a release-candidate track<cite data-ref="mcp-spec-2026-07-28-rc"></cite>) and every server advertises one. Our daemon must negotiate, refuse incompatible matches honestly, and tell the user <em>why</em> a server failed to start. This closing-gap document set defines both, plus the <code>mcpm update</code> UX and lockfile schema that ties them together.
+<span class="evidence-badge">22 citations</span>
+<span class="pill">6 versioning strategies ranked</span>
+<span class="pill">Two-axis design</span>
+</p>
+
+<nav class="toc">
+  <h4>Pages</h4>
+  <div class="group-label">Research (neutral)</div>
+  <ul>
+    <li><a href="./research-versioning-prior-art.html">research-versioning-prior-art.html</a> &mdash; Cargo, npm, pip-tools/uv, mise, asdf, Nix flakes, Renovate's classification model; current MCP spec-version landscape</li>
+  </ul>
+  <div class="group-label">Analysis</div>
+  <ul>
+    <li><a href="./analysis-versioning-tradeoffs.html">analysis-versioning-tradeoffs.html</a> &mdash; pin-exact vs range+lock vs always-latest; spec-version negotiation strategies; how <code>mcpm update</code> should classify changes</li>
+  </ul>
+  <div class="group-label">Recommendation</div>
+  <ul>
+    <li><a href="./recommendation-versioning-summary.html">recommendation-versioning-summary.html</a> &mdash; concrete CLI surface, TOML lockfile schema, spec-version negotiation algorithm with worked example</li>
+  </ul>
+</nav>
+
+<section class="section">
+  <h2>Sibling closing-gap streams</h2>
+  <div class="card-grid">
+    <a class="card" href="../server-registry/">
+      <h3>server-registry</h3>
+      <p>Where servers come from: catalog source, install transport, signature verification. Our lockfile <em>references</em> registry entries by namespaced name + version.</p>
+    </a>
+    <a class="card" href="../onboarding/">
+      <h3>onboarding</h3>
+      <p>First-run flow. The default version policy (loose-pin or exact-pin) is set during onboarding and propagates into every install thereafter.</p>
+    </a>
+    <a class="card" href="../secrets-lifecycle/">
+      <h3>secrets-lifecycle</h3>
+      <p>Rotation cadence and rekey ceremonies are independent of server version, but the audit-log <code>config.change</code> event we emit on <code>mcpm update</code> shares the same event spine.</p>
+    </a>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Stream summary in one paragraph</h2>
+  <p>
+    MCP Manager v1.0 adopts the <strong>range-in-manifest + exact-in-lockfile</strong> model proven by Cargo<cite data-ref="cargo-toml-vs-lock"></cite> and npm<cite data-ref="npm-package-lock"></cite>: users declare <code>github-mcp = "^0.4"</code> in <code>mcp-manager.toml</code>, the daemon resolves and writes the chosen version + checksum into <code>mcp-manager.lock</code>, and the lock becomes the source of truth on subsequent installs. <code>mcpm update</code> classifies changes using Renovate's vocabulary &mdash; <em>major / minor / patch / digest / pin / lockFileMaintenance</em><cite data-ref="renovate-update-types"></cite> &mdash; and surfaces them as a colored CLI/TUI diff before any write happens. For the spec-version axis, mcpd advertises a set of supported protocol dates (the current stable <code>2025-11-25</code><cite data-ref="mcp-spec-2025-11-25"></cite> plus a configurable allow-list of older versions), and on every <code>initialize</code> picks the newest common version with the server &mdash; mirroring the MCP lifecycle requirement<cite data-ref="mcp-version-negotiation"></cite> rather than enforcing strict equality. The lockfile lives co-located with the toolchain projection lockfile (decided by clever-fox-bridge): per-user → <code>~/.config/mcp-manager/mcp-manager.lock</code>; per-project → <code>./mcp-manager.lock</code>. Every version change writes an <code>audit.config.change</code> record so a teammate can ask "who bumped the GitHub server to 0.5?" and get a real answer. After each successful update, the daemon optionally runs <code>mcpm test &lt;server&gt;</code> (the health check) and rolls back the lockfile entry if initialize fails &mdash; making version churn safe by default.
+  </p>
+</section>
+</main>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Actix-Web + Askama (localhost SSR) — UI Shootout — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">ui-shootout</a> / actix-tera</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Stack: Actix-Web + Askama (localhost SSR)</h1>
+
+<p class="lede">
+This stack is the deliberate odd-one-out of the UI shootout. Where Tauri+Leptos and Tauri+Dioxus give you a native window with a WebView inside it, this stack gives you <strong>a Rust HTTP server on <code>127.0.0.1:NNNN</code> and a browser tab</strong>. The model is Jellyfin, Sonarr, Pi-hole, FastAPI's <code>/docs</code> — a long-lived daemon with a web admin UI, not a desktop application. For MCP Manager — where a long-lived daemon (<code>mcpd</code>) already exists — the GUI can literally <em>be</em> mcpd's HTTP front-end <cite data-ref="actix-web-github"></cite><cite data-ref="jellyfin-networking"></cite>.
+</p>
+
+<section class="section">
+<h2>What you get</h2>
+<table class="compare">
+<thead><tr><th>Layer</th><th>Choice</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>HTTP server</td><td><strong>Actix-Web 4.x</strong></td><td>Mature, fastest Rust framework on TechEmpower, native SSE via <code>actix-web-lab</code> <cite data-ref="actix-web-crates"></cite><cite data-ref="actix-web-lab-sse"></cite>.</td></tr>
+<tr><td>Templates</td><td><strong>Askama</strong> (compile-time, type-checked)</td><td>Templates bind to Rust structs; the compiler catches missing fields and the mcpd domain model flows straight into the view layer <cite data-ref="askama-home"></cite>. Tera is the strong runtime alternative <cite data-ref="tera-home"></cite>.</td></tr>
+<tr><td>Interactivity</td><td><strong>HTMX + Alpine.js</strong> (light JS)</td><td>HTMX handles SSE log tails and partial swaps; Alpine handles client-only UI (modals, dropdowns) <cite data-ref="htmx-sse-ext"></cite><cite data-ref="htmx-vs-alpine-2026"></cite>.</td></tr>
+<tr><td>Tray</td><td><strong>tray-icon</strong> (optional, in-process)</td><td>Cross-platform tray menu (Quit, Open in browser, Restart). macOS main-thread caveat <cite data-ref="tray-icon-crates"></cite><cite data-ref="tray-icon-docs"></cite>.</td></tr>
+<tr><td>Real-time</td><td><strong>SSE</strong> (HTTP/1.1)</td><td>tokio broadcast channel + actix-web-lab Sse helper + heartbeat ping — log tails and status are one-liners <cite data-ref="actix-sse-example"></cite>.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section class="section">
+<h2>Pages in this evaluation</h2>
+<ul>
+  <li><a href="./research-stack.html">research-stack.html</a> — Actix, Tera, Askama, HTMX as of 2026: state of the art, dev loop, real shipping apps.</li>
+  <li><a href="./research-mcp-manager-fit.html">research-mcp-manager-fit.html</a> — concrete MCP Manager fit: tray story, auth on localhost, GUI-inside-mcpd vs separate process, mobile path, the "no native app" UX tax.</li>
+  <li><a href="./recommendation-actix-tera-summary.html">recommendation-actix-tera-summary.html</a> — opinionated pros/cons/gotchas/verdict, with the Tera-vs-Askama call.</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>Sibling stacks (under evaluation in parallel)</h2>
+<ul>
+  <li><a href="../tauri-leptos/index.html">tauri-leptos</a> — Tauri 2 + Leptos (signal-based Rust→WebView).</li>
+  <li><a href="../tauri-dioxus/index.html">tauri-dioxus</a> — Tauri 2 + Dioxus (RSX components, React-like).</li>
+</ul>
+</section>
+
+<section class="section">
+<h2>The one-line case for this stack</h2>
+<p>
+If the goal is to ship a working MCP Manager v1.0 in weeks with screen-reader-grade accessibility for free, real-time updates as the native idiom, a single Rust binary, and a credible mobile path on day one — and you can stomach the fact that the UI is a browser tab and not a native window — this is the lowest-risk choice on the board.
+</p>
+</section>
+</main>
+</body>
+</html>

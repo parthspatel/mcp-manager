@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onboarding flow recommendation &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+    <div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">closing-gaps</a> / <a href="./index.html">onboarding</a> / recommendation</div>
+    <button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+  </div>
+</header>
+
+<main class="container">
+<h1>Recommendation &mdash; <code>mcpm init</code> flow design</h1>
+
+<p class="lede">
+The opinionated half of the stream. Five worked transcripts cover the cases the design has to handle: an interactive lucky-day run, a fully non-interactive run, an importing-from-cursor stub, a project-scope run inside a repo, and the service-manager opt-in mid-flow. Every prompt has a flag; every flag has a documented default; every default is overridable; every run is idempotent.
+</p>
+
+<div class="recommendation-callout">
+  <h3>TL;DR</h3>
+  <ul>
+    <li><strong>One command surface:</strong> <code>mcpm init</code> (user-scope by default). <code>mcpm project init</code> is a shorthand for <code>mcpm init --scope project</code>.</li>
+    <li><strong>Three universal flags:</strong> <code>--defaults</code> (accept the documented default for every choice), <code>-y / --yes</code> (skip all confirmations), <code>--force</code> (re-init over existing config with a backup).</li>
+    <li><strong>Files written on a default user-scope run:</strong> <code>$XDG_CONFIG_HOME/mcp-manager/config.toml</code>, <code>$XDG_STATE_HOME/mcp-manager/servers.lock</code> (empty), and one audit-log line in <code>$XDG_STATE_HOME/mcp-manager/audit.log</code>.<cite data-ref="xdg-basedir"></cite> On macOS, the same paths via <code>~/Library/Application Support/mcp-manager/</code> with a symlink shim at <code>~/.config/mcp-manager</code> for cross-OS muscle memory.</li>
+    <li><strong>Service-manager prompt:</strong> separate, opt-in, defaults to <em>no</em>. The daemon auto-spawns from <code>mcpm exec</code> regardless.</li>
+    <li><strong>Idempotent:</strong> re-running prints a no-change summary and exits zero. <code>--force</code> backs up old config to <code>config.toml.bak.&lt;timestamp&gt;</code> before overwriting.<cite data-ref="clig-dev"></cite></li>
+    <li><strong>Trust gate for project-scope:</strong> a project-scope config in a freshly cloned repo is inactive until the user runs <code>mcpm project allow</code> (or passes <code>--allow</code> at init), modelled on <code>direnv allow</code>.<cite data-ref="direnv-allow"></cite></li>
+  </ul>
+</div>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#surface">Command surface</a></li>
+    <li><a href="#scope-1">Transcript 1 &mdash; <code>mcpm init</code> (interactive, lucky-day)</a></li>
+    <li><a href="#scope-2">Transcript 2 &mdash; <code>mcpm init --defaults -y</code> (full non-interactive)</a></li>
+    <li><a href="#scope-3">Transcript 3 &mdash; <code>mcpm init --scope project --import-from cursor</code></a></li>
+    <li><a href="#scope-4">Transcript 4 &mdash; <code>mcpm project init</code> in a repo</a></li>
+    <li><a href="#scope-5">Transcript 5 &mdash; The service-manager opt-in prompt (accept and decline branches)</a></li>
+    <li><a href="#files">What gets written on disk</a></li>
+    <li><a href="#idempotency">Idempotency &amp; re-run semantics</a></li>
+    <li><a href="#open-questions">Open questions for the orchestrator</a></li>
+  </ul>
+</nav>
+
+<section class="section" id="surface">
+<h2>Command surface</h2>
+
+<table class="compare">
+  <thead><tr><th>Flag</th><th>Default</th><th>Effect</th><th>Prior art</th></tr></thead>
+  <tbody>
+    <tr><td><code>--scope user|project</code></td><td><code>user</code></td><td>Where the canonical config lives. Project-scope writes <code>./.mcp-manager/</code>; user-scope writes <code>$XDG_CONFIG_HOME/mcp-manager/</code>.<cite data-ref="xdg-basedir"></cite></td><td>mise use's per-project <code>mise.toml</code><cite data-ref="mise-use"></cite></td></tr>
+    <tr><td><code>--defaults</code></td><td>off</td><td>Use the documented default for every choice; skip per-question prompts but still display the summary.</td><td>create-next-app's "use defaults?"<cite data-ref="create-next-app"></cite></td></tr>
+    <tr><td><code>-y, --yes</code></td><td>off</td><td>Skip all confirmation prompts (including overwrite confirms when combined with <code>--force</code>).</td><td>npm init -y<cite data-ref="npm-init"></cite></td></tr>
+    <tr><td><code>--force</code></td><td>off</td><td>Re-init over existing config; previous state is backed up to <code>*.bak.&lt;ISO-timestamp&gt;</code>.</td><td>cargo init's missing escape hatch<cite data-ref="cargo-init"></cite></td></tr>
+    <tr><td><code>--toolchains LIST</code></td><td><em>auto-detected</em></td><td>Comma-separated list of toolchains to project into. <code>--toolchains none</code> projects to nothing.</td><td>kubectl set-context's per-flag composition<cite data-ref="kubectl-set-context"></cite></td></tr>
+    <tr><td><code>--register-service</code> / <code>--no-register-service</code></td><td><code>--no-register-service</code></td><td>Opt into launchd / systemd-user persistent daemon registration. Off by default; auto-spawn handles the common case.</td><td>mise activate (separate from mise use)<cite data-ref="mise-activate"></cite></td></tr>
+    <tr><td><code>--registry URL[,URL...]</code></td><td><em>empty</em></td><td>Upstream MCP server registries to add. (See <a href="../server-registry/">server-registry</a> sister stream.)</td><td>kubectl set-context --cluster<cite data-ref="kubectl-set-context"></cite></td></tr>
+    <tr><td><code>--import-from CLIENT</code></td><td>none</td><td>Bootstrap config by reading an existing host's config (cursor, claude-code, vscode, codex, ...). v1.0 ships the flag as a stub; full import is v1.1.</td><td>op account add's host context<cite data-ref="op-signin"></cite></td></tr>
+    <tr><td><code>--allow</code></td><td>off</td><td>(Project-scope only.) Mark the freshly-init'd project-scope config as trusted in one shot, skipping the post-init "run <code>mcpm project allow</code>" hint.</td><td>direnv allow<cite data-ref="direnv-allow"></cite></td></tr>
+    <tr><td><code>--show-defaults</code></td><td>off</td><td>Print the JSON shape of every documented default and exit zero without writing anything.</td><td>(novel; addresses create-react-app drift<cite data-ref="react-deprecate-cra"></cite>)</td></tr>
+    <tr><td><code>--quiet</code></td><td>off</td><td>Suppress all non-error output. Plays well with <code>--defaults -y</code>.</td><td>cargo new --quiet<cite data-ref="cargo-new"></cite></td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="scope-1">
+<h2>Transcript 1 &mdash; <code>mcpm init</code> (interactive, lucky-day, user-scope)</h2>
+
+<p>The default invocation, run from a fresh install, on a machine that has Claude Code and VS Code already installed. Every prompt has a bracketed default; ENTER through them all and you get a working setup in &lt; 30 seconds.</p>
+
+<pre><code>$ mcpm init
+
+mcpm v1.0.0 first-run setup
+This will create a per-user config under ~/.config/mcp-manager/.
+Press ENTER to accept the [bracketed default] at each prompt.
+
+[1/4] Detected toolchains on this machine:
+        &#10003; Claude Code CLI         (~/.claude/)
+        &#10003; VS Code                 (~/Library/Application Support/Code/User/)
+        &#9679; Cursor                  (not installed)
+        &#9679; Codex CLI               (not installed)
+        &#9679; Zed                     (not installed)
+
+      Project into all 2 detected toolchains? [Y/n]:
+
+[2/4] Upstream server registry to subscribe to.
+        none                    No registry (you'll add servers manually with `mcpm install`)
+      &gt; community               github.com/mcp-manager/registry-community
+        custom URL              Paste a URL
+
+      Choose [community]:
+
+[3/4] Capture a first secret now? (optional &mdash; you can skip and run `mcpm secret set` later)
+      [n/Y]: n
+
+[4/4] Register mcpd as a launchd background service so it survives logout?
+      The daemon will auto-spawn on `mcpm exec` either way; registering only
+      keeps it running between `exec` calls (faster cold-start, more memory).
+      [y/N]: n
+
+Summary &mdash; about to write:
+  ~/.config/mcp-manager/config.toml          (new)
+  ~/Library/Application Support/mcp-manager/servers.lock   (new, empty)
+  ~/Library/Application Support/mcp-manager/audit.log      (new, 1 entry)
+
+  Toolchains projected: claude-code, vscode
+  Registries subscribed: community
+  Service registration: skipped (daemon will auto-spawn)
+
+Writing &#8230; done in 0.08s.
+
+Next:
+  mcpm install &lt;name&gt;     Install an MCP server from the community registry
+  mcpm secret set OPENAI_API_KEY    Store a secret in your OS keychain
+  mcpm exec &lt;server&gt; -- &lt;cmd&gt;       Run a command with the server attached
+</code></pre>
+</section>
+
+<section class="section" id="scope-2">
+<h2>Transcript 2 &mdash; <code>mcpm init --defaults -y</code> (full non-interactive)</h2>
+
+<p>Zero stdin reads. Suitable for Ansible / Nix / homebrew post-install hooks / CI. Produces an identical end state to Transcript 1 when run on the same machine, modulo timestamps.</p>
+
+<pre><code>$ mcpm init --defaults -y
+mcpm v1.0.0 first-run (non-interactive)
+Detected toolchains: claude-code, vscode
+Projecting into: claude-code, vscode
+Registries: community
+Secrets: 0 captured (deferred to `mcpm secret set`)
+Service registration: skipped (auto-spawn enabled)
+Wrote:
+  ~/.config/mcp-manager/config.toml
+  ~/Library/Application Support/mcp-manager/servers.lock
+  ~/Library/Application Support/mcp-manager/audit.log
+Done.
+
+$ echo $?
+0
+
+# Re-running is a no-op (idempotent).
+$ mcpm init --defaults -y
+mcpm v1.0.0 already initialized (config.toml exists, sha256 matches defaults)
+No changes.
+$ echo $?
+0
+
+# To re-init over existing config:
+$ mcpm init --defaults -y --force
+mcpm v1.0.0 re-init (--force)
+Backing up existing config to ~/.config/mcp-manager/config.toml.bak.2026-05-24T19-22-03Z
+Wrote:
+  ~/.config/mcp-manager/config.toml
+Done.
+</code></pre>
+
+<p>This is the contract <code>mcpm</code> commits to: <strong><code>mcpm init --defaults -y</code> produces a working setup on any supported machine with no input</strong> &mdash; the same guarantee <code>npm init -y</code> ships.<cite data-ref="npm-init"></cite></p>
+</section>
+
+<section class="section" id="scope-3">
+<h2>Transcript 3 &mdash; <code>mcpm init --scope project --import-from cursor</code> (v1.0 stub)</h2>
+
+<p>The <code>--import-from</code> flag is documented in v1.0 but the actual import is deferred to v1.1. The flag is accepted; the importer prints a "not yet implemented, falling back to empty init" message and proceeds.</p>
+
+<pre><code>$ cd ~/projects/myapp
+$ mcpm init --scope project --import-from cursor
+
+mcpm v1.0.0 project-scope init
+Target: /Users/me/projects/myapp/.mcp-manager/
+
+Note: --import-from is not yet implemented in v1.0
+      (planned for v1.1; track at github.com/mcp-manager/mcp-manager/issues/42).
+      Falling back to an empty project config.
+
+[1/3] Detected toolchains for this project:
+        &#10003; Cursor                  (./.cursor/mcp.json present)
+        &#10003; Claude Code             (./.mcp.json present)
+        &#9679; VS Code workspace       (no ./.vscode/mcp.json)
+
+      Project into both detected toolchains? [Y/n]:
+
+[2/3] Subscribe to a registry for this project?
+        none                    Project will use the user-scope registry list
+      &gt; user-default            Inherit ~/.config/mcp-manager/config.toml
+        custom                  Specify a separate registry just for this project
+
+      Choose [user-default]:
+
+[3/3] Mark this project as trusted now?
+      (Adds an entry to ~/.config/mcp-manager/trusted-projects.toml so other
+      tools running in this directory can use the project config without
+      re-prompting; equivalent to running `mcpm project allow` later.)
+      [y/N]: y
+
+Summary &mdash; about to write:
+  ./.mcp-manager/project.toml                (new)
+  ./.mcp-manager/.gitignore                  (new; ignores local state)
+  ./.mcp-manager/servers.lock                (new, empty)
+  ~/.config/mcp-manager/trusted-projects.toml (append: /Users/me/projects/myapp)
+
+  Toolchains projected: cursor, claude-code
+  Registry policy: inherit user-default
+  Trust status: allowed
+  Import status: deferred (re-run after upgrading to v1.1)
+
+Writing &#8230; done in 0.06s.
+
+Next:
+  mcpm install &lt;name&gt;          Add a server to this project
+  mcpm project status          Show current state and toolchain diff
+  git add .mcp-manager/project.toml .mcp-manager/.gitignore   (commit the project config)
+</code></pre>
+</section>
+
+<section class="section" id="scope-4">
+<h2>Transcript 4 &mdash; <code>mcpm project init</code> (project-scope shorthand)</h2>
+
+<p>Equivalent to <code>mcpm init --scope project</code>. Provided because a verb-first form ("project init") matches user mental model in muscle-memory tools like <code>git init</code> / <code>terraform init</code><cite data-ref="terraform-init"></cite> / <code>cargo init</code>.<cite data-ref="cargo-init"></cite></p>
+
+<pre><code>$ cd ~/projects/freshly-cloned
+$ mcpm project init
+
+mcpm v1.0.0 project-scope init
+Target: /Users/me/projects/freshly-cloned/.mcp-manager/
+
+Existing config detected at .mcp-manager/project.toml (committed by upstream).
+
+The project declares 3 MCP servers and 2 toolchains. Before any of them
+are activated for this directory, you need to grant trust.
+
+Server declarations in .mcp-manager/project.toml:
+  - github-search   (github.com/mcp-manager/registry-community)
+  - postgres        (github.com/mcp-manager/registry-community)
+  - filesystem      (local path: ./tools/fs-mcp)   &lt;-- LOCAL EXECUTABLE
+
+The filesystem server runs a local executable from this repo. Review
+./tools/fs-mcp before allowing.
+
+[1/1] Trust this project's MCP config and run `mcpm sync` to project it?
+      [y/N]: y
+
+Recording trust &#8230; wrote ~/.config/mcp-manager/trusted-projects.toml
+Running mcpm sync &#8230; projecting servers into cursor and claude-code &#8230; done.
+
+Next:
+  mcpm project status         Verify the projected state matches project.toml
+  mcpm project sync --dry-run Preview future projections without writing
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>Trust model</strong></td><td>Modelled on <code>direnv allow</code><cite data-ref="direnv-allow"></cite>: a fresh clone is inactive until the user explicitly trusts it. Servers that run local executables are called out by name &mdash; the user has to look at <code>./tools/fs-mcp</code> before allowing.</td></tr>
+    <tr><td><strong>Audit trail</strong></td><td>Every trust grant is appended to <code>~/.config/mcp-manager/trusted-projects.toml</code> with a sha256 of the project.toml at trust time. If the file changes upstream, the trust is invalidated and the user is re-prompted.</td></tr>
+    <tr><td><strong>Non-interactive variant</strong></td><td><code>mcpm project init --allow -y</code> performs the same trust-grant non-interactively; intended for CI in your own repos, not for arbitrary clones.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="scope-5">
+<h2>Transcript 5 &mdash; The service-manager opt-in prompt</h2>
+
+<p>Both branches shown side by side. The prompt text is the same on macOS and Linux; only the verb in the explanatory line changes.<cite data-ref="launchd-info"></cite><cite data-ref="systemd-user"></cite> The default is always <em>no</em>.</p>
+
+<h3>Accept branch (macOS, launchd)</h3>
+<pre><code>[4/4] Register mcpd as a launchd background service so it survives logout?
+      The daemon will auto-spawn on `mcpm exec` either way; registering only
+      keeps it running between `exec` calls (faster cold-start, more memory).
+      [y/N]: y
+
+About to register a per-user LaunchAgent:
+  Path:   ~/Library/LaunchAgents/dev.mcp-manager.mcpd.plist
+  Loads:  via `launchctl bootstrap gui/$(id -u) ...`
+  Logs:   ~/Library/Logs/mcp-manager/mcpd.log
+  Socket: ~/Library/Application Support/mcp-manager/mcpd.sock
+
+This will start mcpd now and on every login. To undo:
+  mcpm service unregister
+
+[y/N]: y
+Writing plist &#8230; ok
+launchctl bootstrap gui/501 ~/Library/LaunchAgents/dev.mcp-manager.mcpd.plist &#8230; ok
+mcpd is running (pid 47821). `mcpm status` to inspect.
+</code></pre>
+
+<h3>Accept branch (Linux, systemd-user)</h3>
+<pre><code>[4/4] Register mcpd as a systemd --user service so it survives logout?
+      The daemon will auto-spawn on `mcpm exec` either way; registering only
+      keeps it running between `exec` calls (faster cold-start, more memory).
+      [y/N]: y
+
+About to register a per-user systemd unit:
+  Path:   ~/.config/systemd/user/mcpd.service
+  Loads:  via `systemctl --user daemon-reload &amp;&amp; systemctl --user enable --now mcpd.service`
+  Logs:   journalctl --user -u mcpd  (and ~/.local/state/mcp-manager/mcpd.log)
+  Socket: $XDG_RUNTIME_DIR/mcp-manager/mcpd.sock
+
+This will start mcpd now and on every login. To survive logout entirely you
+may want `loginctl enable-linger $USER` (we won't run that for you).
+
+To undo:
+  mcpm service unregister
+
+[y/N]: y
+Writing unit &#8230; ok
+systemctl --user daemon-reload &#8230; ok
+systemctl --user enable --now mcpd.service &#8230; ok
+mcpd is running (pid 18472). `mcpm status` to inspect.
+</code></pre>
+
+<h3>Decline branch (either OS)</h3>
+<pre><code>[4/4] Register mcpd as a launchd background service so it survives logout?
+      The daemon will auto-spawn on `mcpm exec` either way; registering only
+      keeps it running between `exec` calls (faster cold-start, more memory).
+      [y/N]: n
+
+Skipped. mcpd will auto-spawn on first `mcpm exec`. To enable later:
+  mcpm service register
+</code></pre>
+
+<table class="compare">
+  <tbody>
+    <tr><td><strong>Non-interactive accept</strong></td><td><code>mcpm init --register-service -y</code> (no further prompts; identical end-state to the accept branch).</td></tr>
+    <tr><td><strong>Non-interactive decline</strong></td><td>Default. <code>mcpm init -y</code> or <code>--defaults -y</code> skips the prompt entirely.</td></tr>
+    <tr><td><strong>Why default no?</strong></td><td>The locked v1.0 design has the daemon auto-spawning from <code>mcpm exec</code>. Registering as a service is a performance optimisation (skip the ~200ms cold-start) and a logout-survival feature &mdash; both nice but not required for "it works". Off-by-default matches the principle of least intrusion: a fresh install never leaves a background process running on the user's machine without an explicit yes.</td></tr>
+    <tr><td><strong>Why prompt at all on first run, then?</strong></td><td>Because asking later is awkward &mdash; nobody discovers <code>mcpm service register</code> on their own. One prompt with a clear default is better than a config option that 95% of users never touch.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="files">
+<h2>What gets written on disk</h2>
+
+<h3>User-scope (Linux, XDG-compliant)<cite data-ref="xdg-basedir"></cite></h3>
+<table class="compare">
+  <thead><tr><th>Path</th><th>Purpose</th><th>Owned by</th></tr></thead>
+  <tbody>
+    <tr><td><code>$XDG_CONFIG_HOME/mcp-manager/config.toml</code></td><td>User preferences: toolchains to project into, registries subscribed, secrets backend choice.</td><td>this stream</td></tr>
+    <tr><td><code>$XDG_STATE_HOME/mcp-manager/servers.lock</code></td><td>Canonical lockfile of installed servers (versions, hashes).</td><td><a href="../version-management/">version-management</a></td></tr>
+    <tr><td><code>$XDG_STATE_HOME/mcp-manager/audit.log</code></td><td>Append-only log of every state-changing operation including the init line.</td><td><a href="../../steady-bear-foundation/">steady-bear-foundation</a></td></tr>
+    <tr><td><code>$XDG_STATE_HOME/mcp-manager/mcpd.sock</code></td><td>Unix domain socket for daemon IPC.</td><td><a href="../../precise-crane-conduit/">precise-crane-conduit</a></td></tr>
+    <tr><td><code>$XDG_CONFIG_HOME/mcp-manager/trusted-projects.toml</code></td><td>List of project paths granted trust + sha256 of their <code>project.toml</code> at trust time.</td><td>this stream</td></tr>
+  </tbody>
+</table>
+
+<h3>User-scope (macOS)<cite data-ref="xdg-archwiki"></cite></h3>
+<p>macOS apps that follow XDG conventions resolve <code>$XDG_CONFIG_HOME</code> to <code>~/.config</code>, but Apple's HIG points at <code>~/Library/Application Support/</code>. mcpm splits the difference: human-edited config under <code>~/.config/mcp-manager/</code>, runtime state and logs under <code>~/Library/Application Support/mcp-manager/</code> and <code>~/Library/Logs/mcp-manager/</code>. Both locations are symlinked from each other for muscle memory.</p>
+
+<h3>Project-scope (any OS)</h3>
+<table class="compare">
+  <thead><tr><th>Path</th><th>Purpose</th><th>Commit?</th></tr></thead>
+  <tbody>
+    <tr><td><code>./.mcp-manager/project.toml</code></td><td>Declared servers, declared toolchains, registry policy.</td><td>Yes &mdash; this is the shared project state.</td></tr>
+    <tr><td><code>./.mcp-manager/servers.lock</code></td><td>Resolved versions + hashes of the declared servers.</td><td>Yes &mdash; reproducible builds.</td></tr>
+    <tr><td><code>./.mcp-manager/.gitignore</code></td><td>Auto-generated; ignores local-only state (cache, logs).</td><td>Yes (the .gitignore itself).</td></tr>
+    <tr><td><code>./.mcp-manager/local/</code></td><td>Per-user local state for this project (cache, log).</td><td>No &mdash; ignored by the auto-generated .gitignore.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section class="section" id="idempotency">
+<h2>Idempotency &amp; re-run semantics</h2>
+
+<p>Following clig.dev's idempotency principle<cite data-ref="clig-dev"></cite><cite data-ref="clig-github"></cite>, every <code>mcpm init</code> invocation falls into one of three deterministic states:</p>
+
+<ol>
+  <li><strong>No existing config</strong> &rarr; fresh write, summary, exit 0.</li>
+  <li><strong>Existing config, no flags would change it</strong> &rarr; print "no changes," exit 0. (Matching <code>terraform init</code>'s "already initialized" path.<cite data-ref="terraform-init-tutorial"></cite>)</li>
+  <li><strong>Existing config, flags would change it, no <code>--force</code></strong> &rarr; print a diff of what <em>would</em> change, exit 1. The user sees exactly what we would have done.</li>
+  <li><strong>Existing config, flags would change it, <code>--force</code> passed</strong> &rarr; back up the old config to <code>*.bak.&lt;ISO-timestamp&gt;</code>, write the new, append an audit entry citing the previous sha256, exit 0.</li>
+</ol>
+
+<pre><code># State 3 example: diff and bail
+$ mcpm init --toolchains claude-code,vscode,cursor
+mcpm v1.0.0 already initialized at ~/.config/mcp-manager/config.toml.
+Re-init would change:
+  toolchains:
+    - claude-code, vscode
+    + claude-code, vscode, cursor
+
+Pass --force to apply (previous config will be backed up).
+$ echo $?
+1
+</code></pre>
+
+<p>This shape is borrowed directly from <code>terraform plan</code>'s diff-then-bail behaviour, ported to <code>init</code>. The diff format follows unified-diff conventions so users can pipe it into review tools.</p>
+</section>
+
+<section class="section" id="open-questions">
+<h2>Open questions for the orchestrator</h2>
+
+<ol>
+  <li><strong>Should <code>mcpm init</code> auto-detect Codex / Cursor / Zed / JetBrains the same way it detects Claude Code and VS Code?</strong> Toolchain auto-detection is owned by <a href="../../clever-fox-bridge/">clever-fox-bridge</a>; the init flow consumes the result but has no opinion on the detection mechanism. The expected behaviour from this design: for any tier-1 toolchain the detector reports "installed," the init prompt shows a &#10003; default; for tier-2, the prompt shows a &#9679; "opt in?" default. The orchestrator should confirm this matches what clever-fox-bridge produced.</li>
+
+  <li><strong>What is the canonical name of the "community registry"?</strong> Transcript 1 names it <code>github.com/mcp-manager/registry-community</code>. The <a href="../server-registry/">server-registry</a> stream defines this; whatever it lands on should be the documented default for <code>--registry</code>.</li>
+
+  <li><strong>Does the audit log live under <code>$XDG_STATE_HOME</code> or somewhere the user is more likely to find it?</strong> Spec-compliant placement is <code>$XDG_STATE_HOME</code>; that path is buried under <code>~/.local/state/</code> by default. <code>mcpm logs --audit</code> tails it without the user needing to know the path. The orchestrator may want to surface this in the <code>mcpm status</code> command alongside whatever else <a href="../../steady-bear-foundation/">steady-bear-foundation</a> shows.</li>
+
+  <li><strong>The trust-grant model for project-scope (Transcript 4) is borrowed from direnv.</strong> Sister stream <a href="../secrets-lifecycle/">secrets-lifecycle</a> might have its own opinion about trust scoping that the orchestrator needs to reconcile.</li>
+
+  <li><strong>Should <code>--import-from</code> ship as a stub at all in v1.0?</strong> The argument for: users can write the flag into their setup scripts now and the v1.1 upgrade transparently activates it. The argument against: a flag that doesn't work is a footgun; better to not advertise it. This page chose to ship the stub; the orchestrator may overrule.</li>
+
+  <li><strong>What happens to the service registration on <code>mcpm uninstall</code>?</strong> Not addressed here because uninstall semantics are outside this stream's scope. Some product owners will want the service auto-unregistered on uninstall; others will want it left alone so a re-install picks up where it left off. Worth a decision before v1.0 ships.</li>
+</ol>
+</section>
+
+</main>
+
+<footer class="page-footer">
+  <div class="container">
+    <p><a href="./research-onboarding-prior-art.html">&larr; prior-art research</a> &middot; <a href="./index.html">onboarding index</a></p>
+  </div>
+</footer>
+</body>
+</html>

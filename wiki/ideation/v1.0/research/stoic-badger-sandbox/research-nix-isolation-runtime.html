@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runtime sandboxing — stoic-badger-sandbox · MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">stoic-badger-sandbox</a> / runtime sandboxing</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Runtime sandboxing — Linux, macOS, Windows</h1>
+  <p class="lede">
+    A devenv profile gives a reproducible build. It does <em>not</em> restrict the running process. This page surveys the OS-level primitives the MCP Manager can layer on top to scope filesystem access, network egress, and IPC — and notes where each one is missing or weak.
+  </p>
+
+  <h2>Linux: namespaces &amp; seccomp ecosystem</h2>
+
+  <h3>bubblewrap</h3>
+  <p>
+    bubblewrap is the unprivileged sandbox originally built for Flatpak. It leans on Linux user namespaces to construct a fresh PID, mount, network, IPC, and UTS namespace without needing root. The host filesystem is replaced with an empty tmpfs root, and the caller explicitly bind-mounts what the sandboxed process is allowed to see (typically <code>--ro-bind /nix/store /nix/store</code> for a Nix-built binary).<cite data-ref="bubblewrap-repo"></cite>
+  </p>
+<pre><code># launch an MCP server with read-only /nix/store, isolated network,
+# read-write access only to one project directory
+bwrap \
+  --ro-bind /nix/store /nix/store \
+  --ro-bind /etc /etc \
+  --proc /proc --dev /dev \
+  --tmpfs /tmp \
+  --bind /home/me/projects/foo /work \
+  --unshare-all --share-net=no \
+  --die-with-parent \
+  --new-session \
+  -- /nix/store/&lt;hash&gt;-mcp-server/bin/mcp-server-foo
+</code></pre>
+  <p>
+    bubblewrap accepts seccomp BPF filters via <code>--seccomp &lt;fd&gt;</code>, letting callers further restrict syscalls, and uses <code>PR_SET_NO_NEW_PRIVS</code> to neutralize setuid binaries inside the sandbox.<cite data-ref="bubblewrap-repo"></cite>
+  </p>
+
+  <h3>firejail</h3>
+  <p>
+    firejail is a SUID helper that ships pre-built profiles for &gt;1,000 desktop applications. It composes namespaces with seccomp-bpf via a higher-level profile language. Because it is SUID-root, it has historically had more CVE surface than bubblewrap; for a daemon-launched MCP server it is overkill compared to direct bubblewrap invocation.<cite data-ref="firejail-home"></cite>
+  </p>
+
+  <h3>nsjail</h3>
+  <p>
+    nsjail (Google) combines namespaces, cgroups, rlimits, and seccomp-bpf via the Kafel policy language. It supports a TCP-listener mode (spawn one jail per connection) and is the go-to in production fuzzing and CTF infrastructure.<cite data-ref="nsjail-repo"></cite> Compared to bubblewrap, nsjail is heavier and aimed at server-side untrusted code execution; bubblewrap's filesystem story is finer-grained per the community.<cite data-ref="nsjail-repo"></cite>
+  </p>
+
+  <h3>Linux user namespaces directly</h3>
+  <p>
+    Both bubblewrap and nsjail are thin layers over the kernel's namespace API (<code>clone(2)</code> + <code>CLONE_NEW*</code>). A Rust daemon can call these directly through crates like <code>nix</code> or <code>caps</code> — useful when the manager wants no external runtime dependency, but a non-trivial amount of code to get right. Most projects prefer to shell out to bubblewrap.<cite data-ref="bubblewrap-repo"></cite>
+  </p>
+
+  <h2>macOS: <code>sandbox-exec</code> / Seatbelt</h2>
+  <p>
+    macOS's sandbox is configured through Sandbox Profile Language (SBPL), a Scheme dialect. The <code>sandbox-exec</code> binary applies a profile and then <code>exec</code>s the child. The profile language is deny-by-default (<code>deny default</code>) plus explicit allow rules over filesystem, network, Mach IPC, and POSIX IPC categories.<cite data-ref="sandbox-exec-jmmv"></cite>
+  </p>
+<pre><code>; mcp-server.sb
+(version 1)
+(deny default)
+(allow process-exec)
+(allow process-fork)
+(allow file-read*
+  (subpath "/nix/store")
+  (subpath "/usr/lib")
+  (subpath "/System")
+  (literal "/etc/resolv.conf"))
+(allow file-read* file-write*
+  (subpath (param "PROJECT_ROOT")))
+(allow network* (remote tcp "*:443"))
+(allow mach-lookup (global-name "com.apple.system.notification_center"))
+</code></pre>
+<pre><code># invoke
+sandbox-exec \
+  -f /etc/mcp-manager/profiles/mcp-server.sb \
+  -D PROJECT_ROOT=/Users/me/projects/foo \
+  /nix/store/&lt;hash&gt;-mcp-server/bin/mcp-server-foo
+</code></pre>
+  <p>
+    <strong>Caveats</strong>: Apple has marked <code>sandbox-exec</code> deprecated since approximately 2016, but it remains functional on every shipping macOS, including current versions, and is still used internally by the system. A deprecation warning is printed to stderr on each invocation. No documented replacement exists for headless / non-App-Store sandboxing.<cite data-ref="sandbox-exec-deprecation"></cite><cite data-ref="alcoholless-medium"></cite> SBPL is undocumented; profile authors typically iterate by running the target and reading <code>~/Library/Logs/DiagnosticReports/sandboxd</code>.<cite data-ref="sandbox-exec-jmmv"></cite>
+  </p>
+
+  <h2>Windows: AppContainer</h2>
+  <p>
+    Windows's documented isolation model for arbitrary Win32 processes is the AppContainer. Microsoft summarises six isolation domains:<cite data-ref="appcontainer-isolation"></cite>
+  </p>
+  <ul>
+    <li><strong>Credential isolation</strong> — application identity blends user + app, preventing impersonation.</li>
+    <li><strong>Device isolation</strong> — camera, microphone, GPS blocked by default; granted via capability.</li>
+    <li><strong>File &amp; registry isolation</strong> — explicit read/write paths only.</li>
+    <li><strong>Network isolation</strong> — separate caps for Internet, intranet, and server-mode.</li>
+    <li><strong>Process isolation</strong> — kernel-object sandboxing prevents cross-process effects.</li>
+    <li><strong>Window isolation</strong> — UI isolation; less relevant to a headless MCP server.</li>
+  </ul>
+  <p>
+    Win32 App Isolation (public preview since 2023) layers low-integrity launch onto AppContainer for a baseline secured environment, configured by manifest. Capability sets are authored ahead of time and the OS enforces them.<cite data-ref="win32-app-isolation"></cite>
+  </p>
+  <p>
+    For a Rust daemon spawning child processes, the relevant APIs are <code>CreateProcess</code> with a <code>STARTUPINFOEX</code> that carries security attributes plus <code>CreateAppContainerProfile</code> and <code>DeriveAppContainerSidFromAppContainerName</code>. Job Objects can layer resource limits (CPU, memory, process count) on top — analogous to cgroups on Linux.<cite data-ref="appcontainer-isolation"></cite>
+  </p>
+
+  <h2>Network egress controls</h2>
+  <table class="compare">
+    <thead><tr><th>Platform</th><th>Mechanism</th><th>Granularity</th></tr></thead>
+    <tbody>
+      <tr><td>Linux (bubblewrap)</td><td><code>--unshare-net</code> &rarr; loopback-only namespace; combine with a veth + nftables rules for allow-listed egress.</td><td>Coarse (on/off) without nftables; fine with.<cite data-ref="bubblewrap-repo"></cite></td></tr>
+      <tr><td>Linux (nsjail)</td><td>MACVLAN or userland networking via pasta.</td><td>Per-jail interface; integrates well with cgroups.<cite data-ref="nsjail-repo"></cite></td></tr>
+      <tr><td>macOS</td><td>SBPL <code>(allow network* (remote tcp "*:443"))</code></td><td>Host/port-pattern level.<cite data-ref="sandbox-exec-jmmv"></cite></td></tr>
+      <tr><td>Windows</td><td>AppContainer capabilities: <code>internetClient</code>, <code>internetClientServer</code>, <code>privateNetworkClientServer</code>.</td><td>Zone level (no per-host).<cite data-ref="appcontainer-isolation"></cite></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Filesystem read/write scoping</h2>
+  <table class="compare">
+    <thead><tr><th>Platform</th><th>How a path is granted</th></tr></thead>
+    <tbody>
+      <tr><td>Linux (bubblewrap)</td><td><code>--ro-bind</code>, <code>--bind</code>, <code>--tmpfs</code>, <code>--dev</code> — explicit list.<cite data-ref="bubblewrap-repo"></cite></td></tr>
+      <tr><td>macOS</td><td>SBPL <code>(allow file-read* (subpath …))</code>, <code>(allow file-write* (subpath …))</code>.<cite data-ref="sandbox-exec-jmmv"></cite></td></tr>
+      <tr><td>Windows</td><td>FreeFiles + per-AppContainer ACLs; well-known folders accessible only via capabilities.<cite data-ref="appcontainer-isolation"></cite></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Cross-platform parity matrix</h2>
+  <table class="compare">
+    <thead>
+      <tr><th>Capability</th><th>Linux (bwrap / nsjail)</th><th>macOS (sandbox-exec)</th><th>Windows (AppContainer)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>FS scoping (per-path)</td><td>Yes, fine-grained<cite data-ref="bubblewrap-repo"></cite></td><td>Yes via SBPL <code>subpath</code><cite data-ref="sandbox-exec-jmmv"></cite></td><td>Yes via capabilities<cite data-ref="appcontainer-isolation"></cite></td></tr>
+      <tr><td>Network on/off</td><td>Yes (<code>--unshare-net</code>)<cite data-ref="bubblewrap-repo"></cite></td><td>Yes (<code>deny network*</code>)<cite data-ref="sandbox-exec-jmmv"></cite></td><td>Yes (drop capability)<cite data-ref="appcontainer-isolation"></cite></td></tr>
+      <tr><td>Per-host egress allow-list</td><td>Via nftables in netns<cite data-ref="bubblewrap-repo"></cite></td><td>Yes via <code>remote</code> rules<cite data-ref="sandbox-exec-jmmv"></cite></td><td>Zone-level only<cite data-ref="appcontainer-isolation"></cite></td></tr>
+      <tr><td>Syscall filtering</td><td>Yes (seccomp-bpf)<cite data-ref="bubblewrap-repo"></cite><cite data-ref="nsjail-repo"></cite></td><td>No equivalent public API<cite data-ref="sandbox-exec-deprecation"></cite></td><td>Limited (Win32 isolation manifest)<cite data-ref="win32-app-isolation"></cite></td></tr>
+      <tr><td>CPU / memory limits</td><td>cgroups (nsjail bakes in; bwrap needs external)<cite data-ref="nsjail-repo"></cite></td><td>None first-class<cite data-ref="sandbox-exec-deprecation"></cite></td><td>Job Objects<cite data-ref="appcontainer-isolation"></cite></td></tr>
+      <tr><td>Documented &amp; stable</td><td>Yes<cite data-ref="bubblewrap-repo"></cite></td><td>Deprecated since ~2016 but functional<cite data-ref="sandbox-exec-deprecation"></cite></td><td>Yes, evolving (Win32 isolation in preview)<cite data-ref="win32-app-isolation"></cite></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Practical observations</h2>
+  <ul>
+    <li>The strongest parity story is Docker / Podman, covered separately in the <a href="./research-nix-isolation-escape-hatch.html">escape hatch</a> page; native sandbox primitives diverge substantially per OS.<cite data-ref="docker-mcp-toolkit"></cite></li>
+    <li>SBPL's lack of public documentation means a small "profile library" for common MCP server shapes (filesystem, network-only, mixed) is a non-trivial recurring authoring cost.<cite data-ref="sandbox-exec-jmmv"></cite></li>
+    <li>On Linux, the cheapest path is bubblewrap + a small Rust wrapper that builds the argv from a declarative policy stored next to the devenv profile.<cite data-ref="bubblewrap-repo"></cite></li>
+  </ul>
+</main>
+</body>
+</html>

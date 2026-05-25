@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nix &amp; devenv primer — stoic-badger-sandbox · MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">stoic-badger-sandbox</a> / Nix &amp; devenv primer</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Nix &amp; devenv — what they actually are</h1>
+  <p class="lede">
+    This page is just-enough background to make the rest of the stream readable. It explains the Nix store, derivations, flakes, and where devenv.sh fits on top. It does not make recommendations.
+  </p>
+
+  <h2>Nix in one paragraph</h2>
+  <p>
+    Nix is a <em>purely functional</em> package manager. Every package is built from a Nix expression (a "derivation") whose hash captures every input — source, build script, dependencies, even build-time environment variables. The result is dropped into an immutable, content-addressed location under <code>/nix/store/&lt;hash&gt;-&lt;name&gt;</code>. Two systems that evaluate the same expression with the same inputs produce the same store path; the same store path can never be silently replaced. This is the core of Nix's reproducibility model.<cite data-ref="nix-manual-intro"></cite>
+  </p>
+
+  <h2>The Nix store, mental model</h2>
+  <ul>
+    <li><strong>Hash-addressed</strong>: <code>/nix/store/abc123…-python-3.11.6/bin/python3</code>. Different versions live side by side, never overwriting each other.<cite data-ref="nix-manual-intro"></cite></li>
+    <li><strong>Closure</strong>: a built artifact references every store path it needs at runtime. Garbage collection happens against these references — nothing reachable is removed.<cite data-ref="nix-manual-intro"></cite></li>
+    <li><strong>Atomic upgrades / rollbacks</strong>: a "profile" is a symlink to a generation. Pointing it at the previous generation is a constant-time operation; no partial-update window exists.<cite data-ref="nix-manual-intro"></cite></li>
+  </ul>
+
+  <h2>Derivations</h2>
+  <p>
+    A derivation is a JSON-like description of a build: inputs, builder script, environment, output names. Evaluating Nix code produces derivations; building a derivation produces store paths. The promise is that <em>building the same derivation twice yields the same result</em>.<cite data-ref="nix-manual-intro"></cite>
+  </p>
+<pre><code># minimal derivation example
+{ stdenv, fetchurl }:
+stdenv.mkDerivation {
+  pname   = "hello";
+  version = "2.12.1";
+  src     = fetchurl {
+    url    = "mirror://gnu/hello/hello-2.12.1.tar.gz";
+    sha256 = "086…";
+  };
+}
+</code></pre>
+
+  <h2>Flakes</h2>
+  <p>
+    Flakes are an experimental layer that gives a project a canonical entry point — a <code>flake.nix</code> file with <code>inputs</code> (pinned dependencies) and <code>outputs</code> (packages, dev shells, apps, NixOS configurations). A companion <code>flake.lock</code> records the exact commit and content hash of every input, the same way <code>package-lock.json</code> or <code>Cargo.lock</code> pins JavaScript or Rust deps. Two checkouts of a repo with the same lock file build identical artifacts.<cite data-ref="nix-flakes"></cite>
+  </p>
+<pre><code># flake.nix skeleton
+{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+
+  outputs = { self, nixpkgs }: {
+    devShells.x86_64-linux.default =
+      nixpkgs.legacyPackages.x86_64-linux.mkShell {
+        packages = [ /* …pinned tools… */ ];
+      };
+  };
+}
+</code></pre>
+  <p>
+    Flakes remain officially "experimental" and the model has known coupling and composability rough edges, but they are how virtually every new Nix project pins its inputs.<cite data-ref="nix-flakes"></cite>
+  </p>
+
+  <h2>FHS sandboxing and the build sandbox</h2>
+  <p>
+    Nix builds run in a sandbox: a stripped <code>/nix/store</code>-only filesystem view, no network (except for fixed-output fetches with a known hash), no access to <code>/etc</code>, <code>/home</code>, or other host state. This is what makes "build it twice, get the same output" plausible. The same sandboxing primitive — namespaces on Linux, chroot-style on macOS — is later reusable for runtime isolation of the resulting binary.<cite data-ref="nix-manual-intro"></cite>
+  </p>
+
+  <h2>What devenv adds</h2>
+  <p>
+    devenv.sh is a higher-level wrapper around Nix aimed squarely at <em>developer environments</em>. Instead of writing raw Nix derivations, you toggle pre-baked modules:<cite data-ref="devenv-home"></cite><cite data-ref="devenv-languages"></cite>
+  </p>
+<pre><code># devenv.nix — turn-on-by-toggle
+{ pkgs, ... }:
+{
+  languages.python.enable  = true;
+  languages.python.version = "3.11.3";
+  languages.javascript.enable = true;
+  languages.javascript.package = pkgs.nodejs_20;
+
+  packages = [ pkgs.ripgrep pkgs.uv ];
+
+  enterShell = ''
+    echo "MCP server env ready"
+  '';
+
+  processes.echo.exec = "while true; do date; sleep 5; done";
+}
+</code></pre>
+  <p>devenv claims activation in roughly 100 ms once warm, layers process supervision and service definitions on top, and has built-in integrations for git hooks, task runners, and (importantly for this stream) secret management.<cite data-ref="devenv-home"></cite></p>
+
+  <h3>devenv vs raw Nix flakes</h3>
+  <table class="compare">
+    <thead><tr><th>Aspect</th><th>Raw flake (<code>nix develop</code>)</th><th>devenv</th></tr></thead>
+    <tbody>
+      <tr><td>Reproducibility</td><td>Full Nix closure</td><td>Same — devenv compiles to Nix</td></tr>
+      <tr><td>Language ergonomics</td><td>Author writes derivations</td><td>Toggle <code>languages.python.enable</code><cite data-ref="devenv-languages"></cite></td></tr>
+      <tr><td>Processes / services</td><td>Out of scope; bring your own</td><td>First-class <code>processes</code> + <code>services</code> blocks<cite data-ref="devenv-home"></cite></td></tr>
+      <tr><td>Secrets</td><td>None built in</td><td>SecretSpec integration<cite data-ref="devenv-secretspec-integration"></cite></td></tr>
+      <tr><td>Activation speed</td><td>Cold flake evaluation can be seconds</td><td>~100 ms warm activation claimed<cite data-ref="devenv-home"></cite></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Closure determinism — why it matters here</h2>
+  <p>
+    Because every byte that a server depends on is hash-addressed and pinned by <code>flake.lock</code>, the <em>identity</em> of the binary stack is auditable. For an MCP Manager that wants to say "this is server <code>x.y.z</code> with these dependencies, signed and reproducible," Nix's closure semantics give a stronger foundation than "I ran <code>npx</code> and hope it pulled the same tree as last week."<cite data-ref="nix-manual-intro"></cite><cite data-ref="nix-flakes"></cite>
+  </p>
+
+  <h2>Caveats up front</h2>
+  <details class="accordion" open>
+    <summary>Learning curve is real</summary>
+    <p>Community surveys and long-form retrospectives consistently call out three independent burdens: the Nix language itself, the conventions of nixpkgs, and reasoning about whatever upstream tool is now living inside Nix. Pierre Zemb, Richard Goulter, and the NixOS documentation team all flag this as a primary adoption blocker.<cite data-ref="nix-pain-rgoulter"></cite><cite data-ref="nix-discourse-curve"></cite></p>
+  </details>
+  <details class="accordion">
+    <summary>Windows is second-class</summary>
+    <p>Nix runs on Linux and macOS; Windows requires WSL. Any tool that ships Nix as its primary isolation strategy needs a documented Windows escape hatch from day one. (See <a href="./research-nix-isolation-escape-hatch.html">escape hatch</a>.)</p>
+  </details>
+  <details class="accordion">
+    <summary>Flakes are still experimental</summary>
+    <p>The flag <code>--extra-experimental-features 'nix-command flakes'</code> is still required on default Nix installs. The semantics are stable in practice but the bar for "officially supported" hasn't been crossed.<cite data-ref="nix-flakes"></cite></p>
+  </details>
+</main>
+</body>
+</html>

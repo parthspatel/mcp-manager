@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projection mechanics &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">clever-fox-bridge</a> / projection</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Projection mechanics</h1>
+
+<p class="lede">
+A &quot;projection&quot; is the act of taking a canonical record of one MCP server in <code>mcpd</code>'s state store and writing the on-disk representation that a specific tool expects. This page enumerates the mechanical transforms involved &mdash; schema mapping, env-syntax translation, secret-reference rewriting, transport coercion, capability mapping, MCP-spec-version negotiation &mdash; and the idempotency invariants the writer must preserve.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#canonical">The canonical record</a></li>
+    <li><a href="#mapping">Schema mapping</a></li>
+    <li><a href="#env">Env-syntax translation</a></li>
+    <li><a href="#secrets">Secret-reference rewriting</a></li>
+    <li><a href="#transport">Transport coercion</a></li>
+    <li><a href="#capability">Capability flag mapping</a></li>
+    <li><a href="#spec-version">MCP-spec-version negotiation</a></li>
+    <li><a href="#idempotency">Idempotency invariants</a></li>
+  </ul>
+</nav>
+
+<h2 id="canonical">The canonical record</h2>
+<p>
+The projector is downstream of Stream 3's state store<cite data-ref="claude-code-mcp"></cite> and Stream 4's wire protocol; it does not invent any new abstraction over <code>McpServer</code>. The canonical record for one server is approximately:
+</p>
+<pre><code>// pseudo-rust; the real type lives in mcpd
+struct McpServer {
+    id: ServerId,                  // stable UUID
+    name: String,                  // user-visible
+    transport: Transport,          // Stdio { command, args } | Http { url } | Sse { url }
+    env: BTreeMap&lt;String, EnvValue&gt;,
+    headers: BTreeMap&lt;String, HeaderValue&gt;,
+    secret_refs: Vec&lt;SecretRef&gt;,   // references resolved at projection time
+    spec_version: McpSpecVersion,  // minimum MCP version the server requires
+    capabilities: ServerCapabilities,
+    enabled: bool,
+    projection_targets: Vec&lt;ToolchainTarget&gt;, // which tools this entry should be projected into
+}</code></pre>
+<p>
+The projector reads this, queries the toolchain manifest for the target (one of Tier-1/Tier-2 catalog entries plus any user-defined toolchains), and emits a target-specific file or fragment.
+</p>
+
+<h2 id="mapping">Schema mapping</h2>
+<p>Every supported tool agrees on the same four conceptual fields (Stream 1 already established this<cite data-ref="claude-code-mcp"></cite>). Mapping is mostly a question of <em>key rename</em> and <em>container reshape</em>:</p>
+<table class="compare">
+<thead><tr><th>Target tool</th><th>Top-level key</th><th>Container</th><th>Transport tag</th></tr></thead>
+<tbody>
+<tr><td>Claude Code / Cursor / Cline / Windsurf / Claude Desktop</td><td><code>mcpServers</code></td><td>object</td><td>optional <code>type</code> or presence-based</td></tr>
+<tr><td>VS Code</td><td><code>servers</code> (workspace) or <code>mcp.servers</code> (user)<cite data-ref="vscode-mcp"></cite></td><td>object</td><td>explicit <code>type</code></td></tr>
+<tr><td>Zed</td><td><code>context_servers</code><cite data-ref="zed-mcp"></cite></td><td>object</td><td>presence-based</td></tr>
+<tr><td>Continue</td><td><code>mcpServers</code><cite data-ref="continue-mcp"></cite></td><td><strong>array</strong></td><td>explicit <code>type</code></td></tr>
+<tr><td>Goose</td><td><code>extensions</code><cite data-ref="goose-mcp"></cite></td><td>map</td><td><code>type</code> incl. <code>builtin</code></td></tr>
+<tr><td>Codex</td><td><code>[mcp_servers.<em>name</em>]</code> TOML tables<cite data-ref="codex-mcp"></cite></td><td>per-table</td><td>implicit stdio</td></tr>
+<tr><td>JetBrains</td><td><code>&lt;servers&gt;</code> child of <code>&lt;mcp&gt;</code> component<cite data-ref="jetbrains-mcp"></cite></td><td>XML</td><td>attribute</td></tr>
+</tbody>
+</table>
+<p>
+The mapping is a deterministic function of target. We propose declaring it in the toolchain manifest as a small expression language &mdash; either JSONPath<cite data-ref="jsonpath-rfc9535"></cite> or jq<cite data-ref="jq-manual"></cite> &mdash; rather than as a code path. See <a href="./recommendation-toolchain-summary.html">the recommendation</a> for which we picked and why.
+</p>
+
+<h2 id="env">Env-syntax translation</h2>
+<p>
+Every host invents its own env-expansion syntax (Stream 1's <a href="../curious-otter-survey/research-mcp-config-schema.html">schema page</a> documents this). Projection must rewrite from the canonical form to the target's expected form:
+</p>
+<table class="compare">
+<thead><tr><th>Target</th><th>Env syntax</th><th>Resolution time</th></tr></thead>
+<tbody>
+<tr><td>Claude Code</td><td><code>${VAR}</code> / <code>${VAR:-default}</code><cite data-ref="claude-code-mcp"></cite></td><td>server-start</td></tr>
+<tr><td>VS Code</td><td><code>${env:VAR}</code> + <code>${input:id}</code><cite data-ref="vscode-mcp"></cite></td><td>config-load + prompt</td></tr>
+<tr><td>Cursor</td><td><code>${env:VAR}</code> + <code>envFile</code><cite data-ref="cursor-mcp"></cite></td><td>server-start</td></tr>
+<tr><td>Continue</td><td><code>${{ secrets.X }}</code> only<cite data-ref="continue-mcp"></cite></td><td>config-load</td></tr>
+<tr><td>Codex</td><td>none (literal strings)<cite data-ref="codex-mcp"></cite></td><td>n/a</td></tr>
+<tr><td>Goose</td><td>OS keyring refs in env map<cite data-ref="goose-config"></cite></td><td>server-start</td></tr>
+</tbody>
+</table>
+<p>
+For targets without env-expansion, the projector inlines the resolved value at write time, with the caveat that it must NEVER inline a secret. For targets with expansion, the projector emits a reference in the target's native syntax that resolves at the target's resolution time.
+</p>
+
+<h2 id="secrets">Secret-reference rewriting</h2>
+<p>
+The strongest projection-time invariant is: <strong>no secret material ever crosses the projector into a plaintext file</strong>. Stream 3 owns secret storage in the OS keyring; the projector's job is to rewrite <code>secret_refs</code> into target-specific reference syntax:
+</p>
+<table class="compare">
+<thead><tr><th>Target</th><th>Best available reference</th><th>Fallback</th></tr></thead>
+<tbody>
+<tr><td>VS Code</td><td><code>${input:id}</code> with the input declared in the <code>inputs</code> array; VS Code stores it in its own secret store<cite data-ref="vscode-mcp"></cite></td><td>n/a</td></tr>
+<tr><td>Claude Code</td><td><code>headersHelper</code> command that shells out to <code>mcpm secret print KEY</code><cite data-ref="claude-code-mcp"></cite></td><td><code>${VAR}</code> with a stub in the user's profile</td></tr>
+<tr><td>Goose</td><td>Refer to OS keyring entry by name<cite data-ref="goose-config"></cite></td><td>n/a</td></tr>
+<tr><td>Cursor</td><td><code>envFile</code> pointing at <code>~/.config/mcp-manager/secrets/&lt;target&gt;.env</code> that <code>mcpd</code> materializes with restrictive permissions at projection time<cite data-ref="cursor-mcp"></cite></td><td>direct env</td></tr>
+<tr><td>Codex / Continue / Cline / Windsurf</td><td>None native; the projector emits a wrapper command (<code>mcpm exec --secrets-from KEY -- &lt;real command&gt;</code>) that injects env at process-start</td><td>none</td></tr>
+<tr><td>JetBrains</td><td>IDE keychain reference via project-level XML; UI-driven<cite data-ref="jetbrains-junie"></cite></td><td>none</td></tr>
+</tbody>
+</table>
+<p>
+The wrapper-command fallback is the universal escape hatch. It works for every stdio transport because we can always interpose ourselves; we lose the ability for stdio targets to launch the server without <code>mcpd</code> running, but this is an acceptable trade in v1.0. The pattern matches podman's reference-based secret model<cite data-ref="secret-manager-podman"></cite>.
+</p>
+
+<h2 id="transport">Transport coercion</h2>
+<p>The MCP spec defines two transports &mdash; stdio and Streamable HTTP &mdash; with HTTP+SSE deprecated as of 2025-06-18<cite data-ref="mcp-spec-transports"></cite>. Targets have different transport support:</p>
+<ul>
+  <li>Stdio is universal.</li>
+  <li>Streamable HTTP is supported by Claude Code, VS Code, Continue, Cursor (recent versions), Cline, LibreChat.</li>
+  <li>SSE is still accepted by some hosts as a legacy alias.</li>
+  <li>Codex CLI supports stdio only.</li>
+</ul>
+<p>
+For a target without HTTP support but a canonical record that uses HTTP transport, the projector has two choices: (a) emit a stdio wrapper (<code>mcpm proxy --remote &lt;url&gt;</code> that bridges stdio to HTTP); (b) skip the projection and surface a warning in the GUI/CLI. v1.0 picks (b) as default with (a) opt-in to avoid silent semantic drift.
+</p>
+
+<h2 id="capability">Capability flag mapping</h2>
+<p>
+Beyond transport, hosts expose tool-specific knobs the canonical record must carry through:
+</p>
+<table class="compare">
+<thead><tr><th>Field</th><th>Hosts that use it</th><th>Default if absent</th></tr></thead>
+<tbody>
+<tr><td><code>autoApprove</code> (array of tool names)</td><td>Cline<cite data-ref="cline-mcp"></cite></td><td>empty</td></tr>
+<tr><td><code>disabled</code> (boolean)</td><td>Cline, VS Code via separate setting</td><td>false</td></tr>
+<tr><td><code>timeout</code></td><td>Claude Code, Goose, LibreChat<cite data-ref="goose-mcp"></cite><cite data-ref="librechat-mcp"></cite></td><td>tool default</td></tr>
+<tr><td><code>alwaysLoad</code></td><td>Claude Code<cite data-ref="claude-code-mcp"></cite></td><td>false</td></tr>
+<tr><td><code>source</code></td><td>Zed (<code>custom</code> vs <code>extension</code>)<cite data-ref="zed-mcp"></cite></td><td>n/a</td></tr>
+</tbody>
+</table>
+<p>These map cleanly to optional fields on <code>McpServer</code> and are emitted only into targets that understand them.</p>
+
+<h2 id="spec-version">MCP-spec-version negotiation</h2>
+<p>
+The canonical record carries a <code>spec_version</code> (the minimum spec version the server requires &mdash; informed by the MCP lifecycle handshake<cite data-ref="mcp-resources-discovery"></cite>). Targets fall into three buckets:
+</p>
+<ul>
+  <li><strong>Always-current</strong> &mdash; Claude Code, VS Code; the projector assumes the latest spec without coercion.</li>
+  <li><strong>Pinned</strong> &mdash; Goose, Continue (per release); the projector consults a table in the toolchain manifest declaring the supported spec range.</li>
+  <li><strong>Unknown</strong> &mdash; LibreChat, Windsurf; the projector emits both modern and legacy fields when format allows, otherwise emits modern and surfaces a warning.</li>
+</ul>
+
+<h2 id="idempotency">Idempotency invariants</h2>
+<p>Three rules the writer must obey, derived from prior art in chezmoi<cite data-ref="chezmoi-template"></cite> and home-manager<cite data-ref="homemanager-modules"></cite>:</p>
+<ol>
+  <li><strong>Re-projection without canonical change yields a bit-identical file.</strong> No timestamps, no nondeterministic key ordering, no random UUIDs in output.</li>
+  <li><strong>Re-projection after canonical change touches only the managed region.</strong> Hand-edited surrounding content survives byte-for-byte. This is the managed-block requirement.<cite data-ref="managed-block-ansible"></cite></li>
+  <li><strong>Removal of all managed servers from canonical state collapses the managed region cleanly.</strong> The fence markers vanish; surrounding content snaps closed without leftover whitespace. (Matches FreeBSD <code>etcupdate</code>'s &quot;delete-aware merge&quot; mode.<cite data-ref="etcupdate-freebsd"></cite>)</li>
+</ol>
+<p>
+The writer implementation uses content-addressed projection: serialize the canonical record set to a stable bytestring, hash it, and on every projection compare the hash to a sidecar <code>.mcp-manager.lock</code> beside the projected file. If the hash matches, no write. If it differs, parse the existing target file, splice the new managed block, write atomically via rename. See <a href="./research-toolchain-sync-modes.html">research-toolchain-sync-modes</a> for the full strategy comparison.
+</p>
+
+<section class="citations">
+  <h2>Citations</h2>
+  <p>All sources for this page are listed in <a href="./data/citations.json">data/citations.json</a> and rendered at the bottom of every page via the shared citations module.</p>
+</section>
+</main>
+</body>
+</html>

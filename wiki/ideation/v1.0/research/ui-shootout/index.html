@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GUI shootout — MCP Manager v1.0</title>
+<meta name="description" content="Tauri+Leptos vs Tauri+Dioxus vs Actix+Askama — three parallel agents, one ranking matrix, one decision.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ui-shootout</span></div>
+    <div class="crumbs"><a href="../index.html">← v1.0 synthesis hub</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>GUI stack shootout</h1>
+
+  <aside class="card" style="border-left:4px solid var(--warn);background:var(--bg-faint);margin-block:1.5rem">
+    <h4 style="margin-top:0">Status (2026-05-24): GUI deferred to a future version</h4>
+    <p style="margin-bottom:0">After this shootout completed, the product owner moved the GUI out of v1.0 scope entirely. v1.0 ships CLI + TUI + config files only. <strong>This page is preserved as the pre-decided recommendation for whenever a GUI is added</strong> — see <a href="../../future-features-v1.1.html#gui">future features → GUI</a>. The recommendation below (Actix + Askama inside mcpd) stands as the canonical answer to "if we build a GUI, what stack?"; the v1.x date for actually building it is to-be-determined.</p>
+  </aside>
+
+  <p class="lede">
+    User direction (2026-05-24): "<strong>We need to be OBSESSED about UX.</strong>" Three parallel research agents evaluated Tauri+Leptos, Tauri+Dioxus, and Actix-Web+Tera/Askama against MCP Manager's needs on macOS + Linux. This page synthesizes their scorecards into a single comparison and recommendation.
+  </p>
+
+  <p>
+    <span class="evidence-badge">100 citations across 3 stacks</span>
+    <span class="evidence-badge">3 standardized scorecards</span>
+    <span class="evidence-badge">13-criterion ranking matrix</span>
+    <span class="pill success">Decision: Actix + Askama (GUI inside mcpd)</span>
+  </p>
+
+  <aside class="card" style="border-left:4px solid var(--success);background:var(--bg-faint);margin-block:1.5rem">
+    <h4 style="margin-top:0">Verdict</h4>
+    <p style="margin-bottom:0.5rem"><strong>Ship Actix-Web + Askama as a localhost SSR app served from inside <code>mcpd</code>.</strong> Weighted score 8.57 / 10 against Dioxus-desktop's 8.13 and Tauri+Leptos's 6.71. The win is broad (8 of 13 criteria) and robust to reasonable weight tuning. The single weakness — "feels like a native app" — is real but offset by zero-IPC simplicity, a free LAN/mobile path, browser-grade accessibility, and the fastest first-paint of the three.</p>
+    <p style="margin-bottom:0"><strong>Runner-up: Dioxus-desktop standalone</strong> (not Tauri-wrapped — dioxus-desktop already uses the same Wry/Tao runtime as Tauri). Pick this if the "browser tab" UX is unacceptable to product positioning and you accept Dioxus's pre-1.0 yearly-migration cost.</p>
+  </aside>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#stacks">The three stacks</a></li>
+      <li><a href="#scorecard">Side-by-side scorecard</a></li>
+      <li><a href="#matrix">Weighted ranking matrix</a></li>
+      <li><a href="#architecture">Architectural implications</a></li>
+      <li><a href="#tradeoffs">Honest tradeoffs (the browser-tab tax)</a></li>
+      <li><a href="#sensitivity">Sensitivity analysis</a></li>
+      <li><a href="#open-questions">Open questions for the orchestrator</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="stacks">
+    <h2>The three stacks</h2>
+    <div class="stream-grid">
+      <a class="stream-card" href="./actix-tera/">
+        <div class="codename">actix-tera</div>
+        <h3>Actix-Web + Askama <span class="pill success" style="font-size:0.7rem">recommended</span></h3>
+        <p><strong>Architecture:</strong> Server-rendered Rust web app served from inside <code>mcpd</code> on <code>localhost:NNNN</code>. The user visits a URL in their existing browser. SSE for live updates. HTMX + a sprinkle of Alpine for interactivity. Tera deferred; Askama picked for compile-time type checks against mcpd's domain types.</p>
+        <div class="meta"><span class="pill accent">Agent 3</span><span class="pill success">Complete</span><span class="evidence-badge">32 citations</span><span class="evidence-badge">score 8.57</span></div>
+      </a>
+      <a class="stream-card" href="./tauri-dioxus/">
+        <div class="codename">tauri-dioxus → dioxus-desktop</div>
+        <h3>Dioxus-desktop (standalone) <span class="pill" style="font-size:0.7rem">runner-up</span></h3>
+        <p><strong>Architecture:</strong> Dioxus running in a native window via Wry/Tao (the same WebView runtime Tauri uses). Agent 2 deliberately recommends <em>not</em> wrapping with Tauri — wrapping adds an IPC serialization boundary and community-maintained glue without meaningful upside on macOS+Linux. Subsecond hot-patching is the standout feature.</p>
+        <div class="meta"><span class="pill accent">Agent 2</span><span class="pill success">Complete</span><span class="evidence-badge">30 citations</span><span class="evidence-badge">score 8.13</span></div>
+      </a>
+      <a class="stream-card" href="./tauri-leptos/">
+        <div class="codename">tauri-leptos</div>
+        <h3>Tauri 2 + Leptos (CSR)</h3>
+        <p><strong>Architecture:</strong> Leptos Rust-WASM SPA inside a Tauri-wrapped system WebView. Tauri tells you to use Leptos in CSR/SSG mode only — SSR-inside-Tauri is officially unsupported. Shared <code>mcpd-protocol</code> crate gives end-to-end type safety. WebKitGTK quirks on Linux for SSE.</p>
+        <div class="meta"><span class="pill accent">Agent 1</span><span class="pill success">Complete</span><span class="evidence-badge">38 citations</span><span class="evidence-badge">score 6.71</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="section" id="scorecard">
+    <h2>Side-by-side scorecard</h2>
+    <p>Raw ratings from each agent's <code>scorecard.json</code>. 1–10 ratings; numeric dimensions (binary size, memory, first paint) shown in their native units.</p>
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Dimension</th>
+          <th>Actix + Askama</th>
+          <th>Dioxus-desktop</th>
+          <th>Tauri + Leptos</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Developer experience</td><td>8</td><td>9</td><td>6</td></tr>
+        <tr><td>Hot-reload quality</td><td>6</td><td><strong>10</strong> (Subsecond hot-patch)</td><td>5</td></tr>
+        <tr><td>Type safety with Rust core</td><td>9</td><td>10</td><td>10</td></tr>
+        <tr><td>Binary size (MB, hello-world)</td><td><strong>8</strong></td><td>12</td><td>12</td></tr>
+        <tr><td>Memory at idle (MB)</td><td><strong>55</strong></td><td>80</td><td>60</td></tr>
+        <tr><td>First paint (ms)</td><td><strong>60</strong></td><td>350</td><td>450</td></tr>
+        <tr><td>Accessibility</td><td><strong>10</strong> (browser-native)</td><td>9</td><td>8</td></tr>
+        <tr><td>Theming / native feel</td><td>3 (browser tab)</td><td><strong>7</strong></td><td>6</td></tr>
+        <tr><td>IPC ergonomics with mcpd</td><td><strong>10</strong> (zero IPC)</td><td>8</td><td>7</td></tr>
+        <tr><td>Live update story (SSE)</td><td><strong>10</strong></td><td>9</td><td>6</td></tr>
+        <tr><td>Packaging macOS + Linux</td><td>7</td><td>8</td><td>8</td></tr>
+        <tr><td>Ecosystem maturity 2026</td><td><strong>9</strong></td><td>7</td><td>7</td></tr>
+        <tr><td>License risk</td><td>MIT/Apache-2.0</td><td>MIT/Apache-2.0</td><td>MIT/Apache-2.0</td></tr>
+        <tr><td>Hiring pool</td><td><strong>8</strong></td><td>5</td><td>3</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section" id="matrix">
+    <h2>Weighted ranking matrix</h2>
+    <p>The 13 criteria above, weighted for "OBSESSED about UX" (live updates, a11y, dev experience, IPC ergonomics, first paint all up-weighted). Drag the weight sliders on <a href="./matrix-shootout.html">the matrix page</a> to see how the ranking shifts under different priorities.</p>
+    <table class="compare">
+      <thead>
+        <tr><th>Stack</th><th>Weighted score (out of 10)</th><th>Wins on</th><th>Loses on</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Actix + Askama</strong></td>
+          <td><strong>8.57</strong></td>
+          <td>live updates, a11y, IPC, first paint, ecosystem, binary size, memory, hiring</td>
+          <td>theming / native feel (3)</td>
+        </tr>
+        <tr>
+          <td>Dioxus-desktop</td>
+          <td>8.13</td>
+          <td>hot reload (Subsecond), type safety (tied), theming</td>
+          <td>hiring pool, ecosystem maturity, first paint</td>
+        </tr>
+        <tr>
+          <td>Tauri + Leptos</td>
+          <td>6.71</td>
+          <td>type safety (tied), memory at idle</td>
+          <td>hot reload, DX, hiring pool, live updates, first paint</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="font-size:0.85rem;color:var(--fg-faint)">Margin: Actix beats Dioxus by 0.44 points, beats Leptos by 1.86 points. Robust to reasonable weight tuning (see sensitivity analysis).</p>
+  </section>
+
+  <section class="section" id="architecture">
+    <h2>Architectural implications of "GUI inside mcpd"</h2>
+    <p>Agent 3's recommendation isn't just "use Actix-Web" — it's "make the GUI part of the daemon binary." This is a deeper architectural call that composes elegantly with the v1.0 lockdown decisions:</p>
+
+    <div class="card-grid">
+      <article class="card">
+        <h4>One process, zero IPC</h4>
+        <p>HTTP request handlers in Actix call <code>mcpd-core</code> Rust functions directly. No JSON-RPC encode/decode, no UDS round trip, no <code>#[tauri::command]</code> bridge. Wire-format drift is impossible because there is no wire.</p>
+      </article>
+      <article class="card">
+        <h4>Auto-spawn becomes trivial</h4>
+        <p>Lockdown decision #2 said "<code>mcpm exec</code> auto-spawns mcpd." With Actix-inside-mcpd, "launching the GUI" IS "launching the daemon." The boot-flow race condition the other stacks have to handle (GUI starts before mcpd is ready) does not exist here.</p>
+      </article>
+      <article class="card">
+        <h4>Mobile / LAN day-one</h4>
+        <p>An opt-in <code>--bind 0.0.0.0</code> turns the GUI into a tool you can use from your phone, tablet, or any other machine on the LAN. Tauri and Dioxus would each need a separate mobile build (months of work) to match this. For "Docker-for-MCP-servers" management, this is a real differentiator.</p>
+      </article>
+      <article class="card">
+        <h4>Single auth surface</h4>
+        <p>One bearer token on first launch (Pi-hole pattern), one set of permission checks. Tauri and Dioxus each need separate auth on the IPC layer and the optional HTTP/SSE bridge — two surfaces, two failure modes.</p>
+      </article>
+      <article class="card">
+        <h4>SSE is native, not bolted-on</h4>
+        <p><code>actix-web-lab::sse</code> + <code>tokio::sync::broadcast</code> + <code>hx-ext="sse"</code> makes log tails and status updates one-liners on both client and server. WebKitGTK SSE quirks (Tauri+Leptos's main risk) go away — every browser supports SSE natively.</p>
+      </article>
+      <article class="card">
+        <h4>Extractable later (low cost)</h4>
+        <p>If "GUI bug crashes daemon" becomes a real problem in production, extracting Actix into a separate <code>mcpd-ui</code> binary that talks to <code>mcpd</code> over UDS JSON-RPC is a clean refactor — the HTTP API stays identical for users.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="tradeoffs">
+    <h2>Honest tradeoffs — the browser-tab tax</h2>
+
+    <p>Actix wins the matrix, but the win comes with three specific UX taxes worth naming explicitly. "OBSESSED about UX" doesn't mean ignoring these — it means addressing them.</p>
+
+    <details class="accordion" open>
+      <summary>Tax 1: No dock / taskbar icon, no native menubar</summary>
+      <p>A browser tab is not "an app." There's no Cmd-Tab destination unless the user makes a Chrome SSB / Safari shortcut / Firefox PWA. They will have to. Mitigations:</p>
+      <ul>
+        <li>Ship a small <code>mcpd-tray</code> helper binary on macOS (~2MB, uses <a href="https://crates.io/crates/tray-icon"><code>tray-icon</code> crate</a>) that lives in the menubar, shows "running / stopped", and has an "Open UI" menu item. Linux: same crate works on most desktops.</li>
+        <li>Ship a <a href="https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Installing">PWA manifest</a> so users who want a dock icon can install the localhost app to their dock with one click.</li>
+      </ul>
+      <p>Tray + PWA together get most of the "real app" feel back. Not all of it.</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Tax 2: Cmd-W can kill the UI mid-task</summary>
+      <p>Browsers' close-tab UX doesn't honor <code>beforeunload</code> reliably for confirmed-edit workflows. If a user is editing a server config and Cmd-Ws the tab, their changes are gone unless we autosave aggressively.</p>
+      <p>Mitigations: design every edit flow as "save-on-blur" (debounced, no explicit Save button) so there's nothing to lose. This is good UX policy regardless of stack.</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Tax 3: No global hotkeys, no native notifications</summary>
+      <p>Browser tabs can't bind global hotkeys. Native notifications work only via the (still-flaky-on-Linux) Web Notifications API.</p>
+      <p>Mitigations: notifications aren't a v1.0 requirement (mcpd already logs to systemd-journal/launchd-stdout). Global hotkeys: out of scope for v1.0. If demand emerges in v1.1, ship a small CLI subcommand (<code>mcpm hotkey</code>) that registers OS-level hotkeys and emits events into the running mcpd.</p>
+    </details>
+
+    <details class="accordion">
+      <summary>Tax 4: DNS rebinding (security)</summary>
+      <p>A malicious website the user visits could theoretically craft requests against <code>localhost:NNNN</code>. Standard mitigations: <code>Host:</code> header allowlist (refuse anything except <code>localhost</code> / <code>127.0.0.1</code> / <code>[::1]</code>), per-session bearer token from URL, no CORS by default. <a href="https://github.blog/security/application-security/dns-rebinding-attacks-explained-the-lookup-is-coming-from-inside-the-house/">GitHub Security: DNS rebinding explained</a>.</p>
+    </details>
+  </section>
+
+  <section class="section" id="sensitivity">
+    <h2>Sensitivity analysis</h2>
+    <p>Is the Actix win robust, or fragile to weight choices? Three scenarios:</p>
+    <table class="compare">
+      <thead>
+        <tr><th>Scenario</th><th>Weight change</th><th>Outcome</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>"Native feel is everything"</td>
+          <td>theming_native_feel weight → 0.30 (was 0.08); reduce others proportionally</td>
+          <td>Dioxus wins; Actix drops to 3rd or 2nd. <strong>This is the threshold</strong>: if you'd weight native-feel at ~3×+ the current 8%, the choice flips.</td>
+        </tr>
+        <tr>
+          <td>"Hot reload uber alles"</td>
+          <td>hot_reload_quality weight → 0.20</td>
+          <td>Dioxus catches up to Actix but still doesn't pass it. Actix's broad win on too many other dimensions is hard to undo with one criterion.</td>
+        </tr>
+        <tr>
+          <td>"Hiring pool dominates"</td>
+          <td>team_hiring_pool weight → 0.20</td>
+          <td>Actix lead grows (it has the largest hiring pool).</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>Translation: the only way to topple Actix in this comparison is to commit to "the UI must feel like a real native app" as the primary criterion. That's a legitimate product call — if you make it, Dioxus-desktop is your stack.</p>
+  </section>
+
+  <section class="section" id="open-questions">
+    <h2>Open questions for the orchestrator</h2>
+    <details class="accordion" open>
+      <summary>Is "browser tab" UX acceptable to v1.0 product positioning?</summary>
+      <p>This is the load-bearing question. If yes → ship Actix. If no → ship Dioxus-desktop and pay the dev-loop / hiring / mobile-path costs. <strong>Recommendation: yes</strong> — MCP Manager is a developer power-tool, not a consumer app. Sonarr/Radarr/Pi-hole/Jellyfin have validated this UX pattern with developer audiences for a decade.</p>
+    </details>
+    <details class="accordion">
+      <summary>LAN binding: default-on, opt-in, or Tailscale-only?</summary>
+      <p>Localhost-only is the safe default for v1.0. An <code>mcpm gui --bind 0.0.0.0</code> flag unlocks LAN; a future <code>mcpm gui --bind tailscale0</code> binds to the user's Tailscale interface only. Mobile access via Tailscale would be the v1.1+ delight feature.</p>
+    </details>
+    <details class="accordion">
+      <summary>Tray icon: ship in v1.0 or defer to v1.1?</summary>
+      <p>Tray adds ~2MB and a small dependency surface but materially changes the "feels like an app" perception. <strong>Recommendation: ship in v1.0.</strong> A localhost web app without a tray icon is the experience that tipped Sonarr/Radarr towards "weird invisible service" perception in their early years.</p>
+    </details>
+    <details class="accordion">
+      <summary>Future "Tauri shell" upgrade path?</summary>
+      <p>Agent 3 flagged this: if "browser tab" complaints become real, a <em>thin</em> Tauri shell could wrap the same Actix server in a WebView, no UI rewrite needed. The Tauri binary just points its WebView at <code>localhost:NNNN</code> and ships the daemon as a sidecar. Captured in <a href="../../future-features-v1.1.html">future features (v1.1)</a>.</p>
+    </details>
+  </section>
+</main>
+</body>
+</html>

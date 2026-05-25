@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ranking matrix — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+<script type="module" src="../../assets/matrix.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">curious-otter-survey</a> / matrix</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+<main class="container">
+<h1>Interactive ranking matrix</h1>
+<p class="lede">
+Nine host applications scored 0–5 on eight capability criteria. Drag the weight sliders to see the ranking change live. Click any score's evidence link to jump to the supporting citation. Scoring rubric is documented below the matrix.
+</p>
+
+<div data-matrix-src="./data/mcp-config-ranking.json"></div>
+
+<h2>Scoring rubric (0–5)</h2>
+
+<table class="compare">
+  <thead><tr><th>Score</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td>Not supported / not applicable</td></tr>
+    <tr><td>1</td><td>Theoretically possible but undocumented; requires user workarounds</td></tr>
+    <tr><td>2</td><td>Basic, with significant friction (e.g. plaintext only, manual restart only)</td></tr>
+    <tr><td>3</td><td>Works, but with caveats (e.g. only via UI, only via OAuth, only on one OS)</td></tr>
+    <tr><td>4</td><td>First-class documented support</td></tr>
+    <tr><td>5</td><td>Best-in-class; sets the bar for the ecosystem</td></tr>
+  </tbody>
+</table>
+
+<h2>Criterion definitions</h2>
+<div class="card-grid">
+  <article class="card"><h3>Config UX</h3><p>How easy is it to discover, edit, and validate the config? Includes auto-open from settings, JSON-schema validation, error highlighting, and CLI-driven add flows.<cite data-ref="claude-code-mcp"></cite><cite data-ref="claude-desktop-local"></cite></p></article>
+  <article class="card"><h3>Transport coverage</h3><p>Score reflects support for stdio + Streamable HTTP (current spec) and graceful handling of deprecated SSE.<cite data-ref="mcp-spec-transports"></cite></p></article>
+  <article class="card"><h3>Secrets handling</h3><p>Does the host avoid forcing plaintext secrets? OS keychain, secret prompts, encrypted storage are all credited.<cite data-ref="plaintext-keys-blog"></cite><cite data-ref="anthropic-dxt"></cite></p></article>
+  <article class="card"><h3>Lifecycle management</h3><p>Process supervision: restart on crash, graceful shutdown, per-server timeouts, hot reload of config.<cite data-ref="claude-code-mcp"></cite></p></article>
+  <article class="card"><h3>Error visibility</h3><p>Are connection errors, exit codes, and stderr surfaced in-app, or buried in tail-able log files?<cite data-ref="mcp-debugging"></cite></p></article>
+  <article class="card"><h3>Isolation</h3><p>Sandbox flags, capability scoping, network constraints. Currently sparse across the ecosystem.<cite data-ref="vscode-mcp"></cite></p></article>
+  <article class="card"><h3>Multi-server scaling</h3><p>How well does the host run 10+ MCP servers? Includes the documented Claude Desktop crash with 2+ servers and Windsurf's 100-tool cap.<cite data-ref="claude-crash-28211"></cite><cite data-ref="windsurf-mcp"></cite></p></article>
+  <article class="card"><h3>Portability</h3><p>Schema compatibility with other hosts. Hosts using <code>mcpServers</code> get a boost; outliers (<code>context_servers</code>, <code>servers</code>, <code>extensions</code>) get penalized.<cite data-ref="mcp-config-guide"></cite></p></article>
+</div>
+
+<h2>Reading the matrix</h2>
+<p>The default weights prioritize <strong>secrets handling</strong> (0.18), <strong>config UX</strong> (0.16), <strong>lifecycle management</strong> and <strong>transport coverage</strong> (0.14 each). The MCP Manager's job is to lift every host up to the bar set by the best-in-class capability on each row, so the highest-scoring hosts indicate where the bar already is, while the lowest-scoring hosts indicate where the most value can be added by external tooling.</p>
+
+<p>The matrix is descriptive, not predictive — it scores hosts on what they ship today (as of 2026-05-24), not on what their roadmaps suggest. Where evidence is thin (e.g. Goose's HTTP support varies by version, Zed's transport list is partly inferred), the score sits in the middle band (2–3) rather than being inflated.</p>
+
+</main>
+</body>
+</html>

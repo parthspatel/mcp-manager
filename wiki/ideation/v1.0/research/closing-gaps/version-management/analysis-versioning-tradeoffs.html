@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Versioning tradeoffs &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">closing-gaps</a> / <a href="./index.html">version-management</a> / analysis</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Analysis &mdash; versioning tradeoffs</h1>
+
+<p class="lede">
+We have to decide three things, and they couple loosely: <strong>(1)</strong> how do users <em>express</em> the version they want for a server, <strong>(2)</strong> where does the source of truth live &mdash; manifest or lockfile &mdash; and <strong>(3)</strong> how does mcpd handle the MCP-spec-version mismatch axis. This page lays out the options for each, scores them, and feeds the matrix in <a href="./data/versioning-strategy-ranking.json">data/versioning-strategy-ranking.json</a>.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#axisA">Axis A &mdash; server-version pinning options</a></li>
+    <li><a href="#axisB">Axis B &mdash; spec-version negotiation options</a></li>
+    <li><a href="#truth">Manifest vs lockfile as source of truth</a></li>
+    <li><a href="#classify">Classifying changes in <code>mcpm update</code></a></li>
+    <li><a href="#matrix">Weighted matrix &mdash; reproducibility-first ranking</a></li>
+  </ul>
+</nav>
+
+<h2 id="axisA">Axis A &mdash; server-version pinning</h2>
+
+<h3>Option A1 &mdash; Always-latest (no pinning, no lock)</h3>
+<p>
+The "<code>npx -y latest</code>" UX: every <code>mcpm</code> install resolves to whatever the registry says is newest, no record kept. Wins on freshness and lockfile simplicity (no lock at all). <strong>Fatal for v1.0:</strong> our scale target is "a teammate installs the same servers tomorrow and gets the same versions"; this option breaks that hard. It also defeats supply-chain integrity &mdash; if a malicious version 0.4.3 ships overnight, the user installs it without seeing what changed.<cite data-ref="renovate-upgrade-best-practices"></cite>
+</p>
+
+<h3>Option A2 &mdash; Exact pin only, no lock</h3>
+<p>
+Users write <code>github-mcp = "=0.4.2"</code> in the manifest; the manifest is the lock. Mirrors asdf's <code>.tool-versions</code> philosophy.<cite data-ref="asdf-tool-versions"></cite> Maximally reproducible, minimally maintainable: every patch bump is a hand-edit. Loses Cargo-style "let me get the latest 0.4.x without thinking" affordance.<cite data-ref="cargo-specifying-deps"></cite>
+</p>
+
+<h3>Option A3 &mdash; Range in manifest, no lockfile</h3>
+<p>
+What you get if you write <code>github-mcp = "^0.4"</code> in package.json without <code>--save-exact</code> <em>and</em> delete the lock. Two machines installing on different days get different versions. The original ergonomic disaster that prompted lockfiles in the first place.<cite data-ref="npm-package-lock"></cite>
+</p>
+
+<h3>Option A4 &mdash; Range in manifest + lockfile (Cargo/npm pattern)</h3>
+<p>
+Manifest expresses <em>intent</em> (<code>^0.4</code>); lockfile records what was <em>actually installed</em> (<code>0.4.2</code> + sha256). First install resolves and writes the lock; subsequent installs read the lock; <code>mcpm update</code> re-resolves within the manifest constraint and updates the lock with a visible diff. This is the model Cargo<cite data-ref="cargo-toml-vs-lock"></cite>, npm<cite data-ref="npm-package-lock"></cite>, and mise<cite data-ref="mise-lock"></cite> have all converged on independently. Wins everywhere except raw lockfile-simplicity (vs A1/A2).
+</p>
+
+<h3>Option A5 &mdash; Lockfile only (no manifest)</h3>
+<p>
+The asdf model rebuilt around our schema. One file lists every server at an exact version; users edit it directly. Wins on simplicity, loses on the affordance gap (no way to express "any 0.4.x") and on team review (every patch bump looks the same as a major bump in the diff). Rejected for shipping &mdash; but kept as a runtime fallback when a manifest is absent.
+</p>
+
+<h3>Option A6 &mdash; Content-addressed (Nix flake style)</h3>
+<p>
+Record a hash that uniquely identifies the install artifact rather than a name+version pair.<cite data-ref="nix-flakes-wiki"></cite> Maximally rigorous; defeats registry-rename attacks. Overkill for 10s of MCPs and one canonical registry &mdash; the registry's own checksum field plus version coordinate gets us the same property at much lower complexity. We adopt the checksum, not the addressing model.
+</p>
+
+<h2 id="axisB">Axis B &mdash; spec-version negotiation</h2>
+
+<p>
+The MCP wire protocol itself versions on a date string. <strong>Three independent layers</strong> can disagree:
+</p>
+
+<ol>
+  <li><strong>mcpd's own client-facing protocol</strong> (between mcpd and clients like Claude Code / Cursor / Zed). Currently <code>2025-11-25</code>.<cite data-ref="mcp-spec-2025-11-25"></cite></li>
+  <li><strong>The MCP server's protocol</strong> (between mcpd and the server it spawns). Whatever the server author chose to implement when they wrote it &mdash; <code>2025-03-26</code> through <code>2025-11-25</code> are all common.<cite data-ref="mcp-spec-2025-06-18"></cite></li>
+  <li><strong>The MCP Manager codebase's own semver</strong> (mcpm 1.0.0). Independent of spec dates.</li>
+</ol>
+
+<h3>Option B1 &mdash; Strict equality (server-spec must match daemon-spec)</h3>
+<p>
+mcpd refuses to start any server that doesn't advertise the exact same date. <strong>Untenable:</strong> servers don't track spec releases instantly, and we'd lock out 80% of the ecosystem on every spec bump. Violates the MCP lifecycle contract itself, which explicitly allows the server to respond with a different version.<cite data-ref="mcp-version-negotiation"></cite>
+</p>
+
+<h3>Option B2 &mdash; Always upgrade (always advertise newest)</h3>
+<p>
+Daemon always advertises its newest supported version in <code>initialize</code> and accepts whatever the server downgrades to. <em>This is the spec's default contract.</em><cite data-ref="mcp-version-negotiation"></cite> Problem in practice: a server speaking <code>2025-03-26</code> may not understand request shapes our client (Claude Code) generates because <em>the client</em> is on <code>2025-11-25</code>. The "downgrade me to your version" outcome silently amputates features.
+</p>
+
+<h3>Option B3 &mdash; Advertise an allow-list, refuse outside it</h3>
+<p>
+Daemon configures a set of accepted spec dates (default: the current stable plus the previous one). At <code>initialize</code>, mcpd advertises the newest, lets the server pick, and refuses (with a structured error) if the server insists on something outside the allow-list. The client-facing daemon protocol announces "I will speak to servers in {2025-06-18, 2025-11-25}." This composes with the Cargo <code>rust-version</code><cite data-ref="rust-rust-version"></cite> / Python <code>requires-python</code><cite data-ref="python-requires-python"></cite> idiom &mdash; refuse early, fail loudly, surface in the audit log.
+</p>
+
+<h3>Option B4 &mdash; Per-server explicit pin</h3>
+<p>
+Each server entry in the manifest declares the spec version it expects: <code>github-mcp.spec = "2025-06-18"</code>. Mcpd uses that for negotiation. Highest control, highest cognitive load. Reject as default but keep as an override for servers that misbehave with newer specs.
+</p>
+
+<h2 id="truth">Manifest vs lockfile as source of truth</h2>
+
+<table class="compare">
+  <thead><tr><th>Axis</th><th>Manifest is truth</th><th>Lockfile is truth</th><th>Our choice</th></tr></thead>
+  <tbody>
+    <tr><td>Reproducibility</td><td>Weak (range resolves differently over time)</td><td>Strong</td><td>Lockfile</td></tr>
+    <tr><td>Human edit</td><td>Strong (semver expresses intent)</td><td>Weak (don't edit by hand)</td><td>Manifest</td></tr>
+    <tr><td>What <code>mcpm install</code> reads</td><td>If no lock</td><td>If present</td><td>Both, in that priority</td></tr>
+    <tr><td>What <code>mcpm update</code> writes</td><td>Lockfile only<cite data-ref="cargo-update"></cite></td><td>Lockfile only</td><td>Lockfile</td></tr>
+    <tr><td>What <code>mcpm install &lt;new&gt;</code> writes</td><td>Both<cite data-ref="npm-update"></cite></td><td>Lockfile</td><td>Both &mdash; new server appears in both files</td></tr>
+  </tbody>
+</table>
+
+<p>
+Cargo's split &mdash; manifest declares intent, lockfile records reality &mdash; is the right one. We don't relitigate.<cite data-ref="cargo-toml-vs-lock"></cite>
+</p>
+
+<h2 id="classify">Classifying changes in <code>mcpm update</code></h2>
+
+<p>
+We adopt Renovate's vocabulary verbatim<cite data-ref="renovate-update-types"></cite> so users don't have to learn a new mental model. The classifier runs against the registry's published version metadata for each server in the lock:
+</p>
+
+<table class="compare">
+  <thead><tr><th>Class</th><th>Rule</th><th>Default action</th><th>Colored CLI tag</th></tr></thead>
+  <tbody>
+    <tr><td><strong>patch</strong></td><td>z bumped in x.y.z</td><td>Apply on <code>mcpm update</code>, no prompt if <code>--auto-patch</code> is configured</td><td>green <code>[PATCH]</code></td></tr>
+    <tr><td><strong>minor</strong></td><td>y bumped in x.y.z</td><td>Apply, show changelog link if registry provides one</td><td>yellow <code>[MINOR]</code></td></tr>
+    <tr><td><strong>major</strong></td><td>x bumped (or 0.y &rarr; 0.(y+1) per Cargo caret rules<cite data-ref="cargo-specifying-deps"></cite>)</td><td>Refuse without <code>--accept-breaking</code></td><td>red <code>[MAJOR]</code></td></tr>
+    <tr><td><strong>digest</strong></td><td>Same version, different checksum (registry republished)</td><td>Refuse &mdash; this is supply-chain anomaly. Emit <code>audit.security.anomaly</code>.</td><td>red-flash <code>[DIGEST]</code></td></tr>
+    <tr><td><strong>pin</strong></td><td>User pinned an exact version where there was a range</td><td>Apply, update manifest</td><td>blue <code>[PIN]</code></td></tr>
+    <tr><td><strong>lockFileMaintenance</strong></td><td>Re-resolve and re-record without changing any version (refresh checksums, metadata)</td><td>Apply &mdash; this is the equivalent of <code>cargo update</code> with no args after a registry migration</td><td>dim <code>[MAINT]</code></td></tr>
+    <tr><td><strong>spec-bump</strong> (new, MCP-specific)</td><td>Server advertises a newer MCP spec version that's still in our allow-list</td><td>Apply, log; if outside allow-list, refuse with a config-hint message</td><td>purple <code>[SPEC]</code></td></tr>
+  </tbody>
+</table>
+
+<p>
+<strong>Why <code>digest</code> is a refusal, not a warning:</strong> if the registry republishes the same name+version with a different checksum, either a typo-squat is in progress or the publisher's account is compromised. Both are emergencies. The user must explicitly <code>--accept-digest-change</code> with a confirm prompt to proceed.
+</p>
+
+<h2 id="matrix">Weighted matrix &mdash; reproducibility-first ranking</h2>
+
+<p>The full numeric matrix lives in <a href="./data/versioning-strategy-ranking.json"><code>data/versioning-strategy-ranking.json</code></a>. Summary scoring (weights normalized to sum=1.0):</p>
+
+<table class="compare">
+  <thead><tr><th>Strategy</th><th>Weighted score</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr><td>Always-latest (no pinning, no lock)</td><td>2.4 / 5</td><td>Reject &mdash; fails reproducibility, conflict detection, security</td></tr>
+    <tr><td>Exact pin only (= in manifest, no lock)</td><td>3.8 / 5</td><td>Acceptable fallback, but maintenance burden is real</td></tr>
+    <tr><td>Range in manifest, no lock</td><td>2.8 / 5</td><td>Reject &mdash; this is the historical npm-pre-lockfile failure mode</td></tr>
+    <tr><td><strong>Range + lockfile (Cargo/npm)</strong></td><td><strong>4.7 / 5</strong></td><td><strong>Recommended.</strong> Wins or ties on every criterion except raw lockfile simplicity.</td></tr>
+    <tr><td>Lockfile-only (asdf style)</td><td>3.7 / 5</td><td>Honorable mention; we use it as the runtime behavior when manifest is absent</td></tr>
+    <tr><td>Content-addressed (Nix flake)</td><td>4.1 / 5</td><td>Overkill for our scale &mdash; we adopt the checksum but not the addressing</td></tr>
+  </tbody>
+</table>
+
+<section class="section">
+  <h2>Open issues handed to the recommendation page</h2>
+  <ul>
+    <li><strong>One file or two?</strong> Should <code>mcp-manager.lock</code> hold both projection-state (clever-fox-bridge) and server-version state, or should they be siblings? Recommendation page picks: <strong>one file, two top-level tables</strong>, since they are read together and a single audit-log event covers any write.</li>
+    <li><strong>What happens to running servers when <code>mcpm update</code> bumps their version?</strong> Recommendation: bump is staged. The daemon keeps the old server running, spawns the new one, runs the health check, swaps atomically on success, rolls back on failure.</li>
+    <li><strong>Spec-version refusal on install vs runtime.</strong> Recommendation: refuse at install time using the registry's advertised spec versions. Runtime negotiation should never reach the disconnect path if install-time refusal works correctly.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

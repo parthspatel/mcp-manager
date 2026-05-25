@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runtime &amp; supervision — Core architecture · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">steady-bear-foundation</a> / research · runtime</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Research — Async runtime, supervision, and health checks</h1>
+  <p class="lede">
+    The core spends almost all of its life waiting on I/O — pipes from child MCP servers, IPC sockets from clients, network connections to remote servers. This page lays out the Rust primitives that make that practical: async runtime, child-process spawning, signal handling, Windows job objects, health-check strategies, and stdio backpressure.
+  </p>
+
+  <nav class="toc">
+    <h4>On this page</h4>
+    <ul>
+      <li><a href="#runtime-choice">Async runtime choice</a></li>
+      <li><a href="#process-spawning">Spawning child MCP servers</a></li>
+      <li><a href="#unix-reaping">Unix reaping &amp; SIGCHLD</a></li>
+      <li><a href="#windows-jobs">Windows Job Objects</a></li>
+      <li><a href="#process-wrappers">Higher-level wrappers</a></li>
+      <li><a href="#health-checks">Health checks: passive vs active</a></li>
+      <li><a href="#stdio-backpressure">stdio framing &amp; backpressure</a></li>
+      <li><a href="#observability">Tracing &amp; observability</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="runtime-choice">Async runtime choice</h2>
+  <p>
+    The Rust async ecosystem has consolidated around <strong>tokio</strong>; the State-of-Async-Rust 2025 piece notes that <code>async-std</code> was officially discontinued in early 2025, with the team pointing users at <code>smol</code><cite data-ref="corrode-async-runtimes"></cite>. Tokio is documented as more than a runtime — it bundles fs, net, process, and signal modules and is what the major networking crates (Hyper, Axum, Tonic, Reqwest) are written against<cite data-ref="corrode-async-runtimes"></cite>.
+  </p>
+  <p>
+    Critically for MCP Manager: the <strong>official MCP Rust SDK (<code>rmcp</code>)</strong> is built on tokio<cite data-ref="rmcp-rust-sdk"></cite>. Using a non-tokio runtime would require either re-implementing the SDK or running two runtimes in one process — a known source of deadlocks because tokio uses its own <code>AsyncRead</code>/<code>AsyncWrite</code> traits incompatible with the smol/futures ecosystem<cite data-ref="corrode-async-runtimes"></cite>.
+  </p>
+  <p>
+    Tokio's task model is also cheap by design: tasks are "green threads" that need only one allocation and ~64 bytes of memory<cite data-ref="tokio-spawn"></cite>. Tasks have two constraints — <code>'static</code> lifetime and <code>Send</code> — which mostly only matter when sharing state across tasks<cite data-ref="tokio-spawn"></cite>.
+  </p>
+
+  <h3>Comparison</h3>
+  <table class="compare">
+    <thead><tr><th>Runtime</th><th>Status</th><th>Process API</th><th>MCP SDK compat</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>tokio</code></td><td><span class="pill success">Active, dominant</span></td><td>Yes (<code>tokio::process</code>)</td><td>Native (rmcp)</td><td>Full I/O, signal, time, sync; multi-thread or current-thread scheduler.</td></tr>
+      <tr><td><code>smol</code></td><td><span class="pill success">Active, niche</span></td><td>Via <code>async-process</code></td><td>No</td><td>~1000 LOC executor; smol code can run inside tokio, not vice-versa<cite data-ref="corrode-async-runtimes"></cite>.</td></tr>
+      <tr><td><code>async-std</code></td><td><span class="pill danger">Discontinued</span></td><td>Yes</td><td>No</td><td>Officially deprecated in early 2025<cite data-ref="corrode-async-runtimes"></cite>.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="process-spawning">Spawning child MCP servers</h2>
+  <p>
+    <code>tokio::process::Command</code> is the async mirror of <code>std::process::Command</code>: builder-style configuration (<code>arg()</code>, <code>env()</code>, <code>stdin()</code>/<code>stdout()</code>/<code>stderr()</code>, <code>current_dir()</code>) plus async <code>spawn()</code> returning a <code>Child</code>, and <code>status()</code>/<code>output()</code> that <code>await</code> completion<cite data-ref="tokio-process-command"></cite>.
+  </p>
+  <p>
+    The default behavior is the trap most people hit first: when the <code>Child</code> handle is dropped without an explicit <code>wait()</code> or <code>kill()</code>, the child is <em>not</em> killed — the runtime attempts background reaping but offers no guarantees<cite data-ref="tokio-process-command"></cite>. The fix is one of two:
+  </p>
+  <ul>
+    <li><code>kill_on_drop(true)</code> — the simplest hammer; child dies with the handle<cite data-ref="tokio-process-command"></cite>.</li>
+    <li>Always co-own a <code>JoinHandle</code> for a supervisor task that <code>await</code>s <code>child.wait()</code>; the supervisor task is then the structural owner of the child's lifetime.</li>
+  </ul>
+
+  <h3>Sketch — supervisor task per child</h3>
+<pre><code>// each MCP server becomes one supervisor task
+let mut child = tokio::process::Command::new(cfg.command)
+    .args(&amp;cfg.args)
+    .envs(&amp;cfg.env)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true)        // safety net; real exit via wait()
+    .spawn()?;
+
+let pid  = child.id();
+let stdin  = child.stdin.take().unwrap();
+let stdout = child.stdout.take().unwrap();
+let stderr = child.stderr.take().unwrap();
+
+tokio::spawn(async move {
+    // ... pump stdio, watch ping, write to event journal ...
+    let status = child.wait().await?;
+    journal.record(Exit { pid, status, at: Instant::now() }).await;
+});
+</code></pre>
+
+  <h2 id="unix-reaping">Unix reaping &amp; SIGCHLD</h2>
+  <p>
+    On Unix, the kernel sends <code>SIGCHLD</code> to the parent when any child changes state; <code>waitpid()</code> with <code>WNOHANG</code> is the standard way to non-blockingly collect status<cite data-ref="nix-crate-docs"></cite>. A subtlety: <code>SIGCHLD</code> is not queued per-event — multiple deaths can collapse into one signal, so handlers should loop <code>waitpid(WNOHANG)</code> until it returns no more children<cite data-ref="nix-crate-docs"></cite>.
+  </p>
+  <p>
+    For MCP Manager, the typical pattern is:
+  </p>
+  <ol>
+    <li>Tokio internally installs a SIGCHLD handler and exposes async <code>child.wait().await</code> — so most code does not need to touch <code>nix</code> directly<cite data-ref="tokio-process-command"></cite>.</li>
+    <li>The <code>nix</code> crate is still needed for: setting up new session/process group via <code>setsid()</code>/<code>setpgid()</code> so the child detaches from the manager's terminal; mounting Linux namespaces if Stream 2 chooses that sandbox; sending <code>SIGTERM</code> to a process group (<code>killpg(pgid, SIGTERM)</code>) so children of the MCP server die together<cite data-ref="nix-crate-docs"></cite>.</li>
+  </ol>
+  <p>
+    <code>nix::sys::wait::WaitStatus</code> has variants <code>Exited</code>, <code>Signaled</code>, <code>Stopped</code>, <code>StillAlive</code> covering every state transition the manager needs to record<cite data-ref="nix-crate-docs"></cite>.
+  </p>
+
+  <h2 id="windows-jobs">Windows Job Objects</h2>
+  <p>
+    Windows has no concept of process groups; the canonical "kill the whole subtree when the parent dies" mechanism is a <strong>Job Object</strong> with the <code>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</code> flag set. The <code>win32job</code> crate provides a Rust wrapper exposing a <code>Job</code> type with <code>set_extended_limit_info()</code> for the kill-on-close flag<cite data-ref="win32job-crate"></cite>. The same crate underpins higher-level supervisors like <code>process-wrap</code><cite data-ref="process-wrap-crate"></cite>.
+  </p>
+  <p>
+    Cargo upstream uses this exact pattern: a PR added job objects on Windows specifically so that Ctrl-C during a build cleans up all spawned <code>rustc</code> processes rather than leaking them<cite data-ref="process-wrap-crate"></cite>.
+  </p>
+
+  <h2 id="process-wrappers">Higher-level wrappers</h2>
+  <p>
+    Three crates sit above <code>tokio::process</code> and bake in the patterns above:
+  </p>
+  <ul>
+    <li><strong><code>process-wrap</code></strong> — adds Unix process-group + Windows job-object wrappers around <code>tokio::process::Command</code><cite data-ref="process-wrap-crate"></cite>. Used by file-watcher / runner ecosystems (e.g. watchexec).</li>
+    <li><strong><code>tokio-process-tools</code></strong> — streams stdio with configurable backpressure: <code>DropLatestIncomingIfBufferFull</code> (favors not blocking the child) or <code>BlockUntilBufferHasSpace</code> (favors reliability)<cite data-ref="tokio-process-tools"></cite>.</li>
+    <li><strong><code>kill_tree</code></strong> — best-effort cross-platform recursive kill of a process tree, useful for the "user clicked stop" path when servers themselves spawn helpers.</li>
+  </ul>
+
+  <h2 id="health-checks">Health checks: passive vs active</h2>
+  <p>
+    A managed MCP server is "healthy" along two axes the supervisor can observe:
+  </p>
+  <table class="compare">
+    <thead><tr><th>Mode</th><th>What it measures</th><th>Cost</th><th>Failure modes detected</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Passive — process alive</strong></td><td>Whether the OS reports the child PID still running.</td><td>Zero (just <code>child.wait()</code>).</td><td>Crashes, OOM kills, SIGKILL.</td></tr>
+      <tr><td><strong>Passive — pipe open</strong></td><td>EOF on stdout/stderr indicates child closed its end.</td><td>Zero (already reading the pipe).</td><td>Premature exit, deadlocked event loop that closes stdio.</td></tr>
+      <tr><td><strong>Active — MCP <code>ping</code></strong></td><td>Round-trip JSON-RPC <code>{"method":"ping"}</code> with empty result<cite data-ref="mcp-spec-ping"></cite>.</td><td>One request per interval per server.</td><td>Blocked event loops, hung tool handlers, lost connection on remote transports.</td></tr>
+      <tr><td><strong>Active — capability re-list</strong></td><td>Call <code>tools/list</code> and compare to last snapshot.</td><td>Higher; only useful for drift detection.</td><td>Server reloaded its tools but didn't notify.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Per the MCP spec, ping is bidirectional: <em>either</em> party can initiate, the receiver MUST respond promptly with an empty result, and the sender MAY treat timeout as stale<cite data-ref="mcp-spec-ping"></cite>. The spec leaves the timeout duration and frequency up to the implementation; community guidance is 2-5 second timeouts. Implementations SHOULD log ping failures for diagnostics<cite data-ref="mcp-spec-ping"></cite>.
+  </p>
+
+  <h2 id="stdio-backpressure">stdio framing &amp; backpressure</h2>
+  <p>
+    Per the MCP spec, stdio framing is "JSON-RPC messages delimited by newlines, MUST NOT contain embedded newlines"<cite data-ref="mcp-spec-transports"></cite>. <code>tokio::io::BufReader::read_line</code> with a length cap is the obvious primitive on the read side, and <code>tokio::io::AsyncWriteExt::write_all</code> on the write side.
+  </p>
+  <p>
+    Backpressure has two flavors:
+  </p>
+  <ol>
+    <li><strong>From the MCP server to the manager</strong> — if the manager doesn't drain stdout, the server's <code>write()</code> will block on a full pipe. The manager must always drain stdout in a dedicated task; <code>tokio-process-tools</code> formalizes this with a bounded channel between the reader task and the consumer, with a policy switch between drop-latest and block-on-full<cite data-ref="tokio-process-tools"></cite>.</li>
+    <li><strong>From the client(s) to the MCP server</strong> — if a host fires 200 tool calls at once, the manager should fan them out via a bounded <code>mpsc::channel</code> (Tokio's canonical backpressure primitive)<cite data-ref="tokio-mpsc"></cite> rather than queueing them in memory. The community convention is "mpsc for queues, watch for state, broadcast for events"<cite data-ref="tokio-channels-guide"></cite>.</li>
+  </ol>
+
+  <h2 id="observability">Tracing &amp; observability</h2>
+  <p>
+    The <code>tracing</code> crate provides spans, events, and a layered <code>Subscriber</code> model designed for async-heavy code; the <code>#[instrument]</code> attribute auto-wraps functions with spans that record arguments as structured fields<cite data-ref="tracing-crate-docs"></cite>. For export to standard observability backends, <code>tracing-opentelemetry</code> is a tracing <code>Layer</code> that converts spans into OpenTelemetry spans and emits them via OTLP<cite data-ref="tracing-opentelemetry"></cite>.
+  </p>
+  <p>
+    For an MCP Manager this gives the manager a single instrumentation surface that simultaneously:
+  </p>
+  <ul>
+    <li>Drives the internal <em>event journal</em> the clients read (see <a href="./research-core-architecture-state.html">research · state</a>) by adding a custom tracing Layer that funnels events into the journal store.</li>
+    <li>Bridges to <code>log</code>-using crates via <code>tracing-log</code> so e.g. <code>hyper</code>'s logs are captured uniformly<cite data-ref="tracing-crate-docs"></cite>.</li>
+    <li>Exports to Datadog/Honeycomb/SigNoz/etc. for users who want it, without forcing OTLP on those who don't.</li>
+  </ul>
+  <blockquote>
+    Caveat from the docs: holding a span guard across an <code>await</code> point can produce incorrect traces; use <code>#[instrument]</code> or <code>instrument()</code> rather than manual <code>enter()</code>/<code>exit()</code> in async code<cite data-ref="tracing-crate-docs"></cite>.
+  </blockquote>
+</main>
+</body>
+</html>

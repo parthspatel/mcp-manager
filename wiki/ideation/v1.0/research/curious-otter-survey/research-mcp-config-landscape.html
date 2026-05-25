@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Landscape — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">curious-otter-survey</a> / landscape</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+<main class="container">
+<h1>MCP host application landscape</h1>
+<p class="lede">For each host: config file path(s) per OS, what schema key the host expects, what transports it speaks, and who actually owns server lifecycle (the host as supervisor, or some external launcher).</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#summary">At-a-glance summary table</a></li>
+    <li><a href="#claude-desktop">Claude Desktop</a></li>
+    <li><a href="#claude-code">Claude Code (CLI)</a></li>
+    <li><a href="#cursor">Cursor</a></li>
+    <li><a href="#cline">Cline (VS Code extension)</a></li>
+    <li><a href="#continue">Continue</a></li>
+    <li><a href="#zed">Zed</a></li>
+    <li><a href="#windsurf">Windsurf (Cascade)</a></li>
+    <li><a href="#vscode">VS Code (Copilot MCP)</a></li>
+    <li><a href="#goose">Goose</a></li>
+    <li><a href="#tools">mcp-inspector, mcp-cli, uvx/npx-launched</a></li>
+  </ul>
+</nav>
+
+<h2 id="summary">At-a-glance summary</h2>
+
+<table class="compare">
+  <thead>
+    <tr>
+      <th>Host</th>
+      <th>Schema key</th>
+      <th>File format</th>
+      <th>Transports</th>
+      <th>Lifecycle owner</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>Claude Desktop</td><td><code>mcpServers</code></td><td>JSON</td><td>stdio; remote via DXT/connectors</td><td>Host (subprocess)</td></tr>
+    <tr><td>Claude Code (CLI)</td><td><code>mcpServers</code> + <code>type</code></td><td>JSON (<code>.mcp.json</code> / <code>~/.claude.json</code>)</td><td>stdio, http (streamable-http), sse</td><td>Host (subprocess); HTTP auto-reconnect</td></tr>
+    <tr><td>Cursor</td><td><code>mcpServers</code> + <code>type</code></td><td>JSON</td><td>stdio, SSE, Streamable HTTP</td><td>Host</td></tr>
+    <tr><td>Cline</td><td><code>mcpServers</code></td><td>JSON</td><td>stdio, remote HTTP/SSE</td><td>Host; user-toggleable disabled</td></tr>
+    <tr><td>Continue</td><td><code>mcpServers</code> (array)</td><td>YAML or JSON</td><td>stdio, sse, streamable-http</td><td>Host (agent mode only)</td></tr>
+    <tr><td>Zed</td><td><code>context_servers</code></td><td>JSON</td><td>stdio, remote HTTP w/ OAuth</td><td>Host; extensions can supply</td></tr>
+    <tr><td>Windsurf</td><td><code>mcpServers</code></td><td>JSON</td><td>stdio, Streamable HTTP, SSE</td><td>Host (UI-driven)</td></tr>
+    <tr><td>VS Code (Copilot MCP)</td><td><code>servers</code></td><td>JSON (<code>.vscode/mcp.json</code>)</td><td>stdio, http</td><td>Host; <code>sandboxEnabled</code> flag</td></tr>
+    <tr><td>Goose</td><td><code>extensions</code></td><td>YAML</td><td>stdio, sse, builtin</td><td>Host</td></tr>
+    <tr><td>mcp-inspector</td><td>n/a (CLI flags)</td><td>—</td><td>stdio, SSE, Streamable HTTP</td><td>Proxy spawns; user-driven</td></tr>
+  </tbody>
+</table>
+
+<p>The summary above is derived from the host-by-host detail that follows.<cite data-ref="mcp-config-guide"></cite></p>
+
+<h2 id="claude-desktop">Claude Desktop</h2>
+<details class="accordion" open>
+  <summary>Config paths and schema</summary>
+  <p>The desktop application reads a single JSON file at:</p>
+  <ul>
+    <li><strong>macOS</strong>: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></li>
+    <li><strong>Windows</strong>: <code>%APPDATA%\Claude\claude_desktop_config.json</code> (but see the MSIX virtualization bug on the <a href="./research-mcp-config-painpoints.html">pain points page</a>)<cite data-ref="win-msix-bug-26073"></cite></li>
+    <li><strong>Linux</strong>: Claude Desktop is not officially shipped for Linux<cite data-ref="claude-desktop-local"></cite>.</li>
+  </ul>
+  <p>The schema is the canonical <code>mcpServers</code> object with <code>command</code>, <code>args</code>, and optional <code>env</code><cite data-ref="claude-desktop-local"></cite>:</p>
+<pre><code>{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/Desktop"]
+    }
+  }
+}</code></pre>
+</details>
+
+<div class="card-grid">
+  <article class="card"><h3>Transports</h3><p>Local stdio only for user-configured servers; remote servers arrive via Anthropic's <em>connectors</em> and <em>Desktop Extensions</em> (.mcpb) packaging.<cite data-ref="anthropic-dxt"></cite></p></article>
+  <article class="card"><h3>Lifecycle owner</h3><p>The host. Servers are spawned at app start; only a full app restart picks up config changes.<cite data-ref="mcp-debugging"></cite></p></article>
+  <article class="card"><h3>Notable extensions</h3><p>Adds <code>developer_settings.json</code> with <code>allowDevTools</code> for Chrome DevTools inspection.<cite data-ref="mcp-debugging"></cite></p></article>
+</div>
+
+<h2 id="claude-code">Claude Code (CLI)</h2>
+<p>Claude Code stores configuration across three scopes — <em>local</em>, <em>project</em>, and <em>user</em> — and is unusual in that the canonical way to add servers is the CLI, not a hand-edited file<cite data-ref="claude-code-mcp"></cite>:</p>
+
+<table class="compare">
+  <thead><tr><th>Scope</th><th>Loads in</th><th>Shared</th><th>Stored in</th></tr></thead>
+  <tbody>
+    <tr><td>Local (default)</td><td>Current project only</td><td>No</td><td><code>~/.claude.json</code></td></tr>
+    <tr><td>Project</td><td>Current project only</td><td>Yes (via VCS)</td><td><code>.mcp.json</code> in project root</td></tr>
+    <tr><td>User</td><td>All projects</td><td>No</td><td><code>~/.claude.json</code></td></tr>
+  </tbody>
+</table>
+
+<details class="accordion">
+  <summary>CLI command examples</summary>
+<pre><code># Stdio server
+claude mcp add --transport stdio --env AIRTABLE_API_KEY=YOUR_KEY airtable \
+  -- npx -y airtable-mcp-server
+
+# Streamable HTTP server
+claude mcp add --transport http notion https://mcp.notion.com/mcp
+
+# Header auth (Bearer)
+claude mcp add --transport http secure-api https://api.example.com/mcp \
+  --header "Authorization: Bearer your-token"</code></pre>
+</details>
+
+<p>Transports: <code>stdio</code>, <code>http</code> (the spec's <em>streamable-http</em> — both names are accepted by <code>type</code>), and the deprecated <code>sse</code><cite data-ref="claude-code-mcp"></cite>. The host owns lifecycle: stdio servers are not auto-reconnected, while HTTP/SSE servers reconnect with exponential backoff (up to five attempts).<cite data-ref="claude-code-mcp"></cite> Environment variable expansion (<code>${VAR}</code>, <code>${VAR:-default}</code>) is supported in <code>command</code>, <code>args</code>, <code>env</code>, <code>url</code>, and <code>headers</code>.<cite data-ref="claude-code-mcp"></cite></p>
+
+<h2 id="cursor">Cursor</h2>
+<details class="accordion" open>
+  <summary>Config paths</summary>
+  <ul>
+    <li><strong>Global</strong>: <code>~/.cursor/mcp.json</code></li>
+    <li><strong>Project</strong>: <code>.cursor/mcp.json</code> in the repo root (project-level wins on conflict)</li>
+  </ul>
+  <p>Source: Cursor MCP docs.<cite data-ref="cursor-mcp"></cite></p>
+</details>
+
+<p>Schema is <code>mcpServers</code> with an explicit <code>type</code> field (<code>stdio</code> or remote), <code>url</code>, <code>headers</code>, and <code>auth</code> (OAuth) for remote servers, plus <code>envFile</code> for stdio. Variable expansion supports <code>${env:NAME}</code>, <code>${userHome}</code>, <code>${workspaceFolder}</code>, and others.<cite data-ref="cursor-mcp"></cite></p>
+
+<p>Transports: stdio, SSE, and Streamable HTTP. Lifecycle: managed by Cursor; full Cursor quit-and-relaunch is required to pick up new servers.<cite data-ref="cursor-mcp"></cite></p>
+
+<h2 id="cline">Cline (VS Code extension)</h2>
+<details class="accordion" open>
+  <summary>Config paths</summary>
+  <ul>
+    <li><strong>macOS</strong>: <code>~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json</code></li>
+    <li><strong>Linux</strong>: <code>~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json</code></li>
+    <li><strong>Windows</strong>: <code>%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json</code></li>
+  </ul>
+  <p>Source: Cline docs.<cite data-ref="cline-mcp"></cite></p>
+</details>
+
+<p>The schema mirrors Claude Desktop's <code>mcpServers</code> but adds two operationally important fields: <code>disabled</code> (toggle without removing) and <code>autoApprove</code> (list of tools that bypass the per-call approval prompt).<cite data-ref="cline-mcp"></cite> Transports: stdio plus remote HTTP/SSE. Lifecycle managed by the extension; the MCP settings panel offers explicit restart and timeout controls.<cite data-ref="cline-mcp"></cite></p>
+
+<h2 id="continue">Continue</h2>
+<p>Continue accepts both YAML and JSON. Local configuration lives at <code>.continue/mcpServers/</code> in the workspace (one file per server) and the global config at <code>~/.continue/config.yaml</code> on macOS/Linux or <code>%USERPROFILE%\.continue\config.yaml</code> on Windows.<cite data-ref="continue-mcp"></cite> The published schema places <code>mcpServers</code> as an <em>array</em> (not an object) with a required <code>name</code> per entry — a portability hazard for users copying from Claude Desktop or Cursor.<cite data-ref="mcp-config-guide"></cite></p>
+
+<p>Continue supports all three transports (<code>stdio</code>, <code>sse</code>, <code>streamable-http</code>) and offers first-class secret syntax <code>${{ secrets.KEY_NAME }}</code> resolved either against the local environment or Continue's hosted Mission Control.<cite data-ref="continue-mcp"></cite> MCP servers are only active in <em>agent mode</em>; this is the only host that gates MCP behind a mode switch.<cite data-ref="continue-mcp"></cite></p>
+
+<h2 id="zed">Zed</h2>
+<details class="accordion">
+  <summary>Config paths</summary>
+  <ul>
+    <li><strong>macOS / Linux</strong>: <code>~/.config/zed/settings.json</code></li>
+    <li><strong>Windows</strong>: <code>%APPDATA%\Zed\settings.json</code></li>
+    <li><strong>Project-local</strong>: <code>.zed/settings.json</code> in the repo root</li>
+  </ul>
+</details>
+
+<p>Zed is the outlier on the schema key: it uses <code>context_servers</code>, not <code>mcpServers</code>.<cite data-ref="zed-mcp"></cite> Local servers use <code>command</code>/<code>args</code>/<code>env</code>; remote servers use <code>url</code>/<code>headers</code> and trigger Zed's built-in OAuth flow if no header is set.<cite data-ref="zed-mcp"></cite> Zed also has a dedicated <em>MCP Server Extensions</em> marketplace that wraps server installations as installable Zed extensions, so the host can also be the package manager.<cite data-ref="zed-mcp"></cite></p>
+
+<h2 id="windsurf">Windsurf (Cascade)</h2>
+<p>Single config path on all OSes: <code>~/.codeium/windsurf/mcp_config.json</code> (must be created by the user; not generated on first launch).<cite data-ref="windsurf-mcp"></cite> Schema is <code>mcpServers</code> with the usual <code>command</code>/<code>args</code>/<code>env</code> for stdio, and <code>serverUrl</code> or <code>url</code> + <code>headers</code> for remote. Variable interpolation supports both <code>${env:VAR_NAME}</code> and <code>${file:/path/to/file}</code> (file contents inlined).<cite data-ref="windsurf-mcp"></cite></p>
+
+<p>Lifecycle owner: Windsurf itself, via the Cascade UI. Windsurf imposes a hard cap of 100 total tools across all configured servers — a hint at the scale of multi-server installations users are reaching.<cite data-ref="windsurf-mcp"></cite></p>
+
+<h2 id="vscode">VS Code (Copilot MCP)</h2>
+<p>VS Code reads <code>mcp.json</code> from two locations: workspace (<code>.vscode/mcp.json</code>) or the user profile (opened via the <em>MCP: Open User Configuration</em> command).<cite data-ref="vscode-mcp"></cite> The schema key is <code>"servers"</code> (not <code>mcpServers</code>) — another portability hazard.<cite data-ref="vscode-mcp"></cite> Fields include <code>type</code> (stdio/http), <code>command</code>, <code>args</code>, <code>url</code>, <code>headers</code>, <code>sandboxEnabled</code>, and <code>inputs</code> for prompting users for secret values at install time.<cite data-ref="vscode-mcp-reference"></cite></p>
+
+<p>VS Code's <code>inputs</code> and <code>sandboxEnabled</code> features make it the most security-aware host in the survey; it explicitly warns against hardcoded secrets.<cite data-ref="vscode-mcp"></cite></p>
+
+<h2 id="goose">Goose</h2>
+<p>Goose, built by Block, configures MCP servers as <em>extensions</em> in a YAML file at <code>~/.config/goose/config.yaml</code> on Linux/macOS.<cite data-ref="goose-extensions"></cite> Each entry declares a <code>type</code> of <code>stdio</code>, <code>sse</code>, or <code>builtin</code>; the latter denotes Goose's bundled extensions, which require no external command.<cite data-ref="goose-extensions"></cite></p>
+
+<details class="accordion">
+  <summary>Example Goose YAML</summary>
+<pre><code>extensions:
+  developer:
+    name: Developer
+    type: builtin
+    enabled: true
+  fetch:
+    name: Fetch
+    type: stdio
+    cmd: uvx
+    args: ["mcp-server-fetch"]
+    enabled: true
+    timeout: 30
+    envs: {}</code></pre>
+</details>
+
+<h2 id="tools">mcp-inspector, mcp-cli, uvx/npx-launched</h2>
+<div class="card-grid">
+  <article class="card">
+    <h3>MCP Inspector</h3>
+    <p>Not a host: a developer tool. Spawns a browser UI on port <code>6274</code> and a proxy on port <code>6277</code>. Supports stdio, SSE, and Streamable HTTP; the proxy spawns local stdio processes and bridges to remote endpoints. Has both UI and CLI modes.<cite data-ref="mcp-inspector-repo"></cite><cite data-ref="mcp-inspector-docs"></cite></p>
+  </article>
+  <article class="card">
+    <h3>Smithery CLI</h3>
+    <p>A registry installer and cross-host manager. Pattern: <code>smithery mcp add &lt;url&gt; --client claude|cursor</code>; it edits the right host config file for you. Closest existing analogue to an MCP Manager, but limited to registry-listed servers.<cite data-ref="smithery-cli"></cite></p>
+  </article>
+  <article class="card">
+    <h3>uvx- and npx-launched servers</h3>
+    <p>Not configuration formats themselves — these are the de facto distribution mechanisms. Most MCP servers are published as PyPI packages run via <code>uvx</code>, or npm packages run via <code>npx -y &lt;pkg&gt;</code>, with the host filling in command/args. Implies the host must have a Node/Python runtime in PATH — a frequent source of failure (see <a href="./research-mcp-config-painpoints.html">pain points</a>).<cite data-ref="nish-path-issue"></cite></p>
+  </article>
+</div>
+
+</main>
+</body>
+</html>

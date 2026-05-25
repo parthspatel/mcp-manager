@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Versioning prior art &mdash; MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+<script type="module" src="../../../assets/core.js"></script>
+<script type="module" src="../../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation &middot; v1.0</span></div>
+<div class="crumbs"><a href="../../index.html">v1.0</a> / <a href="../">closing-gaps</a> / <a href="./index.html">version-management</a> / prior art</div>
+<button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Prior art &mdash; package version pinning &amp; protocol negotiation</h1>
+
+<p class="lede">
+Two adjacent ecosystems already solved each half of our problem. Package managers (Cargo, npm, pip-tools/uv, mise, asdf, Nix flakes, Renovate) ship dependency pinning that has been beaten into shape over a decade. Protocol designers (HTTP, gRPC, Postgres wire, MCP itself) ship version negotiation strategies that survive multi-decade ABI churn. This page enumerates the patterns; the analysis page picks between them; the recommendation page binds the winners to the <code>mcpm</code> CLI surface.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#mcp-spec">MCP spec versioning &mdash; current state (2026-05)</a></li>
+    <li><a href="#cargo">Cargo &mdash; range + lockfile + checksums</a></li>
+    <li><a href="#npm">npm &mdash; package-lock vs shrinkwrap</a></li>
+    <li><a href="#pip">pip-tools / uv &mdash; .in / .txt compile pattern</a></li>
+    <li><a href="#mise">mise &mdash; opt-in lock + strict mode</a></li>
+    <li><a href="#asdf">asdf &mdash; manifest-as-lock</a></li>
+    <li><a href="#nix">Nix flakes &mdash; content-addressed lock</a></li>
+    <li><a href="#renovate">Renovate &mdash; update classification</a></li>
+    <li><a href="#proto">Protocol negotiation &mdash; HTTP, gRPC, Postgres</a></li>
+  </ul>
+</nav>
+
+<h2 id="mcp-spec">MCP spec versioning &mdash; current state (2026-05)</h2>
+
+<details class="accordion" open>
+  <summary>Versions in the wild and the negotiation contract</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Version naming</strong></td><td>Date strings <code>YYYY-MM-DD</code>, not semver. A new spec date is published roughly twice a year.<cite data-ref="mcp-spec-2025-11-25-changelog"></cite></td></tr>
+      <tr><td><strong>Current stable</strong></td><td><code>2025-11-25</code> &mdash; the one-year anniversary release. Headline features: experimental Tasks primitive, Sampling-with-Tools, formal Extensions framework, OAuth 2.1 + OpenID Connect authorization, standardized tool-name format (SEP-986). Described as "backward compatible" by maintainers.<cite data-ref="mcp-spec-2025-11-25"></cite></td></tr>
+      <tr><td><strong>Still encountered</strong></td><td><code>2025-06-18</code><cite data-ref="mcp-spec-2025-06-18"></cite> and <code>2025-03-26</code><cite data-ref="mcp-spec-2025-03-26"></cite>. Many servers haven't bumped.</td></tr>
+      <tr><td><strong>Next</strong></td><td><code>2026-07-28</code> release candidate &mdash; described as "the largest revision since launch": stateless protocol core, Extensions formalised, Tasks promoted, MCP Apps, OAuth/OIDC tightening, a formal deprecation policy.<cite data-ref="mcp-spec-2026-07-28-rc"></cite> Tier-1 SDKs have a ten-week window to ship support.<cite data-ref="mcp-2026-roadmap"></cite></td></tr>
+      <tr><td><strong>Negotiation rule (lifecycle)</strong></td><td>Client sends the latest <code>protocolVersion</code> it supports in <code>initialize</code>. Server responds with the same version, or its preferred alternative. If the client cannot speak the server's response it <strong>SHOULD disconnect</strong>.<cite data-ref="mcp-version-negotiation"></cite></td></tr>
+      <tr><td><strong>Wire-level subtlety</strong></td><td>Streamable HTTP requires the negotiated version to be re-emitted in the <code>MCP-Protocol-Version</code> request header on every subsequent call. A known bug in <code>@ai-sdk/mcp</code> where the header did not downgrade after negotiation broke Figma Dev Mode MCP integration<cite data-ref="mcp-protocol-version-header-bug"></cite> &mdash; a real-world reminder that negotiation is per-session state, not a global toggle.</td></tr>
+      <tr><td><strong>SDK release cadence</strong></td><td>Each SDK is independently versioned (semver) and advertises its supported spec dates. TypeScript SDK<cite data-ref="mcp-typescript-sdk-releases"></cite> typically ships within days; Python SDK<cite data-ref="mcp-python-sdk-releases"></cite> within ~1&ndash;2 weeks; the Rust SDK we depend on<cite data-ref="mcp-rust-sdk"></cite> sits in the same band.</td></tr>
+      <tr><td><strong>Registry</strong></td><td>The official MCP Registry<cite data-ref="mcp-registry"></cite> launched 2025-09-08<cite data-ref="mcp-registry-launch"></cite>. Metadata only &mdash; points to npm / PyPI / Docker. Each publish is tied to one server-version, with reverse-DNS naming (<code>io.github.user/server</code>). Useful for us: the registry already publishes a "supported spec versions" field per server.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="cargo">Cargo &mdash; range in manifest, exact in lockfile, checksums for integrity</h2>
+
+<details class="accordion" open>
+  <summary>The model we will most closely mirror</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Manifest specifiers</strong></td><td>Caret (<code>^1.2.3</code>), tilde (<code>~1.2.3</code>), equals (<code>=1.2.3</code>), and the default (<code>"1.2.3"</code> is sugar for <code>^1.2.3</code>).<cite data-ref="cargo-specifying-deps"></cite> Caret allows any version compatible by the leftmost non-zero digit; tilde restricts to patch within the stated minor.</td></tr>
+      <tr><td><strong>Lockfile schema</strong></td><td>TOML. <code>[[package]]</code> array-of-tables with <code>name</code>, <code>version</code>, <code>source = "registry+https://..."</code> or <code>git+https://...#&lt;sha&gt;</code>, and <code>checksum</code>.<cite data-ref="cargo-lock-deepwiki"></cite></td></tr>
+      <tr><td><strong>Commit policy</strong></td><td>Cargo.lock is committed for end-products (binaries, applications), <em>not</em> for libraries.<cite data-ref="cargo-toml-vs-lock"></cite> For us this maps cleanly: a per-user projection is the "application", a shared per-project file is also the "application" &mdash; both get the lock committed (or kept in <code>~/.config/</code>).</td></tr>
+      <tr><td><strong>Update UX</strong></td><td><code>cargo update</code> bumps within the manifest constraint. <code>cargo update --precise 1.4.6 regex</code> pins exactly. <code>cargo update --dry-run</code> shows the proposed diff.<cite data-ref="cargo-update"></cite> RFC 3493 refined <code>--precise</code> for pre-release versions.<cite data-ref="cargo-rfc-3493"></cite></td></tr>
+      <tr><td><strong>Resolution</strong></td><td>SAT-style resolver picks the newest version satisfying every constraint.<cite data-ref="cargo-resolver"></cite> Overkill for 10s-of-MCPs scale, but the algorithmic pattern is well-understood.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="npm">npm &mdash; package-lock.json + shrinkwrap</h2>
+
+<details class="accordion">
+  <summary>Two lockfile flavours, and what we learn from each</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>package-lock.json</strong></td><td>Auto-generated, committed by convention. Records the full resolved tree with versions, resolved URLs, integrity hashes (SRI), and dev/prod scopes.<cite data-ref="npm-package-lock"></cite></td></tr>
+      <tr><td><strong>npm-shrinkwrap.json</strong></td><td>A package-lock published with the package itself &mdash; used by libraries that want to ship a frozen dependency tree to downstream consumers.<cite data-ref="npm-shrinkwrap"></cite> Rare in practice.</td></tr>
+      <tr><td><strong>Update UX</strong></td><td><code>npm update [pkg]</code> bumps within the semver range in <code>package.json</code>. <code>npm outdated</code> previews. The lockfile is updated in place.<cite data-ref="npm-update"></cite></td></tr>
+      <tr><td><strong>Lesson for us</strong></td><td>Integrity hashes (SRI) belong in the lockfile, not the manifest. The manifest stays human-edited; the lock is the machine's source of truth.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="pip">pip-tools / uv &mdash; the <code>.in</code> / <code>.txt</code> compile pattern</h2>
+
+<details class="accordion">
+  <summary>Loose constraints compile into pinned outputs</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Pattern</strong></td><td><code>requirements.in</code> (or <code>pyproject.toml</code>) carries ranges; <code>pip-compile</code> resolves them and emits <code>requirements.txt</code> with exact pins plus hashes.<cite data-ref="pip-tools"></cite></td></tr>
+      <tr><td><strong>uv as drop-in</strong></td><td><code>uv pip compile</code> is a faster, equivalent re-implementation; supports platform-independent locks and reproducible resolution.<cite data-ref="uv-pip-compile"></cite></td></tr>
+      <tr><td><strong>Reproducibility</strong></td><td><code>pip-compile</code> reads any existing output file and prefers the pinned versions there &mdash; so the lock is stable as long as constraints are satisfiable.<cite data-ref="pip-tools"></cite></td></tr>
+      <tr><td><strong>Lesson for us</strong></td><td>"Compile" is a useful verb. Our <code>mcpm install</code> is conceptually a compile step: read manifest, resolve, write lock. <code>mcpm update</code> is recompile-with-allow-bumps.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="mise">mise &mdash; opt-in lock with strict mode</h2>
+
+<details class="accordion">
+  <summary>Best-in-class for a tool that's a sibling problem to ours</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>Manifest</strong></td><td><code>mise.toml</code> with loose specifiers like <code>node = "22"</code> or <code>node = "latest"</code>. Idiomatic mise discourages over-pinning at the manifest level.<cite data-ref="mise-lockfile-reproducibility"></cite></td></tr>
+      <tr><td><strong>Lockfile</strong></td><td><code>mise.lock</code> records exact version + per-platform download URL + checksum. Opt-in via <code>mise lock</code>; not generated automatically.<cite data-ref="mise-lock"></cite></td></tr>
+      <tr><td><strong>Strict mode</strong></td><td>When enabled, mise refuses to call upstream APIs &mdash; if a URL/checksum for the current platform is missing from the lock, install fails. Maximally reproducible.<cite data-ref="mise-lock"></cite></td></tr>
+      <tr><td><strong>Update UX</strong></td><td><code>mise upgrade [tool]</code> bumps within the manifest specifier; supports <code>--dry-run</code>.<cite data-ref="mise-upgrade"></cite></td></tr>
+      <tr><td><strong>Lesson for us</strong></td><td>The opt-in posture is wrong for us &mdash; we want a lock by default since the user has to trust unknown servers. But the strict-mode escape hatch is gold for security-conscious teams.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="asdf">asdf &mdash; manifest-as-lock</h2>
+
+<details class="accordion">
+  <summary>One-file model: minimal but limited</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>File</strong></td><td><code>.tool-versions</code> &mdash; one tool per line, exact version required (no caret, no "latest"). The manifest <em>is</em> the lock.<cite data-ref="asdf-tool-versions"></cite></td></tr>
+      <tr><td><strong>Plugins</strong></td><td>Not versioned. asdf trusts the plugin author at install time.<cite data-ref="mise-vs-asdf"></cite></td></tr>
+      <tr><td><strong>Lesson for us</strong></td><td>The simplicity is alluring at this scale (10s of MCPs). But it forfeits the "loose in manifest, exact in lock" affordance &mdash; the developer who wrote <code>github-mcp 0.4.2</code> in week 1 cannot later say "give me the latest 0.4.x" without manually editing the version. Reject.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="nix">Nix flakes &mdash; content-addressed lock</h2>
+
+<details class="accordion">
+  <summary>The most rigorous reproducibility model in the wild</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>flake.lock</strong></td><td>JSON; one node per input; each node carries a <code>narHash</code> (content hash of the Nix store path) plus locked input parameters (rev, ref, lastModified).<cite data-ref="nix-flakes-wiki"></cite></td></tr>
+      <tr><td><strong>narHash</strong></td><td>Content-addressed: the lockfile is invariant under URL changes, mirror redirects, or registry restructuring &mdash; if the bytes are the same, the hash matches.<cite data-ref="nix-flakes-wiki"></cite></td></tr>
+      <tr><td><strong>Update UX</strong></td><td><code>nix flake update</code> bumps all inputs; <code>nix flake lock --update-input nixpkgs</code> targets one.<cite data-ref="nix-flake-lock"></cite></td></tr>
+      <tr><td><strong>Lesson for us</strong></td><td>Content-addressing is overkill for a single registry where every artifact is already addressed by <code>name@version</code> + checksum. But the principle &mdash; the lockfile records enough to fetch the byte-identical thing &mdash; carries.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="renovate">Renovate &mdash; the update classification vocabulary</h2>
+
+<details class="accordion" open>
+  <summary>The taxonomy we will adopt verbatim for <code>mcpm update</code> output</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>matchUpdateTypes enum</strong></td><td><code>major</code>, <code>minor</code>, <code>patch</code>, <code>pin</code>, <code>pinDigest</code>, <code>digest</code>, <code>lockFileMaintenance</code>, <code>rollback</code>, <code>bump</code>, <code>replacement</code>.<cite data-ref="renovate-update-types"></cite></td></tr>
+      <tr><td><strong>Best practice</strong></td><td>Auto-merge patch + digest; manual review for major. Group everything-non-major into one PR by default.<cite data-ref="renovate-upgrade-best-practices"></cite></td></tr>
+      <tr><td><strong>packageRules</strong></td><td>Match on update type + dependency name + group; act with automerge / labels / schedule.<cite data-ref="renovate-config-options"></cite> The example library has hundreds of patterns we can crib.<cite data-ref="renovate-package-rules-guide"></cite></td></tr>
+      <tr><td><strong>Lesson for us</strong></td><td>Don't invent vocabulary. Renovate's enum is what users already know &mdash; we expose it in <code>mcpm update</code> output so the user can pattern-match against their existing intuition.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<h2 id="proto">Protocol negotiation &mdash; HTTP, gRPC, Postgres</h2>
+
+<details class="accordion">
+  <summary>Three distinct philosophies; we pick the one that matches MCP's reality</summary>
+  <table class="compare">
+    <tbody>
+      <tr><td><strong>HTTP Upgrade (RFC 9110 §7.8)</strong></td><td>Client lists acceptable protocols in <code>Upgrade:</code> header; server selects one and returns 101 Switching Protocols, or proceeds in the original.<cite data-ref="http-upgrade-rfc9110"></cite> <em>Multi-version advertise, server picks.</em></td></tr>
+      <tr><td><strong>gRPC versioning</strong></td><td>No runtime negotiation. Backward and forward compatibility are achieved through Protobuf field-number stability; breaking changes require a new service path.<cite data-ref="grpc-version-policy"></cite> <em>The contract <strong>is</strong> compatibility.</em></td></tr>
+      <tr><td><strong>Postgres FE/BE protocol</strong></td><td>Client sends a major.minor request; server responds with the highest version it supports up to that. <code>NegotiateProtocolVersion</code> message lists supported optional params explicitly &mdash; structured rather than free-form.<cite data-ref="postgres-protocol-versioning"></cite></td></tr>
+      <tr><td><strong>MCP's choice</strong></td><td>MCP follows the HTTP Upgrade philosophy: client advertises its preferred, server may downgrade.<cite data-ref="mcp-version-negotiation"></cite> No SAT solving, no min/max range &mdash; just "do we share a supported version?" If not, disconnect.</td></tr>
+      <tr><td><strong>Toolchain version advertisement</strong></td><td>Adjacent prior art for advertising tooling-level version compatibility: Cargo's <code>rust-version</code> field<cite data-ref="rust-rust-version"></cite>, Python's <code>requires-python</code><cite data-ref="python-requires-python"></cite>. Both let a package say "I won't run unless you're &geq; X" without negotiation &mdash; just a refusal. We mirror this: an MCP server's registry entry declares the spec versions it speaks, and mcpd refuses to install one we cannot speak.</td></tr>
+      <tr><td><strong>Deprecation advertisement</strong></td><td>RFC 8594 standardises a <code>Deprecation:</code> response header with a sunset date.<cite data-ref="deprecation-rfc8594"></cite> Useful when our daemon supports an old MCP version but wants to nudge users off it before the next stable release rolls compatibility forward.</td></tr>
+      <tr><td><strong>Field reports</strong></td><td>IBM's <code>mcp-context-forge</code> filed a feature request for "Protocol Version Negotiation &amp; Backward Compatibility"<cite data-ref="mcp-ibm-version-negotiation-feature"></cite> &mdash; confirming a production gateway still treats this as an open problem; we have an opportunity to be opinionated about it.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+<section class="section">
+  <h2>What carries forward to the analysis &amp; recommendation</h2>
+  <ul>
+    <li>Cargo's "range in manifest, exact in lock with checksums" is the strongest match for our scale and audience.</li>
+    <li>uv's "compile" metaphor lines up with how we should describe <code>mcpm install</code> internally.</li>
+    <li>mise's strict-mode flag is the right escape hatch for teams who want maximal supply-chain rigor.</li>
+    <li>Renovate's classification enum is what users will see in <code>mcpm update</code> output. We don't invent new words.</li>
+    <li>HTTP Upgrade-style "advertise + downgrade" matches the MCP spec's own contract; we honor it and add a registry-level "advertised spec versions" field for server install-time refusal.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

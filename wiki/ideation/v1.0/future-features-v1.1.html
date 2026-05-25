@@ -53,7 +53,7 @@
     <ul>
       <li><strong>Scope reduction.</strong> Cutting the GUI removes Actix-Web, Askama, HTMX/Alpine, the HTTP/SSE bridge, the DNS-rebinding mitigations, the tray-icon helper, and the entire "browser tab vs native window" UX-tax debate from v1.0. mcpd simplifies to a tokio daemon with JSON-RPC over UDS.</li>
       <li><strong>The TUI is sufficient for v1.0's target user.</strong> Power developers running a few dozen MCP servers don't need a dashboard; they need `mcpm` + a terminal log tail. The GUI was the surface most likely to delay shipping.</li>
-      <li><strong>Pre-decided architecture preserved.</strong> The <a href="./ui-shootout/">GUI shootout</a> remains as research — whenever the GUI ships, Actix + Askama (served from inside mcpd) is the standing recommendation.</li>
+      <li><strong>Pre-decided architecture preserved.</strong> The <a href="./research/ui-shootout/">GUI shootout</a> remains as research — whenever the GUI ships, Actix + Askama (served from inside mcpd) is the standing recommendation.</li>
     </ul>
 
     <h3>v1.x spec (pre-decided in 2026-05-24 shootout)</h3>
@@ -73,7 +73,7 @@
       <li>Don't bake CLI-only assumptions into mcp-core (e.g. terminal-only progress reporting). The TUI already enforces this separation.</li>
     </ul>
 
-    <p style="color:var(--fg-faint);font-size:0.85rem">Source of deferral: 2026-05-24 product lockdown. Research preserved at <a href="./ui-shootout/">ui-shootout/</a> (3 stacks evaluated; Actix+Askama recommended).</p>
+    <p style="color:var(--fg-faint);font-size:0.85rem">Source of deferral: 2026-05-24 product lockdown. Research preserved at <a href="./research/ui-shootout/">ui-shootout/</a> (3 stacks evaluated; Actix+Askama recommended).</p>
   </section>
 
   <section class="section" id="secrets-advanced">
@@ -172,7 +172,7 @@ mcpm toolchain list --remote</code></pre>
 
     <p style="color:var(--fg-faint);font-size:0.85rem">
       Source of deferral: 2026-05-24 product lockdown.
-      Originally flagged in <a href="./clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge / S6</a>.
+      Originally flagged in <a href="./research/clever-fox-bridge/recommendation-toolchain-summary.html">clever-fox-bridge / S6</a>.
     </p>
   </section>
 
@@ -205,7 +205,7 @@ mcpm toolchain list --remote</code></pre>
     </ul>
 
     <p style="color:var(--fg-faint);font-size:0.85rem">
-      Source: <a href="./ui-shootout/index.html#open-questions">ui-shootout open questions</a>.
+      Source: <a href="./research/ui-shootout/index.html#open-questions">ui-shootout open questions</a>.
       Flagged by the actix-tera agent (open question #5) as a likely v1.1 ask.
     </p>
   </section>
@@ -221,7 +221,7 @@ mcpm toolchain list --remote</code></pre>
         <tr>
           <td>GUI (Actix + Askama inside mcpd)</td>
           <td>v1.0 has shipped and TUI usability feedback indicates a real gap (e.g. user complaints about server-list browsing, log-tail multiplexing, or remote/mobile access)</td>
-          <td>~6–8 weeks: Actix server inside mcpd + Askama templates + HTMX wiring + tray-icon helper + PWA manifest. Architecture pre-decided in <a href="./ui-shootout/">ui-shootout</a>.</td>
+          <td>~6–8 weeks: Actix server inside mcpd + Askama templates + HTMX wiring + tray-icon helper + PWA manifest. Architecture pre-decided in <a href="./research/ui-shootout/">ui-shootout</a>.</td>
         </tr>
         <tr>
           <td>Secrets: rotation + vault providers</td>

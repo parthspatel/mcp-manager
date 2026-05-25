@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Client tooling recommendation — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">nimble-raven-toolkit</a> / recommendation</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+
+<main class="container">
+<h1>Recommendation — Client tooling stack for the MCP Manager</h1>
+
+<p class="lede">
+This is the only page in the stream where opinions live. The argument: pick the boring, well-trodden default for the CLI and TUI; treat the GUI as a place where the choice is genuinely live and where Tauri 2 is the safest landing pad while we learn what users actually need.
+</p>
+
+<div class="recommendation-callout">
+<h3>TL;DR</h3>
+<ul>
+  <li><strong>CLI:</strong> <code>clap</code> (derive feature) + <code>owo-colors</code> + <code>indicatif</code> + <code>tabled</code> + <code>clap_complete</code>. <span class="pill success">Near-default</span></li>
+  <li><strong>TUI:</strong> <code>ratatui</code> + <code>crossterm</code>, components pattern by hand initially, escalate to <code>tui-realm</code> only if multi-pane state management becomes painful. <span class="pill success">Near-default</span></li>
+  <li><strong>GUI:</strong> <strong>Tauri 2</strong> with a Rust-WASM frontend (Leptos preferred, Dioxus acceptable). <span class="pill warn">Could-flip-on-evidence</span> — egui or Slint if Tauri's three-WebView story bites us, iced if COSMIC compatibility becomes strategically important.</li>
+  <li><strong>Shared <code>mcp-client</code> crate:</strong> wire types, error enum, config loader, daemon transport, JSON/YAML serializers, <code>SecretStore</code> trait, tracing setup. No UI dependencies.</li>
+</ul>
+</div>
+
+<nav class="toc">
+<h4>Contents</h4>
+<ul>
+  <li><a href="#cli-rec">CLI recommendation</a></li>
+  <li><a href="#tui-rec">TUI recommendation</a></li>
+  <li><a href="#gui-rec">GUI recommendation</a></li>
+  <li><a href="#shared-rec">Shared <code>mcp-client</code> crate</a></li>
+  <li><a href="#volatility">Volatility / what could flip this</a></li>
+</ul>
+</nav>
+
+<section class="section" id="cli-rec">
+<h2>CLI — <span class="pill success">Near-default</span></h2>
+
+<table class="compare">
+<thead><tr><th>Concern</th><th>Choice</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Argument parsing</td><td><code>clap</code> with <code>derive</code> feature</td><td>Ecosystem consensus (75M+ downloads, every CLI tutorial assumes it) and the maintainers themselves recommend the derive API for new code <cite data-ref="clap-faq-derive-vs-builder"></cite><cite data-ref="sunshowers-cli-parser"></cite>. We can fall through to builder for any subcommand that needs runtime introspection.</td></tr>
+<tr><td>Shell completion</td><td><code>clap_complete</code> via a hidden <code>completions &lt;shell&gt;</code> subcommand</td><td>One-line generator; supports Bash/Zsh/Fish/Elvish/PowerShell, plus Nushell via <code>clap_complete_nushell</code> <cite data-ref="clap-complete"></cite>.</td></tr>
+<tr><td>Colorization</td><td><code>owo-colors</code></td><td>Zero-allocation, <code>no_std</code>-friendly, drop-in for <code>colored</code>; endorsed by Rain's recommendations <cite data-ref="owo-colors"></cite><cite data-ref="sunshowers-colors"></cite>. We honor <code>NO_COLOR</code> + TTY detection per the <a href="https://clig.dev/">CLI Guidelines</a> <cite data-ref="cli-guidelines"></cite>.</td></tr>
+<tr><td>Table output</td><td><code>tabled</code></td><td>Derive macro maps directly onto our <code>ServerSummary</code>-style structs in <code>mcp-client</code>; cleaner ergonomics than <code>comfy-table</code>'s builder API for our typed rows <cite data-ref="tabled"></cite>.</td></tr>
+<tr><td>Progress reporting</td><td><code>indicatif</code> + <code>tracing-indicatif</code></td><td>De facto standard at 90M+ downloads; <code>MultiProgress</code> for concurrent operations; tracing bridge keeps progress and logs from fighting <cite data-ref="indicatif"></cite><cite data-ref="indicatif-multiprogress"></cite><cite data-ref="tracing-indicatif"></cite>.</td></tr>
+<tr><td>Machine output</td><td><code>serde_json</code> / <code>serde_yaml</code> direct from <code>mcp-client</code> types</td><td>Mirrors <code>kubectl -o json</code> / <code>gh ... --json</code> <cite data-ref="kubectl-conventions"></cite><cite data-ref="gh-cli-style"></cite>. Same types are reused by GUI "Copy as JSON" actions.</td></tr>
+<tr><td>Command shape</td><td>Docker-style noun-verb with at least one nesting level (<code>mcpm server up</code>, <code>mcpm config set</code>)</td><td>Familiar to operators of <code>docker</code>/<code>kubectl</code>/<code>gh</code>; clap derive's subcommand-enum pattern maps onto this cleanly <cite data-ref="docker-cli-conventions"></cite><cite data-ref="clap-derive-cookbook"></cite>.</td></tr>
+</tbody>
+</table>
+
+<p>See <a href="./research-client-tools-cli.html">research-client-tools-cli.html</a> for the full enumeration of alternatives we considered, and the <a href="./matrix-client-tools-ranking.html">CLI ranking matrix</a> for sensitivity.</p>
+</section>
+
+<section class="section" id="tui-rec">
+<h2>TUI — <span class="pill success">Near-default</span></h2>
+
+<table class="compare">
+<thead><tr><th>Concern</th><th>Choice</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Framework</td><td><code>ratatui</code></td><td>Active maintained successor to <code>tui-rs</code>; powers the apps the MCP Manager TUI most directly resembles — <code>bottom</code> (live process monitor), <code>gitui</code> (component-pattern TUI), <code>yazi</code> (async-first) <cite data-ref="ratatui-github"></cite><cite data-ref="awesome-ratatui"></cite>.</td></tr>
+<tr><td>Backend</td><td><code>crossterm</code></td><td>The documentation explicitly recommends it; Windows + macOS + Linux + WSL out of the box; async event stream via the <code>event-stream</code> feature <cite data-ref="ratatui-backends-comparison"></cite><cite data-ref="crossterm-crate"></cite>. <code>termion</code> is Unix-only and disqualified <cite data-ref="termion-crate"></cite>; <code>termwiz</code> is for wezterm-specific features we don't need <cite data-ref="termwiz-crate"></cite>.</td></tr>
+<tr><td>Architecture</td><td>Components pattern by hand (per ratatui's components template) with a <code>tokio::select!</code> loop over <code>EventStream</code> + daemon-event mpsc</td><td>The pattern <code>gitui</code> uses; gives us focus stack and message routing without committing to tui-realm's lifecycle <cite data-ref="ratatui-home"></cite><cite data-ref="ratatui-faq-async"></cite>.</td></tr>
+<tr><td>Optional escalation</td><td><code>tui-realm</code> if multi-pane state management gets messy</td><td>Adds an Elm-style component model with explicit messaging; pays off when many independent panes need their own state machines <cite data-ref="tui-realm"></cite>. Defer until proven necessary.</td></tr>
+<tr><td>Async runtime</td><td><code>tokio</code></td><td>Already chosen by Stream 3 / Stream 4; <code>crossterm::event::EventStream</code> and the daemon transport both speak tokio futures <cite data-ref="crossterm-crate"></cite>.</td></tr>
+</tbody>
+</table>
+
+<p>The TUI's "happy path" is intentionally identical to <code>gitui</code>'s: a draw loop, an event multiplexer, components that own their state. We don't take dependencies on tui-realm or cursive until we have evidence the bare pattern isn't holding up.</p>
+</section>
+
+<section class="section" id="gui-rec">
+<h2>GUI — <span class="pill warn">Could-flip-on-evidence</span></h2>
+
+<p><strong>Primary recommendation: Tauri 2 with a Rust-WASM frontend.</strong></p>
+
+<table class="compare">
+<thead><tr><th>Concern</th><th>Choice</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>App shell</td><td>Tauri 2</td><td>Stable since Oct 2024 with ACL-based permissions, custom-protocol IPC, and the typed <code>Channel</code> API for streaming events (logs, status updates) from Rust to the UI <cite data-ref="tauri-2-stable"></cite><cite data-ref="tauri-2-rcandidate"></cite>. Installers are typically 600 KB – 10 MB vs Electron's 80–150 MB <cite data-ref="tauri-vs-electron"></cite>. Accessibility, IME, text shaping all inherited from the system WebView — solving problems most pure-native Rust toolkits have not yet solved <cite data-ref="boringcactus-2025-survey"></cite>.</td></tr>
+<tr><td>Frontend framework</td><td>Leptos (preferred) or Dioxus</td><td>Both compile to WASM and are first-party templates in <code>create-tauri-app</code> <cite data-ref="tauri-leptos"></cite>. Leptos's fine-grained reactivity is closer to what makes Tauri's IPC overhead invisible; Dioxus is a reasonable second if the team prefers a React-style mental model.</td></tr>
+<tr><td>Mobile / web target</td><td>Deferred but not foreclosed</td><td>Tauri 2 ships iOS + Android support; Leptos compiles to web. A v1.x mobile companion is on the table without a rewrite <cite data-ref="tauri-2-stable"></cite><cite data-ref="dioxus-home"></cite>.</td></tr>
+<tr><td>IPC pattern</td><td><code>#[tauri::command]</code> + <code>tauri::ipc::Channel</code> for streams</td><td>The v2 IPC uses custom protocols (not <code>postMessage</code> string serialization) and the channel API is purpose-built for log-tail / event-watch <cite data-ref="tauri-2-stable"></cite>.</td></tr>
+<tr><td>Theming</td><td>Per-OS CSS palette + the system's accent color via <code>tauri::window::Window::theme</code></td><td>Dark mode for free; native title bar; the GUI defers to the OS rather than imposing its own look.</td></tr>
+</tbody>
+</table>
+
+<p><strong>Why not pure-native?</strong> Three reasons. (1) The boringcactus 2025 survey concluded that of 43 Rust GUI libraries tested, 94% failed a minimal "label + input + screen-reader + IME" baseline; the four that passed are Slint, egui, Dioxus, and Windows-only WinSafe <cite data-ref="boringcactus-2025-survey"></cite>. (2) Slint's strongest pure-native showing comes with a GPL-or-paid license that we don't want to pay or be infected by <cite data-ref="slint-github"></cite>. (3) egui is excellent for tool-class apps (Rerun) but explicitly disclaims native look and stability across upgrades <cite data-ref="egui-github"></cite>. None of these are disqualifying for v2; they are for v1.</p>
+
+<p><strong>Could-flip-on-evidence triggers:</strong></p>
+<ul>
+  <li>If WebKitGTK incompatibilities on Linux create a real support burden, evaluate <strong>egui + eframe</strong> as the swap — it's the lowest-risk pure-native pivot since AccessKit is integrated and the team behind it ships a major production app (Rerun) <cite data-ref="egui-github"></cite><cite data-ref="accesskit-home"></cite><cite data-ref="rerun-egui"></cite>.</li>
+  <li>If we ever need to integrate with COSMIC desktop or System76 hardware partnerships, <strong>iced</strong> becomes strategically interesting <cite data-ref="cosmic-iced"></cite> — at the cost of accepting its weaker accessibility story <cite data-ref="boringcactus-2025-survey"></cite>.</li>
+  <li>If we are willing to pay for Slint's commercial license <strong>and</strong> want the strongest pure-native a11y + embedded story, Slint is the better long-run answer <cite data-ref="slint-home"></cite><cite data-ref="slint-1-0"></cite>.</li>
+  <li>GPUI, Freya, Xilem, Makepad — watch list, not pick list, for v1.0 <cite data-ref="gpui-home"></cite><cite data-ref="xilem-github"></cite><cite data-ref="makepad-hn"></cite>.</li>
+</ul>
+</section>
+
+<section class="section" id="shared-rec">
+<h2>Shared <code>mcp-client</code> crate composition</h2>
+
+<p>One crate, three consumers (CLI / TUI / GUI). It depends on the Stream-4 protocol crate but knows nothing about <code>clap</code>, <code>ratatui</code>, or any GUI framework. Concretely:</p>
+
+<pre><code># crates/mcp-client/Cargo.toml — recommended composition.
+[dependencies]
+mcp-protocol = { path = "../mcp-protocol" }   # from Stream 4
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "1"
+tokio = { version = "1", features = ["sync", "rt", "io-util", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+keyring = "3"            # OS keyring for SecretStore
+zeroize = "1"            # for Secret&lt;T&gt; memory-safety wrapping
+directories = "5"        # XDG-style config paths
+figment = { version = "0.10", features = ["toml", "env"] }  # layered config
+futures = "0.3"          # Stream traits for log tail / event watch</code></pre>
+
+<p>What lives inside:</p>
+<ol>
+  <li><strong>Wire types</strong>: <code>ServerSummary</code>, <code>ServerStatus</code>, <code>ConfigDiff</code>, <code>StatusKind</code> — all <code>serde</code>-derived.</li>
+  <li><strong>Error model</strong>: a <code>ClientError</code> enum + <code>impl From&lt;ClientError&gt; for i32</code> for CLI exit codes.</li>
+  <li><strong>Config loader</strong>: XDG paths + env override + file; <code>Config::load_with_overrides(&amp;CliFlags)</code>.</li>
+  <li><strong>API client</strong>: <code>Client::connect(&amp;Path)</code>, <code>list_servers</code>, <code>start_server</code>, <code>tail_logs</code> (Stream), <code>watch_events</code> (Stream).</li>
+  <li><strong>SecretStore</strong>: trait + <code>KeyringStore</code> default; CLI/TUI/GUI each drive the prompt UX they need.</li>
+  <li><strong>Output formatters</strong>: <code>format::json</code>, <code>format::yaml</code>, <code>format::plain</code> — table formatting stays in the CLI crate.</li>
+  <li><strong>Tracing setup</strong>: <code>logging::init_for_cli</code>, <code>init_for_tui</code>, <code>init_for_gui</code> — feature-flagged so each consumer compiles minimal code.</li>
+</ol>
+
+<p>What stays OUT: any <code>clap</code> code, any <code>ratatui</code> widget, any <code>indicatif</code> bar, any <code>tabled</code> renderer, any GUI framework, any color crate. The compile-to-WASM heuristic: if <code>mcp-client</code> stops building for <code>wasm32-unknown-unknown</code>, something snuck in that shouldn't have. See <a href="./research-client-tools-shared.html">research-client-tools-shared.html</a> for the full boundary discussion.</p>
+</section>
+
+<section class="section" id="volatility">
+<h2>Volatility — what could flip the GUI choice</h2>
+
+<p>The Rust GUI ecosystem is moving faster than the CLI or TUI ecosystems, and almost everything below was true at a different time:</p>
+<ul>
+  <li><strong>Iced 1.0</strong> arrives in 2026 and brings accessibility to parity — that materially weakens the "WebView for free a11y" argument <cite data-ref="iced-014"></cite>.</li>
+  <li><strong>Slint relicenses</strong> or our licensing constraints change — Slint becomes the obvious pick on technical merits <cite data-ref="slint-1-0"></cite>.</li>
+  <li><strong>GPUI hits 1.0 with Windows parity</strong> — but this is at least a year out and we are not the right early adopter for it <cite data-ref="gpui-home"></cite>.</li>
+  <li><strong>WebKitGTK fragmentation</strong> becomes painful for our Linux users — pivot to egui or Dioxus desktop and absorb the a11y/IME cost <cite data-ref="boringcactus-2025-survey"></cite>.</li>
+  <li><strong>The team experiences Tauri's two-codebase build as friction</strong> — Dioxus desktop is the cleanest pure-Rust escape hatch with the same WebView model <cite data-ref="dioxus-home"></cite><cite data-ref="dioxus-0-6"></cite>.</li>
+</ul>
+
+<p>The CLI and TUI choices have effectively no volatility: <code>clap</code> and <code>ratatui+crossterm</code> are stable consensus picks with active maintenance and large production user bases <cite data-ref="clap-docs"></cite><cite data-ref="ratatui-github"></cite>. They should be revisited only if either crate is materially abandoned, which is not a 2026 risk.</p>
+</section>
+</main>
+</body>
+</html>

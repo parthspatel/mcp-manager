@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schema comparison — MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+<div class="container">
+<div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+<div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">curious-otter-survey</a> / schema</div>
+<button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div>
+</header>
+<main class="container">
+<h1>Schema comparison: command/args/env vs url/headers</h1>
+<p class="lede">
+The MCP spec is prescriptive about the wire protocol — JSON-RPC over a transport — but says nothing about how a <em>host</em> should configure a server. Every host has invented its own wrapper. This page lays the JSON side-by-side.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#shared">What is universal</a></li>
+    <li><a href="#divergence">Where hosts diverge</a></li>
+    <li><a href="#snippets">Real JSON snippets, host by host</a></li>
+    <li><a href="#extensions">Host-specific schema extensions</a></li>
+    <li><a href="#spec">What the spec mandates</a></li>
+  </ul>
+</nav>
+
+<h2 id="shared">What is universal</h2>
+<p>The MCP specification defines two standard transports — stdio and Streamable HTTP — and requires JSON-RPC framing on both.<cite data-ref="mcp-spec-transports"></cite> Every host surveyed encodes the same conceptual server definition in JSON or YAML using these four parts:</p>
+
+<table class="compare">
+  <thead><tr><th>Concept</th><th>Stdio fields</th><th>Remote fields</th></tr></thead>
+  <tbody>
+    <tr><td>How to start it</td><td><code>command</code>, <code>args</code></td><td><code>url</code></td></tr>
+    <tr><td>How to authenticate / parametrize</td><td><code>env</code></td><td><code>headers</code> (or OAuth)</td></tr>
+    <tr><td>Working directory</td><td><code>cwd</code> (rare)</td><td>n/a</td></tr>
+    <tr><td>Identity</td><td>Map key (server name)</td><td>Map key (server name)</td></tr>
+  </tbody>
+</table>
+
+<h2 id="divergence">Where hosts diverge</h2>
+
+<table class="compare">
+  <thead><tr><th>Host</th><th>Top-level key</th><th>Container type</th><th>Discriminator for transport</th><th>Notable extras</th></tr></thead>
+  <tbody>
+    <tr><td>Claude Desktop</td><td><code>mcpServers</code></td><td>object</td><td>presence of <code>command</code> vs <code>url</code></td><td>—</td></tr>
+    <tr><td>Claude Code</td><td><code>mcpServers</code></td><td>object</td><td><code>type</code>: <code>stdio</code> / <code>http</code> / <code>sse</code> (alias <code>streamable-http</code>)</td><td><code>oauth</code>, <code>headersHelper</code>, <code>alwaysLoad</code>, <code>timeout</code></td></tr>
+    <tr><td>Cursor</td><td><code>mcpServers</code></td><td>object</td><td><code>type</code>: <code>stdio</code> (or absence)</td><td><code>envFile</code>, <code>auth</code> object for OAuth</td></tr>
+    <tr><td>Cline</td><td><code>mcpServers</code></td><td>object</td><td>presence of <code>command</code> vs <code>url</code></td><td><code>disabled</code>, <code>autoApprove</code></td></tr>
+    <tr><td>Continue</td><td><code>mcpServers</code></td><td><strong>array</strong></td><td><code>type</code>: <code>stdio</code> / <code>sse</code> / <code>streamable-http</code></td><td><code>name</code> is mandatory per entry, <code>${{ secrets.X }}</code> syntax</td></tr>
+    <tr><td>Zed</td><td><code>context_servers</code></td><td>object</td><td>presence of <code>command</code> vs <code>url</code></td><td><code>source: custom</code> tag</td></tr>
+    <tr><td>Windsurf</td><td><code>mcpServers</code></td><td>object</td><td>presence of <code>command</code> vs <code>serverUrl</code>/<code>url</code></td><td><code>${file:...}</code> interpolation</td></tr>
+    <tr><td>VS Code (Copilot MCP)</td><td><strong><code>servers</code></strong></td><td>object</td><td><code>type</code>: <code>stdio</code> / <code>http</code></td><td><code>inputs</code> (prompt user), <code>sandboxEnabled</code></td></tr>
+    <tr><td>Goose</td><td><code>extensions</code></td><td>map (YAML)</td><td><code>type</code>: <code>stdio</code> / <code>sse</code> / <code>builtin</code></td><td><code>builtin</code> tag for in-process extensions, <code>timeout</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="snippets">Real JSON snippets, host by host</h2>
+
+<details class="accordion" open>
+  <summary>Claude Desktop — <code>claude_desktop_config.json</code></summary>
+<pre><code>{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/Desktop"],
+      "env": {
+        "BRAVE_API_KEY": "sk-..."
+      }
+    }
+  }
+}</code></pre>
+  <p>Reference: Claude Desktop quickstart.<cite data-ref="claude-desktop-local"></cite></p>
+</details>
+
+<details class="accordion">
+  <summary>Claude Code — <code>.mcp.json</code> (project scope)</summary>
+<pre><code>{
+  "mcpServers": {
+    "api-server": {
+      "type": "http",
+      "url": "${API_BASE_URL:-https://api.example.com}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${API_KEY}"
+      },
+      "alwaysLoad": true,
+      "timeout": 600000
+    },
+    "stripe": {
+      "type": "http",
+      "url": "https://mcp.stripe.com"
+    },
+    "db-tools": {
+      "type": "stdio",
+      "command": "${CLAUDE_PLUGIN_ROOT}/servers/db-server",
+      "args": ["--config", "${CLAUDE_PLUGIN_ROOT}/config.json"],
+      "env": {
+        "DB_URL": "${DB_URL}"
+      }
+    }
+  }
+}</code></pre>
+  <p>Reference: Claude Code MCP docs.<cite data-ref="claude-code-mcp"></cite></p>
+</details>
+
+<details class="accordion">
+  <summary>Cursor — <code>~/.cursor/mcp.json</code></summary>
+<pre><code>{
+  "mcpServers": {
+    "local-py": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["server.py"],
+      "env": { "API_KEY": "${env:API_KEY}" },
+      "envFile": ".env"
+    },
+    "remote-mcp": {
+      "url": "https://api.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${env:TOKEN}" },
+      "auth": {
+        "CLIENT_ID": "${env:MCP_CLIENT_ID}",
+        "CLIENT_SECRET": "${env:MCP_CLIENT_SECRET}",
+        "scopes": ["read", "write"]
+      }
+    }
+  }
+}</code></pre>
+  <p>Reference: Cursor MCP docs.<cite data-ref="cursor-mcp"></cite></p>
+</details>
+
+<details class="accordion">
+  <summary>Cline — <code>cline_mcp_settings.json</code></summary>
+<pre><code>{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." },
+      "disabled": false,
+      "autoApprove": ["search_repositories", "get_issue"]
+    }
+  }
+}</code></pre>
+  <p>Reference: Cline docs.<cite data-ref="cline-mcp"></cite></p>
+</details>
+
+<details class="accordion">
+  <summary>Continue — <code>config.yaml</code> with <code>mcpServers</code> array</summary>
+<pre><code>name: my-config
+version: 0.0.1
+schema: v1
+
+mcpServers:
+  - name: playwright
+    type: stdio
+    command: npx
+    args: ["@playwright/mcp@latest"]
+    env:
+      PWDEBUG: "0"
+  - name: remote-tools
+    type: streamable-http
+    url: https://api.example.com/mcp
+    headers:
+      Authorization: "Bearer ${{ secrets.API_KEY }}"</code></pre>
+  <p>Reference: Continue MCP docs.<cite data-ref="continue-mcp"></cite></p>
+</details>
+
+<details class="accordion">
+  <summary>Zed — <code>settings.json</code> with <code>context_servers</code></summary>
+<pre><code>{
+  "context_servers": {
+    "axiom": {
+      "source": "custom",
+      "command": "node",
+      "args": ["/path/to/axiom-mcp/server.js"],
+      "env": { "AXIOM_TOKEN": "..." }
+    },
+    "remote-api": {
+      "source": "custom",
+      "url": "https://mcp.example.com",
+      "headers": { "Authorization": "Bearer ..." }
+    }
+  }
+}</code></pre>
+  <p>Reference: Zed MCP docs.<cite data-ref="zed-mcp"></cite></p>
+</details>
+
+<details class="accordion">
+  <summary>Windsurf — <code>~/.codeium/windsurf/mcp_config.json</code></summary>
+<pre><code>{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${env:GH_TOKEN}" }
+    },
+    "k8s": {
+      "serverUrl": "http://localhost:8080/mcp",
+      "headers": { "X-Cluster": "${file:/etc/k8s/cluster-name}" }
+    }
+  }
+}</code></pre>
+  <p>Reference: Windsurf Cascade MCP docs.<cite data-ref="windsurf-mcp"></cite></p>
+</details>
+
+<details class="accordion">
+  <summary>VS Code (Copilot MCP) — <code>.vscode/mcp.json</code> with <code>servers</code> and <code>inputs</code></summary>
+<pre><code>{
+  "inputs": [
+    {
+      "id": "perplexity-key",
+      "type": "promptString",
+      "description": "Perplexity API key",
+      "password": true
+    }
+  ],
+  "servers": {
+    "perplexity": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "server-perplexity-ask"],
+      "env": { "PERPLEXITY_API_KEY": "${input:perplexity-key}" },
+      "sandboxEnabled": true
+    },
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp"
+    }
+  }
+}</code></pre>
+  <p>Reference: VS Code MCP docs.<cite data-ref="vscode-mcp"></cite><cite data-ref="vscode-mcp-reference"></cite></p>
+</details>
+
+<details class="accordion">
+  <summary>Goose — <code>config.yaml</code> with <code>extensions</code> (YAML, not JSON)</summary>
+<pre><code>extensions:
+  developer:
+    name: Developer
+    type: builtin
+    enabled: true
+  fetch:
+    name: Fetch
+    type: stdio
+    cmd: uvx
+    args: ["mcp-server-fetch"]
+    enabled: true
+    timeout: 30
+  remote-tools:
+    name: Remote Tools
+    type: sse
+    uri: https://example.com/sse
+    enabled: true</code></pre>
+  <p>Reference: Goose extension config.<cite data-ref="goose-extensions"></cite></p>
+</details>
+
+<h2 id="extensions">Host-specific schema extensions</h2>
+<div class="card-grid">
+  <article class="card">
+    <h3>Approval governance</h3>
+    <p>Cline's <code>autoApprove</code> array lists tools that should bypass per-call approval; Claude Code uses settings.json <code>permissions.deny</code>; VS Code adds <code>sandboxEnabled</code>. There is no shared model.<cite data-ref="cline-mcp"></cite><cite data-ref="vscode-mcp"></cite></p>
+  </article>
+  <article class="card">
+    <h3>Secret prompting</h3>
+    <p>Only VS Code's <code>inputs</code> array and Claude Desktop's <em>DXT <code>user_config</code></em> ship a first-class "ask the user for a secret on install and store securely" experience.<cite data-ref="vscode-mcp"></cite><cite data-ref="anthropic-dxt"></cite></p>
+  </article>
+  <article class="card">
+    <h3>Lifecycle controls in-config</h3>
+    <p>Claude Code's per-server <code>timeout</code> (milliseconds), <code>alwaysLoad</code>, and global <code>MCP_TIMEOUT</code> env var are unique. Cline exposes restart and timeout via UI. Other hosts hardcode their lifecycle.<cite data-ref="claude-code-mcp"></cite><cite data-ref="cline-mcp"></cite></p>
+  </article>
+  <article class="card">
+    <h3>Variable expansion</h3>
+    <p>Inconsistent: Claude Code <code>${VAR}</code>/<code>${VAR:-default}</code>; Cursor <code>${env:NAME}</code>, <code>${workspaceFolder}</code>; Windsurf <code>${env:VAR}</code> + <code>${file:PATH}</code>; Continue <code>${{ secrets.X }}</code>; Claude Desktop has no expansion at all (literal strings only).<cite data-ref="claude-code-mcp"></cite><cite data-ref="cursor-mcp"></cite><cite data-ref="windsurf-mcp"></cite><cite data-ref="continue-mcp"></cite></p>
+  </article>
+</div>
+
+<h2 id="spec">What the spec actually mandates</h2>
+<p>The MCP spec is silent on configuration format. It only mandates:</p>
+<ul>
+  <li>JSON-RPC framing on both transports.<cite data-ref="mcp-spec-transports"></cite></li>
+  <li>For stdio: newline-delimited messages on stdin/stdout, no stdout pollution, logs only to stderr.<cite data-ref="mcp-spec-transports"></cite></li>
+  <li>For Streamable HTTP: a single endpoint that accepts both POST and GET, with an optional <code>Mcp-Session-Id</code> header for session management and an <code>MCP-Protocol-Version</code> header on every request.<cite data-ref="mcp-spec-transports"></cite></li>
+  <li>OAuth 2.0 discovery via <code>/.well-known/oauth-protected-resource</code> (RFC 9728) and <code>/.well-known/oauth-authorization-server</code> (RFC 8414) for remote servers requiring auth.<cite data-ref="claude-code-mcp"></cite></li>
+</ul>
+<p>Everything above the wire protocol — schema, file location, env handling, lifecycle, secrets, sandboxing — is host-invented and inconsistent. That is the primary observation an MCP Manager needs to absorb.</p>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tradeoffs — Client API · MCP Manager Ideation v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/citations.js"></script>
+</head>
+<body data-citations="./data/citations.json">
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ideation · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">v1.0</a> / <a href="./index.html">precise-crane-conduit</a> / Tradeoffs</div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Wire-format + transport tradeoffs</h1>
+
+  <p class="lede">
+    The four research pages enumerate facts in isolation. This analysis page treats them as a combined choice: an IPC channel, a serialization format, a streaming model, and a versioning style together form a wire-protocol stack. Eight stacks dominate the design space. The matrix in the next page scores them; this page argues neutrally about the axes on which they differ.
+  </p>
+
+  <section class="section">
+    <h2>The eight stacks</h2>
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Stack</th>
+          <th>Channel</th>
+          <th>Wire</th>
+          <th>Streaming</th>
+          <th>Schema source</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1. <strong>JSON-RPC over UDS</strong></td>
+          <td>UDS / named pipe</td>
+          <td>JSON, NDJSON-framed</td>
+          <td>Subscription pattern<sup><cite data-ref="jsonrpsee-docs"></cite></sup></td>
+          <td>JSON Schema (hand-written or generated)</td>
+        </tr>
+        <tr>
+          <td>2. <strong>gRPC over UDS</strong></td>
+          <td>UDS / named pipe</td>
+          <td>protobuf, HTTP/2-framed</td>
+          <td>Server-stream + bidi<sup><cite data-ref="tonic-bidi-streaming"></cite></sup></td>
+          <td><code>.proto</code> files</td>
+        </tr>
+        <tr>
+          <td>3. <strong>REST + SSE over loopback</strong></td>
+          <td>HTTP <code>127.0.0.1</code></td>
+          <td>JSON request/response, SSE for streams<sup><cite data-ref="html-spec-sse"></cite></sup></td>
+          <td>SSE (server → client only)</td>
+          <td>OpenAPI 3.1<sup><cite data-ref="openapi-spec"></cite></sup></td>
+        </tr>
+        <tr>
+          <td>4. <strong>REST + WebSocket</strong></td>
+          <td>HTTP loopback</td>
+          <td>JSON over HTTP for unary, JSON over WS for streams<sup><cite data-ref="rfc6455-websocket"></cite></sup></td>
+          <td>WebSocket frames</td>
+          <td>OpenAPI 3.1 + AsyncAPI</td>
+        </tr>
+        <tr>
+          <td>5. <strong>Cap'n Proto RPC over UDS</strong></td>
+          <td>UDS / named pipe</td>
+          <td>Cap'n Proto<sup><cite data-ref="capnp-rust"></cite></sup></td>
+          <td>Capability-style + futures<sup><cite data-ref="capnproto-rust-gh"></cite></sup></td>
+          <td><code>.capnp</code> files</td>
+        </tr>
+        <tr>
+          <td>6. <strong>MessagePack-RPC over UDS</strong></td>
+          <td>UDS / named pipe</td>
+          <td>MessagePack<sup><cite data-ref="rmp-serde-docs"></cite></sup></td>
+          <td>Notification stream</td>
+          <td>JSON Schema (msgpack mirrors JSON model)</td>
+        </tr>
+        <tr>
+          <td>7. <strong>NDJSON over UDS</strong></td>
+          <td>UDS / named pipe</td>
+          <td>NDJSON<sup><cite data-ref="ndjson-spec"></cite></sup></td>
+          <td>Native — every line is a frame</td>
+          <td>JSON Schema</td>
+        </tr>
+        <tr>
+          <td>8. <strong>Tauri-native (GUI only)</strong></td>
+          <td>Tauri IPC</td>
+          <td>JSON (legacy) or raw bytes (v2)<sup><cite data-ref="tauri-ipc-perf-discussion"></cite></sup></td>
+          <td><code>Channel&lt;T&gt;</code><sup><cite data-ref="tauri-channel-streaming"></cite></sup></td>
+          <td>App-defined</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>Axis-by-axis analysis</h2>
+
+    <h3>Debuggability — "can I poke this with off-the-shelf tools?"</h3>
+    <p>
+      JSON-on-the-wire (stacks 1, 3, 4, 7) wins outright. <code>socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/mcp-manager.sock</code> followed by a hand-typed JSON-RPC frame works on every Linux/macOS machine; on Windows the equivalent is <code>nc</code> or PowerShell against a named pipe. SSE responses are plain-text and curl streams them by default. WebSocket needs <code>websocat</code> but is still printable.
+    </p>
+    <p>
+      gRPC needs <code>grpcurl</code><sup><cite data-ref="grpcurl"></cite></sup> + reflection turned on<sup><cite data-ref="grpc-reflection"></cite></sup> + the right proto if reflection is off. Cap'n Proto has no analogue to <code>grpcurl</code>; debugging requires generated tools or custom code. MessagePack is binary but trivially decoded with <code>msgpack-cli</code> or a one-line Python.
+    </p>
+
+    <h3>Codegen tax</h3>
+    <p>
+      JSON-RPC and NDJSON have <em>none</em> — write a Rust struct, derive serde, done. <code>jsonrpsee</code> ships proc macros for declaring methods/subscriptions but no separate compile step<sup><cite data-ref="jsonrpsee-github"></cite></sup>. OpenAPI doesn't require generation but rewards it.
+    </p>
+    <p>
+      gRPC requires a <code>build.rs</code> running <code>prost-build</code>/<code>tonic-build</code> on every change to <code>.proto</code> files; clients in other languages need their own toolchains<sup><cite data-ref="prost-gh"></cite></sup>. Cap'n Proto requires <code>capnpc</code> + <code>capnpc-rust</code><sup><cite data-ref="capnproto-rust-gh"></cite></sup>. Both are mature but add CI friction.
+    </p>
+
+    <h3>Cross-platform</h3>
+    <p>
+      UDS+named-pipe bridges (<code>interprocess</code><sup><cite data-ref="interprocess-crate"></cite></sup>, <code>parity-tokio-ipc</code><sup><cite data-ref="parity-tokio-ipc"></cite></sup>) handle Windows transparently. HTTP loopback is the most portable — even WSL2 and constrained containers usually allow it. gRPC over Unix sockets needs the slightly fussy <code>connect_with_connector</code> shim on tonic<sup><cite data-ref="tonic-uds-example"></cite></sup>.
+    </p>
+
+    <h3>Web-reachability</h3>
+    <p>
+      Critical iff the GUI ships as Tauri or any browser-based client appears. Browsers cannot dial UDS. Native HTTP/SSE/WebSocket work out of the box. gRPC requires the <code>tonic-web</code> tower layer and can only do unary + server-streaming<sup><cite data-ref="tonic-web-crate"></cite></sup>. Cap'n Proto / MessagePack-RPC / JSON-RPC over UDS are not browser-reachable without a proxy.
+    </p>
+    <p>
+      An out: if the GUI ships as Tauri and core is in-process, the WebView never touches a network/UDS at all — it talks to the host process via Tauri commands and the host process talks to core via in-memory calls. This is fast but couples core's release cadence to the GUI's<sup><cite data-ref="tauri-ipc"></cite></sup>.
+    </p>
+
+    <h3>Streaming support</h3>
+    <p>
+      gRPC is the only stack with <em>protocol-level</em> backpressure (HTTP/2 windowing<sup><cite data-ref="grpc-flow-control"></cite></sup>). Every other stack puts backpressure at the OS-buffer level — which is usually fine for the modest message rates the MCP Manager generates, but requires explicit thought for log-tail of a chatty server.
+    </p>
+    <p>
+      SSE has unparalleled <em>client-side</em> ergonomics in browsers (auto-reconnect, <code>Last-Event-ID</code><sup><cite data-ref="mdn-eventsource"></cite></sup>); for Rust clients it's just plain HTTP chunks. NDJSON over a raw socket is the simplest possible streaming model and the same model MCP itself uses for its stdio transport<sup><cite data-ref="mcp-transports"></cite></sup> — there's something to be said for matching the surrounding ecosystem.
+    </p>
+
+    <h3>Schema versioning</h3>
+    <p>
+      gRPC/protobuf and Cap'n Proto have the strongest static guarantees. OpenAPI + JSON Schema rely on documented convention but tooling support is huge. Plain JSON-RPC has no schema mechanism unless one bolts on JSON Schema. Versioned-envelope MessagePack works but is the least disciplined option.
+    </p>
+
+    <h3>Security boundary</h3>
+    <p>
+      UDS in <code>$XDG_RUNTIME_DIR</code> is the simplest "any local user other than me cannot connect" story — kernel-enforced via filesystem mode<sup><cite data-ref="xdg-runtime-dir"></cite></sup>. HTTP loopback is reachable to all local users by default and needs an application-layer token. Tauri's WebView is isolated by the OS process boundary plus Tauri's capability manifest<sup><cite data-ref="tauri-ipc"></cite></sup>.
+    </p>
+
+    <h3>Rust ecosystem maturity</h3>
+    <p>
+      <code>jsonrpsee</code>, <code>tonic</code>+<code>prost</code>, <code>axum</code>+<code>hyper</code> are all top-tier maintained, used in production at scale. <code>capnp</code> is mature but smaller; <code>rmp-serde</code> is mature; <code>interprocess</code> / <code>parity-tokio-ipc</code> are smaller-scale but battle-tested by Substrate-derived projects<sup><cite data-ref="parity-tokio-ipc"></cite></sup>.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>Friction examples — what does "developing against this" feel like?</h2>
+
+    <details class="accordion" open>
+      <summary>JSON-RPC over UDS — flat learning curve</summary>
+      <ul>
+        <li>Test in shell with <code>socat</code> + handcrafted JSON one-liners.</li>
+        <li>Add a method: write a Rust function, register on the module, done.</li>
+        <li>Cross-language client (Python, TS): just JSON over a stream-socket — no toolchain.</li>
+        <li>Cost: no compile-time wire schema check; rely on tests + JSON Schema if discipline matters.</li>
+      </ul>
+    </details>
+
+    <details class="accordion">
+      <summary>gRPC over UDS — typed but heavier</summary>
+      <ul>
+        <li>Define method in <code>.proto</code>; <code>cargo build</code> regenerates Rust types.</li>
+        <li>Test with <code>grpcurl -unix /path/to/sock list</code>, then <code>grpcurl -d '{}' ... ServiceName/Method</code><sup><cite data-ref="grpcurl"></cite></sup>.</li>
+        <li>Bidi streaming is the strongest streaming primitive available<sup><cite data-ref="tonic-bidi-streaming"></cite></sup>.</li>
+        <li>Cost: every <code>.proto</code> change rebuilds. Cross-language clients need protoc + a grpc library.</li>
+      </ul>
+    </details>
+
+    <details class="accordion">
+      <summary>REST + SSE — best browser story</summary>
+      <ul>
+        <li>Test with <code>curl</code> / <code>HTTPie</code> on the unary side, <code>curl -N</code> for SSE.</li>
+        <li>Auto-reconnect for browser clients comes for free<sup><cite data-ref="mdn-eventsource"></cite></sup>.</li>
+        <li>OpenAPI 3.1 yields client SDKs and mock servers via off-the-shelf generators<sup><cite data-ref="openapi-spec"></cite></sup>.</li>
+        <li>Cost: TCP loopback is open to other local processes; bearer token mandatory. Backpressure is TCP-level only.</li>
+      </ul>
+    </details>
+
+    <details class="accordion">
+      <summary>Cap'n Proto over UDS — fastest, most fragile to debug</summary>
+      <ul>
+        <li>Zero-copy in-memory traversal<sup><cite data-ref="swatinem-grpc-capnp"></cite></sup>.</li>
+        <li>Schema evolution rules are the cleanest of the bunch<sup><cite data-ref="capnp-language"></cite></sup>.</li>
+        <li>Cost: debugging requires generated tooling; ecosystem narrower than protobuf's.</li>
+      </ul>
+    </details>
+  </section>
+
+  <section class="section">
+    <h2>Hybrid stacks are realistic</h2>
+    <p>
+      Nothing forces a single answer. Two practical hybrids:
+    </p>
+    <ul>
+      <li><strong>"Core speaks JSON-RPC over UDS; an optional gateway exposes HTTP/SSE for browser clients."</strong> The gateway is the same binary or a sidecar that translates and adds a bearer token. Clients running locally as the same user use the fast path; Tauri WebViews or curl-debuggers use the slower path.</li>
+      <li><strong>"JSON-RPC for unary, separate UDS endpoint for log/event streams using NDJSON."</strong> Eliminates head-of-line blocking and lets the streaming endpoint be tuned independently (larger buffers, drop policies) without affecting the request/response path.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
