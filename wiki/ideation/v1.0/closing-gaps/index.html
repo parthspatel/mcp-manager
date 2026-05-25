@@ -152,42 +152,79 @@
   </section>
 
   <section class="section" id="open-questions">
-    <h2>Aggregated open questions for the orchestrator</h2>
-    <p>Most agent-flagged questions either resolve trivially or wait for v1.1. The ones that need explicit product-owner attention:</p>
+    <h2>Aggregated open questions <span class="pill success" style="font-size:0.75rem;margin-left:0.5rem">all 7 resolved 2026-05-24</span></h2>
+    <p>All seven product-owner questions resolved. Details below.</p>
 
-    <details class="accordion" open>
-      <summary>Pubkey rotation policy (A + D)</summary>
-      <p>Both server-registry and version-management bake trust roots into the binary (default registry minisign keys for A; default MCP spec allow-list for D). Rotation today requires a hotfix mcpd release. Question: ship a "trust manifest" file in v1.0 that lets users (or us) rotate without rebuilding? Or accept hotfix-release cadence as the rotation mechanism for v1.0 and revisit in v1.1?</p>
+    <details class="accordion">
+      <summary>✓ Pubkey rotation policy: TUF-lite signed trust manifest <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p><strong>Decision:</strong> Adopt a TUF-lite two-level trust hierarchy. A long-lived root key (<code>mcp-manager-root</code>, 5-year validity) is baked into the mcpd binary. The root key signs a runtime-fetched <code>trust.toml</code> manifest that enumerates the current registry pubkeys (one entry per default registry: <code>official</code>, <code>github</code>, <code>docker</code>) with per-key <code>valid_until</code> dates.</p>
+      <p>mcpd fetches <code>trust.toml</code> at install time and refreshes with a 7-day TTL. Rotating a registry pubkey = update <code>trust.toml</code> + re-sign with root + publish (zero user action). Rotating the root itself = hotfix mcpd release (rare, every 3–5 years). Offline failure mode: cache the last-valid manifest locally; if refresh fails, keep cache and warn.</p>
+      <p>Sample <code>trust.toml</code>:</p>
+      <pre><code>signed_by = "mcp-manager-root"
+signature = "RWQ..."
+version   = 1
+valid_until = "2026-12-01T00:00:00Z"
+
+[registry."official"]
+pubkey_minisign = "RWQabc..."
+valid_until     = "2027-12-31"
+
+[registry."github"]
+pubkey_minisign = "RWRdef..."
+valid_until     = "2027-06-30"
+
+[registry."docker"]
+pubkey_cosign = "..."
+valid_until   = "2028-01-15"</code></pre>
+      <p>Prior art: Sigstore Fulcio root, Let's Encrypt ISRG Root X1, Apple code-signing chain.</p>
     </details>
 
     <details class="accordion">
-      <summary>Docker source auto-enable threshold (A)</summary>
-      <p>If Docker is detected on the user's machine at <code>mcpm init</code> time, should the <code>docker</code> registry be auto-enabled, or ask once? Agent A leans "ask once" to be explicit; agent B's onboarding flow has a slot for this question.</p>
+      <summary>✓ Docker source UX: ask once at init, CLI flag to skip <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p><strong>Decision:</strong> <code>mcpm init</code> detects Docker; if present, asks once: "Enable Docker MCP Catalog as a registry source? [Y/n]". User can skip the question entirely with <code>mcpm init --docker-enable=true</code> or <code>--docker-enable=false</code> (and similar flag-shape for the rest of the prompts via the <code>--defaults</code> / <code>-y</code> mechanism Agent B already defined).</p>
+      <p>Per the onboarding contract, this decision is reversible via <code>mcpm registry add docker</code> or <code>mcpm registry remove docker</code> at any time.</p>
     </details>
 
     <details class="accordion">
-      <summary>Service-string namespace (C)</summary>
-      <p>The OS keychain entry's "service" attribute is <code>"dev.mcpmanager"</code> in the recommendation. Renaming after v1.0 ships orphans users' existing keychain entries. Confirm this is the canonical reverse-DNS we want forever.</p>
+      <summary>✓ Service-string namespace: <code>dev.mcp-manager.mcpd</code> <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p><strong>Decision:</strong> The OS keychain entry uses service string <code>dev.mcp-manager.mcpd</code>. Reverse-DNS prevents collision with any other tool that might pick a generic label (e.g. <code>mcp-manager</code>). The <code>mcpd</code> suffix is the daemon binary name, leaving namespace for future siblings (<code>dev.mcp-manager.mcpm</code> for CLI-side credentials if ever needed, <code>dev.mcp-manager.mcp-tray</code> for a future tray helper) without renaming existing entries.</p>
+      <p>We do not need to actually own <code>mcp-manager.dev</code> — the service field is a label, never resolved over the network. This is a free convention to adopt.</p>
+      <p>Linux libsecret <code>xdg:schema</code> attribute uses the same string.</p>
     </details>
 
     <details class="accordion">
-      <summary>Code-signing commitment for macOS (C)</summary>
-      <p>TouchID-gated keychain reads and Secure Enclave entitlements require signed macOS binaries. v1.0 ships code-signed, or defer signing (blocks any biometric feature for v1.1)?</p>
+      <summary>✓ Code-signing in v1.0; biometric is best-effort <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p><strong>Decision:</strong> Code-signing macOS binaries is a v1.0 mandatory commitment (Apple Developer Program enrollment + notarization). TouchID-gated keychain reads (Secure Enclave) are v1.0 best-effort:</p>
+      <ul>
+        <li>If macOS biometric integration lands cheaply (<code>kSecUseAuthenticationUI</code> + <code>kSecUseAuthenticationContext</code> on keychain queries; ~20 lines of Rust + a `LAContext` bridge), include in v1.0.</li>
+        <li>If the integration hits friction (entitlement weirdness, code-signing toolchain not ready, etc.), defer to v1.1.</li>
+        <li>Linux biometric is deferred regardless (no native equivalent; PolKit is complex; v1.1+ if real demand).</li>
+      </ul>
+      <p>Code-signing on Linux ships as GPG-signed packages (apt/dnf repos when those land in v1.1; for v1.0's curl installer + Nix flake, the curl script verifies a minisign signature on the tarball).</p>
     </details>
 
     <details class="accordion">
-      <summary>Per-server spec override (D)</summary>
-      <p>Ship <code>[server.&lt;name&gt;].spec = "..."</code> as a v1.0 escape hatch for servers that lie about their advertised MCP version? Agent D leans yes, documented as an escape hatch. Confirm.</p>
+      <summary>✓ Per-server spec override ships in v1.0 <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p><strong>Decision:</strong> <code>[server.&lt;name&gt;].spec = "2025-06-18"</code> ships in v1.0 as an escape hatch for servers that advertise an unsupported MCP spec version or lie about their support. When set, mcpd skips the install-time allow-list check and uses the user-specified spec for the initialize-time advertisement.</p>
+      <p>Documented in the docs as: "use only when you trust the server author and have verified manually that the server actually behaves at the spec version you're claiming."</p>
     </details>
 
     <details class="accordion">
-      <summary>Health-check gating on minor bumps (D ↔ health check)</summary>
-      <p>Agent D's recommendation auto-runs <code>mcpm test</code> after every classified change. Confirm this composes cleanly with the health-check's UX (probably a <code>--no-test</code> flag on <code>mcpm update</code> for users who'd rather skip).</p>
+      <summary>✓ Auto-run <code>mcpm test</code> after updates with <code>--no-test</code> flag <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p><strong>Decision:</strong> <code>mcpm update</code> auto-runs <code>mcpm test</code> after each classified change. On test failure, the lockfile entry rolls back atomically. The <code>--no-test</code> flag skips the auto-test (for users in offline / air-gapped / CI-without-network environments). The flag is also accepted on a per-server basis as <code>[server.&lt;name&gt;].test_on_update = false</code> in canonical config.</p>
     </details>
 
     <details class="accordion">
-      <summary>Service-manager unregister on uninstall (B)</summary>
-      <p>If the user accepted the launchd/systemd registration during onboarding and later runs <code>mcpm uninstall</code>, does mcpm unregister itself first? Agent B left this unaddressed.</p>
+      <summary>✓ <code>mcpm uninstall</code> unregisters from service manager first <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p><strong>Decision:</strong> <code>mcpm uninstall</code> performs cleanup in order:</p>
+      <ol>
+        <li>If mcpd is registered with the service manager: unregister it (launchd: <code>launchctl bootout gui/501/dev.mcp-manager.mcpd</code>; systemd-user: <code>systemctl --user disable --now mcpd.service</code>). Audit-logged as <code>service.unregister</code>.</li>
+        <li>If mcpd is running (not via the service manager): stop it cleanly via the same UDS RPC that <code>mcpm daemon stop</code> uses. Audit-logged as <code>daemon.stop</code>.</li>
+        <li>Stop and clean up any managed MCP server child processes (graceful SIGTERM with 5s timeout, then SIGKILL).</li>
+        <li>Remove the canonical config directory by default (<code>~/.config/mcp-manager/</code> on Linux, <code>~/Library/Application Support/mcp-manager/</code> on macOS). User can preserve with <code>mcpm uninstall --keep-config</code>.</li>
+        <li>Do NOT remove keychain entries by default (secrets persist). User can wipe with <code>mcpm uninstall --purge-secrets</code>, which removes every <code>dev.mcp-manager.mcpd/*</code> keychain entry.</li>
+        <li>Print the path of the audit log (kept around regardless) so users can find historical activity after uninstall.</li>
+      </ol>
     </details>
   </section>
 </main>

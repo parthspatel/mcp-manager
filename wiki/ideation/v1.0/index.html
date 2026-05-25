@@ -193,34 +193,37 @@
 
       <article class="card" style="border-color:var(--success)">
         <h4>Server discovery + install</h4>
-        <p><strong>Multi-source federation</strong>. 3 default registries baked into the binary: <code>official</code> (LF-stewarded MCP Registry), <code>github</code> (GitHub MCP Registry), <code>docker</code> (Docker MCP Catalog, auto-enabled when Docker is present). Users add private/corp registries with <code>mcpm registry add &lt;name&gt; &lt;url&gt; --signed-by &lt;pubkey&gt;</code>.</p>
-        <p><strong>Trust split</strong>: minisign Ed25519 on the index (required for defaults); Sigstore/PEP 740 verify-when-present on the underlying npm/PyPI package; cosign required for OCI images from the <code>docker</code> source. Pubkeys baked into mcpd binary; rotation via hotfix release.</p>
+        <p><strong>Multi-source federation</strong>. 3 default registries baked into the binary: <code>official</code> (LF-stewarded MCP Registry), <code>github</code> (GitHub MCP Registry), <code>docker</code> (Docker MCP Catalog, asked-once at <code>mcpm init</code> if Docker is present; CLI flag <code>--docker-enable=true|false</code> skips the prompt). Users add private/corp registries with <code>mcpm registry add &lt;name&gt; &lt;url&gt; --signed-by &lt;pubkey&gt;</code>.</p>
+        <p><strong>Trust split</strong>: minisign Ed25519 on the index (required for defaults); Sigstore/PEP 740 verify-when-present on the underlying npm/PyPI package; cosign required for OCI images from the <code>docker</code> source.</p>
+        <p><strong>Pubkey rotation</strong>: TUF-lite. A baked-in root key signs a runtime-fetched <code>trust.toml</code> manifest enumerating current registry pubkeys + <code>valid_until</code> dates. mcpd fetches with 7-day TTL. Per-registry rotation = update + re-sign + publish (zero user action). Root rotation = hotfix mcpd release (rare). See <a href="./closing-gaps/index.html#open-questions">closing-gaps open questions §1</a> for the full manifest schema.</p>
         <p>Search is local (BM25 over cached indexes); queries never leave the machine on default sources.</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/server-registry/">closing-gaps/server-registry</a> (Agent A, 38 citations).</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/server-registry/">closing-gaps/server-registry</a> (Agent A, 38 citations) + 2026-05-24 sub-decisions.</p>
       </article>
 
       <article class="card" style="border-color:var(--success)">
-        <h4>Onboarding: <code>mcpm init</code></h4>
-        <p><strong>Thin scaffolder, not a doctor.</strong> Models on <code>aws configure</code> + <code>terraform init</code> + <code>npm init -y</code>. All choices have bracketed defaults; <code>-y</code> skips confirmations; <code>--defaults</code> accepts every default.</p>
+        <h4>Onboarding: <code>mcpm init</code> + <code>mcpm uninstall</code></h4>
+        <p><strong>Thin scaffolder, not a doctor.</strong> Models on <code>aws configure</code> + <code>terraform init</code> + <code>npm init -y</code>. All choices have bracketed defaults; <code>-y</code> skips confirmations; <code>--defaults</code> accepts every default. Per-prompt flags also accepted for non-interactive scripting (e.g. <code>--docker-enable=true</code>).</p>
         <p>Five canonical transcripts documented: lucky-day interactive (~30s), full non-interactive (Nix/CI), project-scope with import-from stub, freshly-cloned-repo with direnv-style trust gate, and the service-manager prompt (declines by default since daemon auto-spawns from <code>mcpm exec</code>).</p>
         <p>Idempotent by construction; re-running is a no-op + summary.</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/onboarding/">closing-gaps/onboarding</a> (Agent B, 37 citations).</p>
+        <p><strong><code>mcpm uninstall</code></strong> performs symmetric cleanup: (1) unregisters from launchd/systemd-user if registered, (2) stops mcpd cleanly, (3) terminates managed MCP server children (SIGTERM → 5s → SIGKILL), (4) removes config directory (preserve with <code>--keep-config</code>), (5) keeps keychain entries by default (purge with <code>--purge-secrets</code>), (6) keeps the audit log + prints its path.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/onboarding/">closing-gaps/onboarding</a> (Agent B, 37 citations) + 2026-05-24 sub-decisions.</p>
       </article>
 
       <article class="card" style="border-color:var(--success)">
         <h4>Secrets lifecycle (v1.0 + extension surface)</h4>
-        <p><strong>One trait, two backends.</strong> <code>SecretStore</code> trait with <code>OsKeyringStore</code> (macOS Keychain + Linux libsecret via the <code>keyring</code> crate) and <code>EnvVarPassthroughStore</code> (read-only env-var escape hatch), composed via <code>LayeredSecretStore</code>.</p>
+        <p><strong>One trait, two backends.</strong> <code>SecretStore</code> trait with <code>OsKeyringStore</code> (macOS Keychain + Linux libsecret via the <code>keyring</code> crate) and <code>EnvVarPassthroughStore</code> (read-only env-var escape hatch), composed via <code>LayeredSecretStore</code>. Service-string namespace: <code>dev.mcp-manager.mcpd</code> (reverse-DNS; the <code>mcpd</code> suffix leaves room for future sibling binaries without collision).</p>
         <p>v1.0 CLI: <code>mcpm secret set/list/unset</code>. Values never on argv (<code>rpassword</code> TTY-only). Audit-logged as <code>secret.{read,write,unset,list}</code>; values never appear in events.</p>
+        <p><strong>Code-signing</strong>: v1.0 ships macOS code-signed binaries (Apple Developer Program enrollment + notarization). TouchID-gated keychain reads (Secure Enclave) is a best-effort v1.0 stretch goal: ships if implementation is light (~20 lines of Rust + an `LAContext` bridge), defers to v1.1 otherwise. Linux biometric deferred regardless.</p>
         <p><code>#[non_exhaustive] SecretRef</code> + opt-in subtraits <code>RotatableSecretStore</code> / <code>LeasedSecretStore</code> mean v1.1+ vault providers (1Password, Bitwarden, Vault, Doppler, Infisical, AWS/GCP/Azure SM) plug in without re-architecture.</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/secrets-lifecycle/">closing-gaps/secrets-lifecycle</a> (Agent C, 32 citations).</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/secrets-lifecycle/">closing-gaps/secrets-lifecycle</a> (Agent C, 32 citations) + 2026-05-24 sub-decisions.</p>
       </article>
 
       <article class="card" style="border-color:var(--success)">
         <h4>Version management + MCP spec negotiation</h4>
         <p><strong>Range-in-manifest, exact-in-lockfile</strong> (Cargo/npm model). Lockfile (TOML) co-located with the projection lockfile per scope.</p>
-        <p><strong>3-phase MCP-spec-version negotiation</strong>: (1) install-time check against mcpd's spec allow-list (baked into binary); (2) initialize-time advertise-and-pick per the MCP lifecycle contract; (3) wire-time re-emission as <code>MCP-Protocol-Version</code> header on every Streamable HTTP request.</p>
-        <p><code>mcpm update</code> classifies changes with Renovate's vocabulary: <code>[PATCH]</code> auto-apply, <code>[MINOR]</code> confirm-once, <code>[MAJOR]</code> refused without <code>--accept-breaking</code>, <code>[DIGEST]</code> refused as supply-chain anomaly, plus a new <code>[SPEC]</code> class for spec-version bumps. Health check (<code>mcpm test</code>) auto-runs after each change; on failure, lockfile entry rolls back atomically.</p>
-        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/version-management/">closing-gaps/version-management</a> (Agent D, 45 citations).</p>
+        <p><strong>3-phase MCP-spec-version negotiation</strong>: (1) install-time check against mcpd's spec allow-list (baked into binary); (2) initialize-time advertise-and-pick per the MCP lifecycle contract; (3) wire-time re-emission as <code>MCP-Protocol-Version</code> header on every Streamable HTTP request. <strong>Per-server spec override</strong>: <code>[server.&lt;name&gt;].spec = "2025-06-18"</code> ships in v1.0 as an escape hatch for servers that lie about their advertised version (skips the install-time allow-list check; documented as "use only when you trust the server author").</p>
+        <p><code>mcpm update</code> classifies changes with Renovate's vocabulary: <code>[PATCH]</code> auto-apply, <code>[MINOR]</code> confirm-once, <code>[MAJOR]</code> refused without <code>--accept-breaking</code>, <code>[DIGEST]</code> refused as supply-chain anomaly, plus a new <code>[SPEC]</code> class for spec-version bumps. Health check (<code>mcpm test</code>) auto-runs after each change with atomic rollback on failure; <code>--no-test</code> flag (or per-server <code>test_on_update = false</code> in config) disables for offline/air-gapped/CI environments.</p>
+        <p style="font-size:0.85rem;color:var(--fg-faint);margin-bottom:0">Source: <a href="./closing-gaps/version-management/">closing-gaps/version-management</a> (Agent D, 45 citations) + 2026-05-24 sub-decisions.</p>
       </article>
 
       <article class="card" style="border-color:var(--success);grid-column:1/-1">
