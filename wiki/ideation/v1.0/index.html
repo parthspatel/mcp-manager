@@ -21,7 +21,7 @@
   <h1>MCP Manager — v1.0</h1>
 
   <p class="lede">
-    Docker-style management for <a href="https://modelcontextprotocol.io">MCP servers</a> on macOS &amp; Linux. A Rust daemon (<code>mcpd</code>) supervises a few dozen MCP server processes, while a CLI (<code>mcpm</code>) and a TUI give developers one-shot and interactive control. mcpd manages the canonical state, isolates each server, projects configs into the developer's editors (Claude Code, Cursor, Zed, JetBrains, VSCode…), and keeps secrets out of plaintext files.
+    Docker-style management for <a href="https://modelcontextprotocol.io">MCP servers</a> on macOS &amp; Linux. A Rust daemon (<code>mcpmanagerd</code>) supervises a few dozen MCP server processes, while a CLI (<code>mcpm</code>) and a TUI give developers one-shot and interactive control. mcpmanagerd manages the canonical state, isolates each server, projects configs into the developer's editors (Claude Code, Cursor, Zed, JetBrains, VSCode…), and keeps secrets out of plaintext files.
   </p>
 
   <p>
@@ -74,7 +74,7 @@
     </p>
 
     <p>
-      In practice, developers end up with the same MCP server configured separately in each of their AI tools, with secrets in plaintext in each editor's config file, no central process supervision, and no consistent way to install, update, or manage them. <strong>MCP Manager is "Docker for MCP servers"</strong>: one daemon (<code>mcpd</code>) supervises the actual server processes; one canonical config (TOML) lives in <code>~/.config/mcp-manager/</code>; the manager <em>projects</em> that config into each editor's expected format so the editors keep working. Secrets stay in the OS keychain.
+      In practice, developers end up with the same MCP server configured separately in each of their AI tools, with secrets in plaintext in each editor's config file, no central process supervision, and no consistent way to install, update, or manage them. <strong>MCP Manager is "Docker for MCP servers"</strong>: one daemon (<code>mcpmanagerd</code>) supervises the actual server processes; one canonical config (TOML) lives in <code>~/.config/mcp-manager/</code>; the manager <em>projects</em> that config into each editor's expected format so the editors keep working. Secrets stay in the OS keychain.
     </p>
 
     <p>
@@ -106,8 +106,8 @@ mcpm logs --follow github     # tail a specific server's logs</code></pre>
         <tr><td><strong>Scale target</strong></td><td>10s of MCPs per user (not thousands).</td><td>2026-05-24 lockdown</td></tr>
         <tr><td><strong>Distribution</strong></td><td><code>curl … | sh</code> installer + Nix flake. No Homebrew, no App Store.</td><td>2026-05-24 lockdown</td></tr>
         <tr><td><strong>Language &amp; runtime</strong></td><td>Rust, tokio async runtime (forced by upstream <code>rmcp</code> SDK)</td><td><a href="./research/steady-bear-foundation/">steady-bear-foundation</a></td></tr>
-        <tr><td><strong>Daemon model</strong></td><td>Long-lived <code>mcpd</code> with per-server supervisor (podman/conmon-style). Auto-spawns from <code>mcpm exec</code>; optional service-manager registration on first launch (opt-in).</td><td><a href="./research/steady-bear-foundation/">S3</a> + lockdown</td></tr>
-        <tr><td><strong>Supervision</strong></td><td>Restart-on-crash with jittered exponential backoff + max-attempts in sliding window; cgroupv2 OOM on Linux + jetsam-inferred on macOS; append-only JSONL audit log; ring-buffered tail API for 3 streams (mcpd · per-server stdout/err · audit).</td><td>directive #3</td></tr>
+        <tr><td><strong>Daemon model</strong></td><td>Long-lived <code>mcpmanagerd</code> with per-server supervisor (podman/conmon-style). Auto-spawns from <code>mcpm exec</code>; optional service-manager registration on first launch (opt-in).</td><td><a href="./research/steady-bear-foundation/">S3</a> + lockdown</td></tr>
+        <tr><td><strong>Supervision</strong></td><td>Restart-on-crash with jittered exponential backoff + max-attempts in sliding window; cgroupv2 OOM on Linux + jetsam-inferred on macOS; append-only JSONL audit log; ring-buffered tail API for 3 streams (mcpmanagerd · per-server stdout/err · audit).</td><td>directive #3</td></tr>
         <tr><td><strong>Wire protocol</strong></td><td>JSON-RPC 2.0 over Unix domain socket. SO_PEERCRED kernel-enforced auth (no token).</td><td><a href="./research/precise-crane-conduit/">S4</a></td></tr>
         <tr><td><strong>Isolation</strong></td><td>Two-tier: <code>devenv</code> (Nix) + OS sandbox primary (bubblewrap on Linux, sandbox-exec on macOS); Docker MCP Toolkit / Podman / pinned uvx-npx as escape hatch.</td><td><a href="./research/stoic-badger-sandbox/">S2</a></td></tr>
         <tr><td><strong>Client surfaces</strong></td><td>CLI (<code>clap</code> derive) + TUI (<code>ratatui</code> + <code>crossterm</code>, lazygit-style) + config files (TOML, hand-editable). <strong>No GUI in v1.0</strong> (deferred; <a href="./research/ui-shootout/">shootout</a> preserved as research for v1.x).</td><td><a href="./research/nimble-raven-toolkit/">S5</a> + lockdown</td></tr>
@@ -131,7 +131,7 @@ mcpm logs --follow github     # tail a specific server's logs</code></pre>
       <article class="card" style="border-left:4px solid var(--success)">
         <h4>v1.0 ships</h4>
         <ul>
-          <li><code>mcpd</code> daemon with full process supervision (restart, OOM, audit log, tail API)</li>
+          <li><code>mcpmanagerd</code> daemon with full process supervision (restart, OOM, audit log, tail API)</li>
           <li><code>mcpm</code> CLI — install, search, test, logs, secret, registry, project, update, init, uninstall</li>
           <li><code>mcpm tui</code> — lazygit-style interactive client</li>
           <li>Toolchain projection for Tier-1 tools (incl. JetBrains XML)</li>

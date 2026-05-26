@@ -36,7 +36,7 @@
     <ul>
       <li><a href="#architecture">System architecture</a></li>
       <li><a href="#components">Component breakdown</a></li>
-      <li><a href="#wire">Wire protocol (mcpm ↔ mcpd)</a></li>
+      <li><a href="#wire">Wire protocol (mcpm ↔ mcpmanagerd)</a></li>
       <li><a href="#schemas">Config schemas</a></li>
       <li><a href="#flows">End-to-end data flows</a></li>
       <li><a href="#nfr">Non-functional requirements</a></li>
@@ -71,33 +71,33 @@
 │         │                                    │                       │
 │         └────────┬───────────────────────────┘                       │
 │                  │                                                    │
-│   ┌──────────────▼────────────────────────────────────────────┐      │
-│   │  mcpd  (the long-lived daemon)                            │      │
-│   │  • tokio multi-threaded runtime                           │      │
-│   │  • listens on $XDG_RUNTIME_DIR/mcpd.sock                  │      │
-│   │  • SO_PEERCRED auth (single-user)                         │      │
-│   │  ┌──────────────┐ ┌─────────────────┐ ┌────────────────┐  │      │
-│   │  │ mcp-core     │ │ mcp-supervisor  │ │ mcp-secrets    │  │      │
-│   │  │ • registry   │ │ • restart       │ │ • SecretStore  │  │      │
-│   │  │ • config     │ │   policy        │ │   trait        │  │      │
-│   │  │ • audit log  │ │ • OOM detect    │ │ • OsKeyring +  │  │      │
-│   │  │ • lockfile   │ │ • cgroup mgr    │ │   EnvVarPass   │  │      │
-│   │  └──────────────┘ └────┬────────────┘ └────────────────┘  │      │
-│   │                        │                                  │      │
-│   │  ┌──────────────────┐  │   ┌──────────────────────────┐  │      │
-│   │  │ mcp-logs         │  │   │ mcp-projector            │  │      │
-│   │  │ • ring buffers   │  │   │ • managed-block sync     │  │      │
-│   │  │ • tail API       │  │   │ • TOML manifests         │  │      │
-│   │  │   (3 streams)    │  │   │ • per-editor adapters    │  │      │
-│   │  └──────────────────┘  │   └──────────────────────────┘  │      │
-│   │                        │                                  │      │
-│   │  ┌──────────────────┐  │   ┌──────────────────────────┐  │      │
-│   │  │ mcp-registry     │  │   │ mcp-trust                │  │      │
-│   │  │ • multi-source   │  │   │ • TUF-lite manifest      │  │      │
-│   │  │ • BM25 index     │  │   │ • project trust gate     │  │      │
-│   │  │ • minisign+cosign│  │   └──────────────────────────┘  │      │
-│   │  └──────────────────┘  │                                  │      │
-│   └────────────────────────┼──────────────────────────────────┘      │
+│   ┌──────────────▼─────────────────────────────────────────────┐     │
+│   │  mcpmanagerd  (the long-lived daemon)                      │     │
+│   │  • tokio multi-threaded runtime                            │     │
+│   │  • listens on $XDG_RUNTIME_DIR/mcpmanagerd.sock             │     │
+│   │  • SO_PEERCRED auth (single-user)                          │     │
+│   │  ┌─────────────────┐ ┌──────────────────┐ ┌──────────────┐ │     │
+│   │  │ mcpm-core       │ │ mcpm-supervisor  │ │ mcpm-secrets │ │     │
+│   │  │ • registry      │ │ • restart        │ │ • SecretSto. │ │     │
+│   │  │ • config        │ │   policy         │ │ • OsKeyring  │ │     │
+│   │  │ • audit log     │ │ • OOM detect     │ │ • EnvVarPass │ │     │
+│   │  │ • lockfile      │ │ • cgroup mgr     │ │              │ │     │
+│   │  └─────────────────┘ └─────┬────────────┘ └──────────────┘ │     │
+│   │                            │                               │     │
+│   │  ┌──────────────────┐      │  ┌──────────────────────────┐ │     │
+│   │  │ mcpm-logs        │      │  │ mcpm-projector           │ │     │
+│   │  │ • ring buffers   │      │  │ • managed-block sync     │ │     │
+│   │  │ • tail API       │      │  │ • TOML manifests         │ │     │
+│   │  │   (3 streams)    │      │  │ • per-editor adapters    │ │     │
+│   │  └──────────────────┘      │  └──────────────────────────┘ │     │
+│   │                            │                               │     │
+│   │  ┌──────────────────┐      │  ┌──────────────────────────┐ │     │
+│   │  │ mcpm-registry    │      │  │ mcpm-trust               │ │     │
+│   │  │ • multi-source   │      │  │ • TUF-lite manifest      │ │     │
+│   │  │ • BM25 index     │      │  │ • project trust gate     │ │     │
+│   │  │ • minisign+cosign│      │  └──────────────────────────┘ │     │
+│   │  └──────────────────┘      │                               │     │
+│   └────────────────────────────┼───────────────────────────────┘     │
 │                            │ spawn                                   │
 │   ┌────────────────────────▼────────────────────────────────┐        │
 │   │  Isolation runtime           ← Stream 2 owns             │        │
@@ -117,17 +117,17 @@
 │   &lt;repo&gt;/.mcp-manager.toml + .mcp-manager.lock (project, optional)    │
 │   ~/.config/mcp-manager/projection.lock       (user lock)             │
 │   ~/.config/mcp-manager/trust.toml            (project trust gates)   │
-│   $XDG_STATE_HOME/mcpd/audit/YYYY-MM-DD.jsonl (audit log, rotated)    │
-│   $XDG_STATE_HOME/mcpd/logs/&lt;server&gt;/*.log    (per-server log rings)  │
-│   OS keychain entries: dev.mcp-manager.mcpd/&lt;server&gt;/&lt;name&gt;           │
+│   $XDG_STATE_HOME/mcpmanagerd/audit/YYYY-MM-DD.jsonl (audit log, rotated)    │
+│   $XDG_STATE_HOME/mcpmanagerd/logs/&lt;server&gt;/*.log    (per-server log rings)  │
+│   OS keychain entries: dev.mcp-manager.mcpmanagerd/&lt;server&gt;/&lt;name&gt;           │
 └───────────────────────────────────────────────────────────────────────┘
 </code></pre>
 
     <h3>Key invariants</h3>
     <ul>
-      <li><strong>mcpd is the single authority over canonical state.</strong> CLI/TUI/external clients always talk to mcpd over UDS; no client reads/writes the canonical TOML directly (except <code>$EDITOR</code> via the edit-and-reload flow, which is mediated).</li>
-      <li><strong>Secrets never cross a process boundary except via env injection at spawn time.</strong> mcpd reads from the keychain and writes to the child server process's env when launching it. The wrapper <code>mcpm exec</code> never sees the value.</li>
-      <li><strong>One server, one process, one supervisor.</strong> If Cursor and Claude Code both want the github MCP, mcpd hands them stdio-pipes to the <em>same</em> spawned process. No duplication.</li>
+      <li><strong>mcpmanagerd is the single authority over canonical state.</strong> CLI/TUI/external clients always talk to mcpmanagerd over UDS; no client reads/writes the canonical TOML directly (except <code>$EDITOR</code> via the edit-and-reload flow, which is mediated).</li>
+      <li><strong>Secrets never cross a process boundary except via env injection at spawn time.</strong> mcpmanagerd reads from the keychain and writes to the child server process's env when launching it. The wrapper <code>mcpm exec</code> never sees the value.</li>
+      <li><strong>One server, one process, one supervisor.</strong> If Cursor and Claude Code both want the github MCP, mcpmanagerd hands them stdio-pipes to the <em>same</em> spawned process. No duplication.</li>
       <li><strong>All state mutations are audit-logged.</strong> Every <code>config.change</code>, <code>secret.read</code>, <code>server.spawn</code>, <code>projection.write</code>, <code>service.unregister</code> emits a JSONL line with timestamp + actor + event-specific payload.</li>
     </ul>
   </section>
@@ -137,27 +137,35 @@
 
     <p>Workspace structure (cargo workspace, single repo, one daemon binary + one CLI binary + shared crates):</p>
 
+    <p style="background:var(--bg-elev);border-left:3px solid var(--accent);padding:0.75rem 1rem;margin-block:1rem;font-size:0.9rem">
+      <strong>Naming convention.</strong>
+      Crates use the <code>mcpm-*</code> prefix. The two binary-producing crates rename their output:
+      <code>mcpm-daemon</code> (crate) → <code>mcpmanagerd</code> (binary);
+      <code>mcpm-cli</code> (crate) → <code>mcpm</code> (binary).
+      Library crates produce no binary, just the crate name. (Throughout the <a href="./research/">research/</a> history the daemon was named <code>mcpd</code> with <code>mcp-*</code> library crates; v1.0 lockdown renamed to the convention below.)
+    </p>
+
     <pre><code>mcp-manager/
 ├── Cargo.toml                  (workspace root)
 ├── crates/
-│   ├── mcpd/                   the daemon binary
-│   ├── mcpm/                   the CLI binary (incl. TUI)
-│   ├── mcp-core/               registry, config, audit log, lockfile
-│   ├── mcp-protocol/           wire types (JSON-RPC schema, MCP types)
-│   ├── mcp-client/             shared client-side helpers (used by CLI/TUI)
-│   ├── mcp-supervisor/         process supervision, restart policy, OOM
-│   ├── mcp-secrets/            SecretStore trait + backends
-│   ├── mcp-projector/          toolchain projection (per-editor adapters)
-│   ├── mcp-registry/           registry sources, search, install
-│   ├── mcp-logs/               ring buffers, tail API
-│   └── mcp-trust/              TUF-lite trust manifest, project trust gate
+│   ├── mcpm-daemon/             binary crate → produces `mcpmanagerd`
+│   ├── mcpm-cli/                binary crate → produces `mcpm` (incl. TUI)
+│   ├── mcpm-core/               registry, config, audit log, lockfile
+│   ├── mcpm-protocol/           wire types (JSON-RPC schema, MCP types)
+│   ├── mcpm-client/             shared client-side helpers (used by CLI/TUI)
+│   ├── mcpm-supervisor/         process supervision, restart policy, OOM
+│   ├── mcpm-secrets/            SecretStore trait + backends
+│   ├── mcpm-projector/          toolchain projection (per-editor adapters)
+│   ├── mcpm-registry/           registry sources, search, install
+│   ├── mcpm-logs/               ring buffers, tail API
+│   └── mcpm-trust/              TUF-lite trust manifest, project trust gate
 ├── manifests/
-│   ├── toolchains/             bundled TOML manifests for Tier-1 editors
-│   └── registries/             baked-in default registry pubkeys + URLs
-├── docs/                       mdbook source
+│   ├── toolchains/              bundled TOML manifests for Tier-1 editors
+│   └── registries/              baked-in default registry pubkeys + URLs
+├── docs/                        mdbook source
 └── tests/
-    ├── e2e/                    end-to-end across daemon + CLI
-    └── compat/                 per-editor projection golden tests</code></pre>
+    ├── e2e/                     end-to-end across daemon + CLI
+    └── compat/                  per-editor projection golden tests</code></pre>
 
     <h3>Per-crate responsibility table</h3>
 
@@ -165,57 +173,57 @@
       <thead><tr><th>Crate</th><th>Responsibility</th><th>Source research</th></tr></thead>
       <tbody>
         <tr>
-          <td><code>mcpd</code></td>
-          <td>Binary entrypoint. Loads config, starts the tokio runtime, hosts the UDS server, wires together all the other crates. Implements service-manager (launchd/systemd-user) registration.</td>
+          <td><code>mcpm-daemon</code> → <code>mcpmanagerd</code></td>
+          <td>Binary crate. Loads config, starts the tokio runtime, hosts the UDS server, wires together all the other crates. Implements service-manager (launchd/systemd-user) registration. Produces the binary users see as <code>mcpmanagerd</code>.</td>
           <td><a href="./research/steady-bear-foundation/">S3</a></td>
         </tr>
         <tr>
-          <td><code>mcpm</code></td>
-          <td>CLI binary using <code>clap</code> derive. Subcommands: install / search / test / logs / secret / registry / project / update / init / uninstall / exec / tui. The <code>tui</code> subcommand opens a ratatui app; everything else is single-shot.</td>
+          <td><code>mcpm-cli</code> → <code>mcpm</code></td>
+          <td>Binary crate. CLI using <code>clap</code> derive. Subcommands: install / search / test / logs / secret / registry / project / update / init / uninstall / exec / tui. The <code>tui</code> subcommand opens a ratatui app; everything else is single-shot. Produces the binary users type as <code>mcpm</code>.</td>
           <td><a href="./research/nimble-raven-toolkit/">S5</a></td>
         </tr>
         <tr>
-          <td><code>mcp-core</code></td>
+          <td><code>mcpm-core</code></td>
           <td>Owns the canonical config (TOML parsing / writing / merging), the lockfile, the audit log sink, and the registry of running servers (in-memory state). Pure data + business logic; no I/O outside file + audit.</td>
           <td><a href="./research/steady-bear-foundation/">S3</a></td>
         </tr>
         <tr>
-          <td><code>mcp-protocol</code></td>
-          <td>Wire types only. JSON-RPC schemas for <code>install</code>, <code>spawn</code>, <code>tail</code>, etc. Serde-derived. Versioned (this crate's semver tracks the wire's compat surface, separately from mcpd's release version).</td>
+          <td><code>mcpm-protocol</code></td>
+          <td>Wire types only. JSON-RPC schemas for <code>install</code>, <code>spawn</code>, <code>tail</code>, etc. Serde-derived. Versioned (this crate's semver tracks the wire's compat surface, separately from mcpmanagerd's release version).</td>
           <td><a href="./research/precise-crane-conduit/">S4</a></td>
         </tr>
         <tr>
-          <td><code>mcp-client</code></td>
-          <td>Shared helpers for any client of mcpd's UDS API. Used by <code>mcpm</code> and (potentially) third-party tools. Re-exports types from <code>mcp-protocol</code>. Handles the dial-or-auto-spawn dance.</td>
+          <td><code>mcpm-client</code></td>
+          <td>Shared helpers for any client of mcpmanagerd's UDS API. Used by <code>mcpm</code> and (potentially) third-party tools. Re-exports types from <code>mcpm-protocol</code>. Handles the dial-or-auto-spawn dance.</td>
           <td><a href="./research/nimble-raven-toolkit/research-client-tools-shared.html">S5 shared</a></td>
         </tr>
         <tr>
-          <td><code>mcp-supervisor</code></td>
+          <td><code>mcpm-supervisor</code></td>
           <td>Spawns + supervises child MCP server processes. Implements the restart policy (jittered backoff + max-attempts), OOM detection (cgroupv2 events on Linux, jetsam-inferred on macOS), and resource limits (memory). Per-server tokio task; uses <code>tokio::process::Command</code>.</td>
           <td><a href="./research/steady-bear-foundation/">S3</a> + directive #3</td>
         </tr>
         <tr>
-          <td><code>mcp-secrets</code></td>
+          <td><code>mcpm-secrets</code></td>
           <td><code>SecretStore</code> trait + <code>OsKeyringStore</code> (macOS Keychain via SecItemAdd/CopyMatching; Linux libsecret via the <code>keyring</code> crate) + <code>EnvVarPassthroughStore</code> + <code>LayeredSecretStore</code> composition. Plaintext values in <code>secrecy::SecretString</code> with <code>zeroize</code>.</td>
           <td><a href="./research/closing-gaps/secrets-lifecycle/">C</a></td>
         </tr>
         <tr>
-          <td><code>mcp-projector</code></td>
+          <td><code>mcpm-projector</code></td>
           <td>Reads the canonical config + project state; writes editor configs using managed-block fenced regions. Per-editor logic is data-driven from TOML manifests in <code>manifests/toolchains/</code>. Supports both bundled Tier-1 editors and user-authored custom manifests.</td>
           <td><a href="./research/clever-fox-bridge/">S6</a></td>
         </tr>
         <tr>
-          <td><code>mcp-registry</code></td>
-          <td>Multi-source federation. One <code>RegistrySource</code> trait; per-source adapters for the 3 baked-in registries (<code>official</code>, <code>github</code>, <code>docker</code>) plus user-added private sources. BM25 local search over cached indexes. Pubkey verification via <code>mcp-trust</code>.</td>
+          <td><code>mcpm-registry</code></td>
+          <td>Multi-source federation. One <code>RegistrySource</code> trait; per-source adapters for the 3 baked-in registries (<code>official</code>, <code>github</code>, <code>docker</code>) plus user-added private sources. BM25 local search over cached indexes. Pubkey verification via <code>mcpm-trust</code>.</td>
           <td><a href="./research/closing-gaps/server-registry/">A</a></td>
         </tr>
         <tr>
-          <td><code>mcp-logs</code></td>
-          <td>Three log-stream sinks (mcpd's tracing logs, per-server stdout/err, audit log). Each backed by a ring buffer (~4-10MB) + on-disk rotation. Exposes a <code>logs.tail</code> RPC method on the wire (streaming).</td>
+          <td><code>mcpm-logs</code></td>
+          <td>Three log-stream sinks (mcpmanagerd's tracing logs, per-server stdout/err, audit log). Each backed by a ring buffer (~4-10MB) + on-disk rotation. Exposes a <code>logs.tail</code> RPC method on the wire (streaming).</td>
           <td>directive #3</td>
         </tr>
         <tr>
-          <td><code>mcp-trust</code></td>
+          <td><code>mcpm-trust</code></td>
           <td>TUF-lite trust verification. Holds the baked-in root pubkey; fetches + verifies <code>trust.toml</code> at install + refresh-on-TTL. Also implements project-config trust gate (sha256-pin in <code>~/.config/mcp-manager/trust.toml</code>).</td>
           <td><a href="./research/closing-gaps/server-registry/">A</a> + <a href="./research/ux-design-tui-config.html#detection">UX design</a></td>
         </tr>
@@ -224,15 +232,15 @@
   </section>
 
   <section class="section" id="wire">
-    <h2>Wire protocol (mcpm ↔ mcpd)</h2>
+    <h2>Wire protocol (mcpm ↔ mcpmanagerd)</h2>
 
     <p>
-      JSON-RPC 2.0 over Unix domain socket. No HTTP, no TCP, no WebSocket. Single socket: <code>$XDG_RUNTIME_DIR/mcpd.sock</code> (macOS: <code>~/Library/Application Support/mcp-manager/mcpd.sock</code>; Linux: <code>$XDG_RUNTIME_DIR/mcpd.sock</code> or <code>/run/user/UID/mcpd.sock</code>).
+      JSON-RPC 2.0 over Unix domain socket. No HTTP, no TCP, no WebSocket. Single socket: <code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code> (macOS: <code>~/Library/Application Support/mcp-manager/mcpmanagerd.sock</code>; Linux: <code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code> or <code>/run/user/UID/mcpmanagerd.sock</code>).
     </p>
 
     <h3>Authentication</h3>
     <ul>
-      <li>Socket file permissions: 0600, owned by the user running mcpd. No further auth needed for any client running as the same UID.</li>
+      <li>Socket file permissions: 0600, owned by the user running mcpmanagerd. No further auth needed for any client running as the same UID.</li>
       <li>Defensive secondary check: every accepted connection's peer credentials are verified via <code>SO_PEERCRED</code> (Linux) / <code>LOCAL_PEERCRED</code> (macOS getsockopt). Mismatched UID → close connection + audit-log <code>auth.failed</code>.</li>
       <li>No bearer tokens, no shared secrets. The kernel is the source of truth for "is this caller me?". <a href="./research/precise-crane-conduit/research-client-api-auth.html">Per S4's auth research</a>.</li>
     </ul>
@@ -290,17 +298,17 @@ daemon.stop                            -&gt; ()    // graceful</code></pre>
 
     <h3>Versioning</h3>
     <p>
-      The wire schema lives in the <code>mcp-protocol</code> crate. Its version is independent of mcpd's release version. JSON-RPC 2.0's <code>jsonrpc</code> field is always <code>"2.0"</code>; we add a custom <code>"mcpm_wire_version"</code> to every request and response so clients/daemons can detect drift early. The wire-version compat policy follows semver: minor versions add methods; major versions remove or rename them. <a href="./research/precise-crane-conduit/research-client-api-versioning.html">Per S4's versioning research</a>.
+      The wire schema lives in the <code>mcpm-protocol</code> crate. Its version is independent of mcpmanagerd's release version. JSON-RPC 2.0's <code>jsonrpc</code> field is always <code>"2.0"</code>; we add a custom <code>"mcpm_wire_version"</code> to every request and response so clients/daemons can detect drift early. The wire-version compat policy follows semver: minor versions add methods; major versions remove or rename them. <a href="./research/precise-crane-conduit/research-client-api-versioning.html">Per S4's versioning research</a>.
     </p>
 
     <h3>Streaming</h3>
     <p>
-      <code>logs.tail</code> uses a streaming response (a single JSON-RPC <em>request</em> followed by a stream of partial <em>notifications</em> on the same connection). The client can cancel by closing the connection. mcpd applies backpressure via the bounded tokio channel feeding the response.
+      <code>logs.tail</code> uses a streaming response (a single JSON-RPC <em>request</em> followed by a stream of partial <em>notifications</em> on the same connection). The client can cancel by closing the connection. mcpmanagerd applies backpressure via the bounded tokio channel feeding the response.
     </p>
 
     <h3>Auto-spawn behavior</h3>
     <p>
-      <code>mcp-client</code>'s <code>connect()</code> implements: (1) try connecting to <code>mcpd.sock</code>; (2) if <code>ENOENT</code> or <code>ECONNREFUSED</code>, fork+spawn mcpd as a background process; (3) wait up to 5s for the socket to appear (poll every 50ms); (4) retry connection. <code>flock(2)</code> on a sibling lockfile prevents two parallel <code>mcpm</code> invocations from racing to spawn two daemons.
+      <code>mcpm-client</code>'s <code>connect()</code> implements: (1) try connecting to <code>mcpmanagerd.sock</code>; (2) if <code>ENOENT</code> or <code>ECONNREFUSED</code>, fork+spawn mcpmanagerd as a background process; (3) wait up to 5s for the socket to appear (poll every 50ms); (4) retry connection. <code>flock(2)</code> on a sibling lockfile prevents two parallel <code>mcpm</code> invocations from racing to spawn two daemons.
     </p>
   </section>
 
@@ -308,7 +316,7 @@ daemon.stop                            -&gt; ()    // graceful</code></pre>
     <h2>Config schemas</h2>
 
     <h3>User-scope config (<code>~/.config/mcp-manager/config.toml</code>)</h3>
-    <pre><code>[mcpd]
+    <pre><code>[mcpmanagerd]
 audit_retention_days = 90
 log_ring_buffer_mb   = 10
 service_register     = true              # registered with launchd/systemd-user
@@ -384,7 +392,7 @@ granted_by  = "interactive" | "force"
 trust_toml_url = "https://trust.mcp-manager.dev/v1/trust.toml"
 last_refreshed = "2026-05-24T00:00:00Z"</code></pre>
 
-    <h3>Audit log entry (<code>$XDG_STATE_HOME/mcpd/audit/YYYY-MM-DD.jsonl</code>)</h3>
+    <h3>Audit log entry (<code>$XDG_STATE_HOME/mcpmanagerd/audit/YYYY-MM-DD.jsonl</code>)</h3>
     <pre><code>{
   "ts":      "2026-05-24T19:15:02.413Z",
   "event":   "server.spawn" | "server.crash" | "server.oom" | "secret.read"
@@ -405,53 +413,53 @@ last_refreshed = "2026-05-24T00:00:00Z"</code></pre>
     <h3>Flow A: <code>mcpm install github-mcp</code></h3>
     <ol>
       <li>mcpm parses args → builds <code>install</code> JSON-RPC request.</li>
-      <li>mcp-client dials UDS (auto-spawns mcpd if absent).</li>
-      <li>mcpd receives → <code>mcp-registry</code> searches across active sources (BM25 over cached indexes; refreshes if TTL expired).</li>
-      <li>Pubkey verified via <code>mcp-trust</code> (lookup in cached trust.toml).</li>
-      <li><code>mcp-registry</code> resolves the version (range → exact via the registry's index).</li>
+      <li>mcpm-client dials UDS (auto-spawns mcpmanagerd if absent).</li>
+      <li>mcpmanagerd receives → <code>mcpm-registry</code> searches across active sources (BM25 over cached indexes; refreshes if TTL expired).</li>
+      <li>Pubkey verified via <code>mcpm-trust</code> (lookup in cached trust.toml).</li>
+      <li><code>mcpm-registry</code> resolves the version (range → exact via the registry's index).</li>
       <li>Package downloaded (Python via uvx, Node via bun, native binary via curl + minisign verify).</li>
-      <li><code>mcp-core</code> writes a new <code>[server.github-mcp]</code> stanza to canonical config (atomic temp-rename).</li>
-      <li><code>mcp-core</code> updates lockfile with resolved version + checksum.</li>
-      <li><code>mcp-projector</code> runs <code>projection.sync</code> for every enabled projection target (Cursor, Claude Code, …) using managed-block writes.</li>
+      <li><code>mcpm-core</code> writes a new <code>[server.github-mcp]</code> stanza to canonical config (atomic temp-rename).</li>
+      <li><code>mcpm-core</code> updates lockfile with resolved version + checksum.</li>
+      <li><code>mcpm-projector</code> runs <code>projection.sync</code> for every enabled projection target (Cursor, Claude Code, …) using managed-block writes.</li>
       <li>Audit-log entries: <code>install.start</code>, <code>config.change</code>, <code>projection.write</code> × N tools, <code>install.complete</code>.</li>
-      <li>mcpd returns <code>InstallResult</code> with the resolved version + a list of missing secrets.</li>
+      <li>mcpmanagerd returns <code>InstallResult</code> with the resolved version + a list of missing secrets.</li>
       <li>mcpm prints the result; if missing secrets, prints the exact <code>mcpm secret set X</code> commands to run.</li>
     </ol>
 
     <h3>Flow B: Editor spawns an MCP server via <code>mcpm exec</code></h3>
     <ol>
-      <li>Editor's MCP config (projected by mcp-projector) reads <code>command = "mcpm"</code>, <code>args = ["exec", "github-mcp"]</code>.</li>
+      <li>Editor's MCP config (projected by mcpm-projector) reads <code>command = "mcpm"</code>, <code>args = ["exec", "github-mcp"]</code>.</li>
       <li>Editor spawns <code>mcpm exec github-mcp</code> as a child process, pipes stdio.</li>
-      <li><code>mcpm exec</code> dials mcpd. Auto-spawns daemon if not running (200ms one-time + flock).</li>
-      <li>JSON-RPC <code>server.start</code> → mcpd looks up the server config.</li>
-      <li>mcpd checks if the server is already running (cached process). If yes, reuses it; if no, calls <code>mcp-supervisor</code> to spawn.</li>
-      <li><code>mcp-supervisor</code>:
+      <li><code>mcpm exec</code> dials mcpmanagerd. Auto-spawns daemon if not running (200ms one-time + flock).</li>
+      <li>JSON-RPC <code>server.start</code> → mcpmanagerd looks up the server config.</li>
+      <li>mcpmanagerd checks if the server is already running (cached process). If yes, reuses it; if no, calls <code>mcpm-supervisor</code> to spawn.</li>
+      <li><code>mcpm-supervisor</code>:
         <ul>
-          <li>Resolves secrets via <code>mcp-secrets</code>. Audit: <code>secret.read</code> for each.</li>
+          <li>Resolves secrets via <code>mcpm-secrets</code>. Audit: <code>secret.read</code> for each.</li>
           <li>Builds env-var injection map. Plaintext lives in <code>secrecy::SecretString</code> until the spawn syscall.</li>
           <li>Spawns inside isolation wrapper (<code>devenv</code> profile + bubblewrap, etc.).</li>
           <li>Audit: <code>server.spawn</code>.</li>
-          <li>Tokio task watches the child: stdout → <code>mcp-logs</code>, stderr → <code>mcp-logs</code>, exit → restart policy.</li>
+          <li>Tokio task watches the child: stdout → <code>mcpm-logs</code>, stderr → <code>mcpm-logs</code>, exit → restart policy.</li>
         </ul>
       </li>
-      <li>mcpd creates a pipe pair and tells <code>mcpm exec</code>: "your stdio is now linked to the server."</li>
-      <li><code>mcpm exec</code> becomes a stdio relay: editor's stdin → mcpd → server stdin; server stdout → mcpd → editor's stdout. Bytes flow.</li>
-      <li>When editor exits, <code>mcpm exec</code> closes; mcpd decrements the server's refcount. If refcount → 0 and the server has no other clients, supervisor keeps it running for a configurable idle TTL (default: forever — server stays alive between editor sessions).</li>
+      <li>mcpmanagerd creates a pipe pair and tells <code>mcpm exec</code>: "your stdio is now linked to the server."</li>
+      <li><code>mcpm exec</code> becomes a stdio relay: editor's stdin → mcpmanagerd → server stdin; server stdout → mcpmanagerd → editor's stdout. Bytes flow.</li>
+      <li>When editor exits, <code>mcpm exec</code> closes; mcpmanagerd decrements the server's refcount. If refcount → 0 and the server has no other clients, supervisor keeps it running for a configurable idle TTL (default: forever — server stays alive between editor sessions).</li>
     </ol>
 
     <h3>Flow C: <code>mcpm secret set GITHUB_TOKEN</code></h3>
     <ol>
       <li>mcpm reads the value via <code>rpassword</code> (TTY only, hidden input). Value lives in <code>secrecy::SecretString</code>.</li>
-      <li>mcpm dials mcpd; sends <code>secret.set { name: "GITHUB_TOKEN" }</code> followed by the value as a streaming parameter (length-prefixed, never logged).</li>
-      <li>mcpd's handler resolves the active <code>SecretStore</code> (<code>LayeredSecretStore</code> writes only to <code>OsKeyringStore</code>; <code>EnvVarPassthroughStore</code> is read-only).</li>
-      <li><code>OsKeyringStore</code> calls SecItemAdd (macOS) / libsecret_password_store_sync (Linux). Service: <code>dev.mcp-manager.mcpd</code>, account: <code>&lt;global&gt;/GITHUB_TOKEN</code> (or <code>&lt;server-name&gt;/GITHUB_TOKEN</code> for per-server scoping in v1.1).</li>
+      <li>mcpm dials mcpmanagerd; sends <code>secret.set { name: "GITHUB_TOKEN" }</code> followed by the value as a streaming parameter (length-prefixed, never logged).</li>
+      <li>mcpmanagerd's handler resolves the active <code>SecretStore</code> (<code>LayeredSecretStore</code> writes only to <code>OsKeyringStore</code>; <code>EnvVarPassthroughStore</code> is read-only).</li>
+      <li><code>OsKeyringStore</code> calls SecItemAdd (macOS) / libsecret_password_store_sync (Linux). Service: <code>dev.mcp-manager.mcpmanagerd</code>, account: <code>&lt;global&gt;/GITHUB_TOKEN</code> (or <code>&lt;server-name&gt;/GITHUB_TOKEN</code> for per-server scoping in v1.1).</li>
       <li>Audit: <code>secret.write { name: "GITHUB_TOKEN", store: "os-keyring", outcome: "ok" }</code>. Value never appears in any audit field.</li>
-      <li>mcpd returns success. mcpm zeroes its copy of the value and exits.</li>
+      <li>mcpmanagerd returns success. mcpm zeroes its copy of the value and exits.</li>
     </ol>
 
     <h3>Flow D: Server crash → restart with backoff</h3>
     <ol>
-      <li><code>mcp-supervisor</code>'s tokio watcher sees the child process exit with non-zero status.</li>
+      <li><code>mcpm-supervisor</code>'s tokio watcher sees the child process exit with non-zero status.</li>
       <li>Audit: <code>server.crash { name, exit_code, signal?, last_log_line }</code>.</li>
       <li>Supervisor checks restart policy: how many attempts in the last <code>window_secs</code>?</li>
       <li>If <code>attempts &lt; attempts_max</code>: compute delay = <code>min(base × 2^attempt × (1 + rand(0, 0.3)), cap)</code>. Sleep. Re-spawn (same secrets, same isolation).</li>
@@ -462,7 +470,7 @@ last_refreshed = "2026-05-24T00:00:00Z"</code></pre>
     <h3>Flow E: <code>mcpm tui</code> opens, user navigates</h3>
     <ol>
       <li>mcpm subprocess starts ratatui app. Captures terminal alternate-screen + mouse events via crossterm.</li>
-      <li>App opens UDS connection to mcpd. Subscribes to <code>server.list</code> + <code>logs.tail "combined"</code> streaming.</li>
+      <li>App opens UDS connection to mcpmanagerd. Subscribes to <code>server.list</code> + <code>logs.tail "combined"</code> streaming.</li>
       <li>Three left panes render from <code>server.list</code> / <code>projection.list</code> / <code>secret.list</code> snapshots.</li>
       <li>User presses <code>↓</code> to focus a server; right pane updates to <code>logs.tail "server:&lt;name&gt;"</code>. Old subscription is dropped.</li>
       <li>User presses <code>e</code>: app suspends terminal, spawns <code>$EDITOR /tmp/mcpm-edit-XXXX.toml</code> as a foreground child. On editor exit, app validates via <code>config.validate</code> RPC, then commits via <code>config.put</code> (atomic). Re-enters alternate screen.</li>
@@ -479,13 +487,13 @@ last_refreshed = "2026-05-24T00:00:00Z"</code></pre>
         <tr><td>Daemon cold start</td><td>≤ 200ms from launch to UDS-listening</td><td>e2e test; CI gate</td></tr>
         <tr><td>CLI dispatch latency</td><td>≤ 50ms p99 for <code>mcpm exec</code> when daemon is already running</td><td>microbench in <code>tests/e2e/</code></td></tr>
         <tr><td>Memory floor (idle daemon, 0 servers)</td><td>≤ 25MB RSS</td><td>integration test; track in CI</td></tr>
-        <tr><td>Memory per managed server</td><td>≤ 5MB overhead in mcpd (plus the server's own memory)</td><td>integration test</td></tr>
+        <tr><td>Memory per managed server</td><td>≤ 5MB overhead in mcpmanagerd (plus the server's own memory)</td><td>integration test</td></tr>
         <tr><td>Scale ceiling</td><td>50 concurrent managed servers, none ever OOM the daemon</td><td>stress test (artificial spawn of stub MCPs)</td></tr>
         <tr><td>First-launch UX time</td><td>≤ 10 minutes from <code>curl … | sh</code> to a working <code>mcpm test &lt;server&gt;</code></td><td>scripted demo; manual</td></tr>
         <tr><td>Audit log throughput</td><td>≥ 1000 events/sec sustained; flush every 100ms or 4KB</td><td>microbench</td></tr>
         <tr><td>Log ring buffer per server</td><td>4MB in memory + 16MB on-disk rotation</td><td>config defaults; user-overridable</td></tr>
         <tr><td>Lockfile resolution time</td><td>≤ 500ms for a project with 30 servers</td><td>integration test</td></tr>
-        <tr><td>Wire-format compat</td><td>v1.x clients and v1.x daemon always interoperate (semver discipline)</td><td>per-PR <code>mcp-protocol</code> review</td></tr>
+        <tr><td>Wire-format compat</td><td>v1.x clients and v1.x daemon always interoperate (semver discipline)</td><td>per-PR <code>mcpm-protocol</code> review</td></tr>
         <tr><td>Trust manifest refresh</td><td>7-day TTL; fail-soft on network error (cache stays valid)</td><td>e2e with mocked HTTP</td></tr>
       </tbody>
     </table>
@@ -606,8 +614,8 @@ $ nix profile install github:user/mcp-manager
     </details>
 
     <details class="accordion">
-      <summary>What ships in <code>mcp-protocol</code> vs <code>mcp-client</code>?</summary>
-      <p>The split matters: <code>mcp-protocol</code> is the public-facing wire crate (third parties depend on this if they build alternative clients). <code>mcp-client</code> is the in-tree convenience layer used by <code>mcpm</code>. <code>mcp-protocol</code> should be small and stable; <code>mcp-client</code> can churn freely.</p>
+      <summary>What ships in <code>mcpm-protocol</code> vs <code>mcpm-client</code>?</summary>
+      <p>The split matters: <code>mcpm-protocol</code> is the public-facing wire crate (third parties depend on this if they build alternative clients). <code>mcpm-client</code> is the in-tree convenience layer used by <code>mcpm</code>. <code>mcpm-protocol</code> should be small and stable; <code>mcpm-client</code> can churn freely.</p>
     </details>
   </section>
 

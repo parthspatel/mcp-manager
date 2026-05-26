@@ -95,7 +95,7 @@
       <thead><tr><th>Command</th><th>Purpose</th><th>Key flags</th></tr></thead>
       <tbody>
         <tr><td><code>mcpm config &lt;get|put|validate|edit&gt;</code></td><td>Inspect / modify canonical config. <code>edit</code> opens <code>$EDITOR</code>.</td><td><code>--scope user|project</code></td></tr>
-        <tr><td><code>mcpm exec &lt;server&gt;</code></td><td>Run an MCP server (as a stdio proxy to mcpd). Used by editors via projected configs; rarely typed by humans.</td><td><code>--secrets-from env</code> (escape hatch)</td></tr>
+        <tr><td><code>mcpm exec &lt;server&gt;</code></td><td>Run an MCP server (as a stdio proxy to mcpmanagerd). Used by editors via projected configs; rarely typed by humans.</td><td><code>--secrets-from env</code> (escape hatch)</td></tr>
         <tr><td><code>mcpm help [&lt;topic&gt;]</code></td><td>Rich help with worked examples. Without topic = top-level overview.</td><td><code>--man</code> (open the manpage in $PAGER)</td></tr>
         <tr><td><code>mcpm init [&lt;path&gt;]</code></td><td>First-run setup. Interactive by default; non-interactive with flags.</td><td><code>--defaults</code> · <code>-y</code> · <code>--scope user|project</code> · <code>--docker-enable=true|false</code> · <code>--service-register=true|false</code></td></tr>
         <tr><td><code>mcpm install &lt;source&gt;</code></td><td>Install an MCP server from a registry source (e.g. <code>github-mcp</code>, <code>official/github-mcp@^0.4</code>).</td><td><code>--scope</code> · <code>--name &lt;alias&gt;</code> · <code>--runtime devenv|docker|…</code> · <code>--accept-unsigned</code></td></tr>
@@ -133,7 +133,7 @@
 
     <pre><code>┌─ MCP Manager ────────────────────── github · 12:34:08 ┐
 │ Servers ▸                       │ Logs · github         │
-│ ──────                          │ [server][mcpd][audit] │
+│ ──────                          │ [server][mcpmanagerd][audit] │
 │ ▸ github     ●● running  14h    │ ──────                │
 │   filesystem ●● running   3d    │ 12:34:01 connected    │
 │   sqlite     ●○ stopped         │ 12:34:02 listed tools │
@@ -163,7 +163,7 @@
 
     <h3>Log multiplexing</h3>
     <ul>
-      <li>Tab order in the right pane: <code>server → mcpd → audit → combined → server → …</code></li>
+      <li>Tab order in the right pane: <code>server → mcpmanagerd → audit → combined → server → …</code></li>
       <li>Each tab maintains its own scroll position.</li>
       <li>Switching server in the left pane carries the tab forward (audit on github → switch to filesystem → still on audit, but for filesystem).</li>
       <li><strong>Follow mode</strong> on by default; <code>f</code> toggles. When paused, scrollback works without losing new entries (they're buffered).</li>
@@ -173,7 +173,7 @@
     <h3>Editing</h3>
     <ul>
       <li><code>e</code> on the focused entity opens <code>$EDITOR</code> with that entity's TOML stanza extracted to a temp file.</li>
-      <li>On editor save: validate via <code>config.validate</code> → atomic write back → audit-log → mcpd reload.</li>
+      <li>On editor save: validate via <code>config.validate</code> → atomic write back → audit-log → mcpmanagerd reload.</li>
       <li>On validation failure: re-enter TUI with a modal showing the error + offending line; temp file preserved so the user can retry with <code>e</code> again.</li>
     </ul>
 
@@ -245,13 +245,13 @@
   <section class="section" id="config">
     <h2>Config files</h2>
 
-    <p>Three persistent files. All TOML. All hand-editable. mcpd reconciles on next read.</p>
+    <p>Three persistent files. All TOML. All hand-editable. mcpmanagerd reconciles on next read.</p>
 
     <h3>User-scope config (<code>~/.config/mcp-manager/config.toml</code>)</h3>
     <pre><code># MCP Manager · user-scope canonical config
 # Hand-edit OR use `mcpm` CLI. mcpm reconciles both.
 
-[mcpd]
+[mcpmanagerd]
 audit_retention_days = 90
 log_ring_buffer_mb   = 10
 service_register     = true
@@ -275,7 +275,7 @@ url = "https://registry.modelcontextprotocol.io"
 # pubkey verified via baked-in trust.toml; no per-source key here
 
 [registry.corp]
-url        = "https://internal.example.com/mcp-registry"
+url        = "https://internal.example.com/mcpm-registry"
 signed_by  = "RWQabc…"
 auth       = { type = "bearer", secret = "CORP_REGISTRY_TOKEN" }</code></pre>
 
@@ -341,7 +341,7 @@ granted_by  = "interactive"</code></pre>
         <tr><td>Audit log</td><td><code>~/Library/Logs/mcp-manager/audit/</code></td><td><code>$XDG_STATE_HOME/mcp-manager/audit/</code></td></tr>
         <tr><td>Per-server log rings</td><td><code>~/Library/Logs/mcp-manager/servers/</code></td><td><code>$XDG_STATE_HOME/mcp-manager/servers/</code></td></tr>
         <tr><td>Trust file</td><td>(co-located with config)</td><td>(co-located with config)</td></tr>
-        <tr><td>UDS socket</td><td><code>~/Library/Application Support/mcp-manager/mcpd.sock</code></td><td><code>$XDG_RUNTIME_DIR/mcp-manager/mcpd.sock</code></td></tr>
+        <tr><td>UDS socket</td><td><code>~/Library/Application Support/mcp-manager/mcpmanagerd.sock</code></td><td><code>$XDG_RUNTIME_DIR/mcp-manager/mcpmanagerd.sock</code></td></tr>
         <tr><td>Project config</td><td><code>&lt;repo&gt;/.mcp-manager.toml</code></td><td><code>&lt;repo&gt;/.mcp-manager.toml</code></td></tr>
       </tbody>
     </table>
@@ -358,7 +358,7 @@ granted_by  = "interactive"</code></pre>
    Scope: user or project? [user]   ←
    Detected: Claude Code, Cursor, Zed. Project into all three? [Y/n]   ←
    Detected: Docker. Enable Docker MCP Catalog as a registry? [y/N]   ←
-   Register mcpd with launchd as a background service? [y/N]   ←
+   Register mcpmanagerd with launchd as a background service? [y/N]   ←
    ✓ Wrote ~/.config/mcp-manager/config.toml
    ✓ Wrote ~/.config/mcp-manager/trust.toml
    ✓ Projected canonical state into 3 editor configs
@@ -398,8 +398,8 @@ This is the first time mcpm has seen this project config. Trust it?
     <h3>Service-manager registration (first launch)</h3>
     <p>If <code>service_register=true</code> in onboarding, mcpm runs:</p>
     <ul>
-      <li><strong>macOS:</strong> <code>launchctl bootstrap gui/$UID ~/Library/LaunchAgents/dev.mcp-manager.mcpd.plist</code></li>
-      <li><strong>Linux:</strong> <code>systemctl --user enable --now mcpd.service</code></li>
+      <li><strong>macOS:</strong> <code>launchctl bootstrap gui/$UID ~/Library/LaunchAgents/dev.mcp-manager.mcpmanagerd.plist</code></li>
+      <li><strong>Linux:</strong> <code>systemctl --user enable --now mcpmanagerd.service</code></li>
     </ul>
     <p>Audit-logged as <code>service.register</code>. Reversed by <code>mcpm uninstall</code> (audit: <code>service.unregister</code>).</p>
   </section>
@@ -415,16 +415,16 @@ This is the first time mcpm has seen this project config. Trust it?
       <tbody>
         <tr><td><code>E_SECRET_MISSING</code></td><td>Server requires a secret that isn't in the keychain or env.</td><td>Run <code>mcpm secret set &lt;NAME&gt;</code> (the exact command is printed).</td></tr>
         <tr><td><code>E_SERVER_OOM</code></td><td>Server was killed for OOM. Memory limit hit or system pressure.</td><td>Raise <code>[server.&lt;name&gt;].memory_max_mb</code> or investigate leak via <code>mcpm logs &lt;name&gt;</code>.</td></tr>
-        <tr><td><code>E_SERVER_FAILED</code></td><td>Server crashed too many times in the restart window. mcpd stopped retrying.</td><td>Investigate logs, then <code>mcpm restart &lt;name&gt;</code> to clear failed state.</td></tr>
+        <tr><td><code>E_SERVER_FAILED</code></td><td>Server crashed too many times in the restart window. mcpmanagerd stopped retrying.</td><td>Investigate logs, then <code>mcpm restart &lt;name&gt;</code> to clear failed state.</td></tr>
         <tr><td><code>E_CONFIG_INVALID</code></td><td>Canonical config failed validation (TOML parse, schema, type, or constraint).</td><td>Error message points at line/column. Re-open with <code>mcpm config edit</code> or revert.</td></tr>
         <tr><td><code>E_CONFIG_CONFLICT</code></td><td>Canonical config changed on disk while a concurrent <code>config.put</code> was in flight.</td><td>TUI re-reads + offers to merge or discard. CLI: re-run command.</td></tr>
         <tr><td><code>E_REGISTRY_UNREACHABLE</code></td><td>Registry network fetch failed (DNS, TLS, 5xx).</td><td>Check connectivity. Cached index continues to work for <code>mcpm search</code>.</td></tr>
         <tr><td><code>E_REGISTRY_SIGFAIL</code></td><td>Registry index signature didn't verify. Possible compromise OR rotated key.</td><td>Run <code>mcpm registry verify</code>. Refresh trust manifest. Report if persistent.</td></tr>
-        <tr><td><code>E_SPEC_UNSUPPORTED</code></td><td>Server advertises an MCP spec version mcpd's allow-list doesn't accept.</td><td>Override with <code>[server.&lt;name&gt;].spec = "…"</code> if you trust the server, or wait for an mcpd update.</td></tr>
+        <tr><td><code>E_SPEC_UNSUPPORTED</code></td><td>Server advertises an MCP spec version mcpmanagerd's allow-list doesn't accept.</td><td>Override with <code>[server.&lt;name&gt;].spec = "…"</code> if you trust the server, or wait for an mcpmanagerd update.</td></tr>
         <tr><td><code>E_PROJECTION_DRIFT</code></td><td>An editor config file's managed-block was hand-edited; projection refuses to overwrite blind.</td><td><code>mcpm projection diff &lt;tool&gt;</code> shows the conflict. Re-sync with <code>--force</code> after review.</td></tr>
         <tr><td><code>E_PROJECT_UNTRUSTED</code></td><td>Project config exists but wasn't trust-granted in this session.</td><td>Run <code>mcpm project allow</code> (prompts to review) or <code>mcpm project allow --force</code>.</td></tr>
         <tr><td><code>E_KEYCHAIN_UNAVAILABLE</code></td><td>OS keychain service (libsecret / Keychain Services) isn't reachable.</td><td>Linux: install <code>gnome-keyring</code> or <code>kwallet</code>. Use <code>--from-env</code> as escape hatch.</td></tr>
-        <tr><td><code>E_DAEMON_VERSION</code></td><td>mcpd version is older than project's <code>min_mcpd_version</code>.</td><td>Update mcpd via curl installer or <code>nix flake update</code>.</td></tr>
+        <tr><td><code>E_DAEMON_VERSION</code></td><td>mcpmanagerd version is older than project's <code>min_mcpd_version</code>.</td><td>Update mcpmanagerd via curl installer or <code>nix flake update</code>.</td></tr>
       </tbody>
     </table>
 

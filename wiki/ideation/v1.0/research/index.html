@@ -24,6 +24,10 @@
     Six independent, evidence-grounded design explorations for a Rust-based MCP Manager comprising a <strong>core</strong> library/daemon plus <strong>CLI</strong>, <strong>TUI</strong>, and <strong>GUI</strong> clients — conceptually "Docker for MCP servers". Each stream produces neutral research, tradeoff analysis, an interactive ranking matrix, and a recommendation with linked rationale. Streams run in parallel with no shared memory; convergences below emerged independently.
   </p>
 
+  <aside class="card" style="border-left:4px solid var(--warn);background:var(--bg-faint);margin-block:1rem;font-size:0.9rem">
+    <strong>Naming note (post-research rename):</strong> the research below consistently uses the original names — daemon <code>mcpd</code> and library crates <code>mcp-core</code>, <code>mcp-protocol</code>, etc. The v1.0 lockdown renamed these to <strong>binary <code>mcpmanagerd</code></strong> (from crate <code>mcpm-daemon</code>), CLI binary <code>mcpm</code> (from crate <code>mcpm-cli</code>), and library crates <code>mcpm-*</code>. The audience-facing docs (<a href="../index.html">overview</a>, <a href="../product-overview.html">product</a>, <a href="../technical-design.html">technical</a>, <a href="../ux-design.html">UX</a>) reflect the new names; this research is preserved as authored.
+  </aside>
+
   <p>
     <span class="evidence-badge">518 citations</span>
     <span class="evidence-badge">84 HTML pages</span>

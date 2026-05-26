@@ -51,14 +51,14 @@
 
     <h3>Why deferred from v1.0</h3>
     <ul>
-      <li><strong>Scope reduction.</strong> Cutting the GUI removes Actix-Web, Askama, HTMX/Alpine, the HTTP/SSE bridge, the DNS-rebinding mitigations, the tray-icon helper, and the entire "browser tab vs native window" UX-tax debate from v1.0. mcpd simplifies to a tokio daemon with JSON-RPC over UDS.</li>
+      <li><strong>Scope reduction.</strong> Cutting the GUI removes Actix-Web, Askama, HTMX/Alpine, the HTTP/SSE bridge, the DNS-rebinding mitigations, the tray-icon helper, and the entire "browser tab vs native window" UX-tax debate from v1.0. mcpmanagerd simplifies to a tokio daemon with JSON-RPC over UDS.</li>
       <li><strong>The TUI is sufficient for v1.0's target user.</strong> Power developers running a few dozen MCP servers don't need a dashboard; they need `mcpm` + a terminal log tail. The GUI was the surface most likely to delay shipping.</li>
-      <li><strong>Pre-decided architecture preserved.</strong> The <a href="./research/ui-shootout/">GUI shootout</a> remains as research — whenever the GUI ships, Actix + Askama (served from inside mcpd) is the standing recommendation.</li>
+      <li><strong>Pre-decided architecture preserved.</strong> The <a href="./research/ui-shootout/">GUI shootout</a> remains as research — whenever the GUI ships, Actix + Askama (served from inside mcpmanagerd) is the standing recommendation.</li>
     </ul>
 
     <h3>v1.x spec (pre-decided in 2026-05-24 shootout)</h3>
     <ol>
-      <li><strong>Architecture:</strong> Actix-Web + Askama, served from inside mcpd on <code>localhost:NNNN</code>. Server-rendered HTML + SSE for live updates + HTMX for interactivity. Zero IPC, single auth surface.</li>
+      <li><strong>Architecture:</strong> Actix-Web + Askama, served from inside mcpmanagerd on <code>localhost:NNNN</code>. Server-rendered HTML + SSE for live updates + HTMX for interactivity. Zero IPC, single auth surface.</li>
       <li><strong>Tray-icon helper</strong> (<code>tray-icon</code> crate, ~2MB) — dock/menubar presence on macOS + Linux.</li>
       <li><strong>PWA install manifest</strong> — users who want a dock icon can install the localhost app to their dock with one click.</li>
       <li><strong>Auth on localhost:</strong> bearer token in URL on first launch (Pi-hole pattern). <code>Host:</code> header allowlist (refuse anything except <code>localhost</code>/<code>127.0.0.1</code>/<code>[::1]</code>) to neutralize DNS rebinding.</li>
@@ -68,9 +68,9 @@
 
     <h3>What v1.0 must do to not foreclose this</h3>
     <ul>
-      <li>Keep the JSON-RPC RPC method names stable so the GUI can talk to mcpd over the same wire as the CLI/TUI.</li>
-      <li>Keep mcpd's canonical state in TOML + structured journal — the GUI is just another view onto the same state.</li>
-      <li>Don't bake CLI-only assumptions into mcp-core (e.g. terminal-only progress reporting). The TUI already enforces this separation.</li>
+      <li>Keep the JSON-RPC RPC method names stable so the GUI can talk to mcpmanagerd over the same wire as the CLI/TUI.</li>
+      <li>Keep mcpmanagerd's canonical state in TOML + structured journal — the GUI is just another view onto the same state.</li>
+      <li>Don't bake CLI-only assumptions into mcpm-core (e.g. terminal-only progress reporting). The TUI already enforces this separation.</li>
     </ul>
 
     <p style="color:var(--fg-faint);font-size:0.85rem">Source of deferral: 2026-05-24 product lockdown. Research preserved at <a href="./research/ui-shootout/">ui-shootout/</a> (3 stacks evaluated; Actix+Askama recommended).</p>
@@ -80,7 +80,7 @@
     <h2>Secrets: rotation, TTLs, vault providers</h2>
     <p><strong>What:</strong> v1.0 ships <code>mcpm secret set/list/unset</code> backed by OS keychain + an env-var passthrough escape hatch. v1.1+ adds:</p>
     <ul>
-      <li><strong>TTL / rotation:</strong> declare per-secret rotation policy; mcpd warns or refuses to spawn a server with an expired secret.</li>
+      <li><strong>TTL / rotation:</strong> declare per-secret rotation policy; mcpmanagerd warns or refuses to spawn a server with an expired secret.</li>
       <li><strong>Vault providers:</strong> 1Password CLI (<code>op</code>), Bitwarden CLI (<code>bw</code>), HashiCorp Vault, Doppler, Infisical, AWS Secrets Manager, GCP Secret Manager, Azure Key Vault. Each plugs in through the <code>SecretStore</code> trait designed in v1.0 (closing-gap agent C).</li>
       <li><strong>Per-secret access policies:</strong> "this secret can only be read by server <code>github</code>, not arbitrary servers."</li>
       <li><strong>Lease-based / on-demand fetch:</strong> never persist the secret value locally; fetch from vault at spawn time, cache in memory only for the lifetime of the server process.</li>
@@ -90,7 +90,7 @@
 
   <section class="section" id="import-from">
     <h2>Import-from existing editor configs</h2>
-    <p><strong>What:</strong> <code>mcpm import-from cursor</code>, <code>mcpm import-from claude-code</code>, etc. Read the user's current editor MCP configs (which were the input to Stream 1's survey) and seed mcpd's canonical state. Massive friction-removal for adoption: a user with 8 servers already configured in Cursor doesn't have to redo any of them.</p>
+    <p><strong>What:</strong> <code>mcpm import-from cursor</code>, <code>mcpm import-from claude-code</code>, etc. Read the user's current editor MCP configs (which were the input to Stream 1's survey) and seed mcpmanagerd's canonical state. Massive friction-removal for adoption: a user with 8 servers already configured in Cursor doesn't have to redo any of them.</p>
     <p><strong>Why deferred:</strong> v1.0 ships with hand-write or `mcpm install`. Import-from is a polish feature; it can wait until v1.1.</p>
     <p><strong>v1.x scope:</strong> S6's projector code is already symmetric — it CAN read the same configs it writes. Import is a thin CLI verb wrapping that capability + a "first-run: shall I import?" hook in the onboarding flow (agent B's `mcpm init` accepts a stub <code>--import-from</code> flag in v1.0).</p>
     <p style="color:var(--fg-faint);font-size:0.85rem">Source: 2026-05-24 lockdown.</p>
@@ -100,8 +100,8 @@
     <h2>Observability: metrics, tracing, Prometheus</h2>
     <p><strong>What:</strong> v1.0 ships logs (the 3-stream tail API) and audit log. v1.1+ adds:</p>
     <ul>
-      <li>Prometheus-style <code>/metrics</code> endpoint on the (then-existing) GUI HTTP server, or a separate <code>mcpd --metrics-addr</code> bind.</li>
-      <li>OpenTelemetry tracing spans across the wrapper-command → mcpd → MCP-server boundary. Per-request latency histograms.</li>
+      <li>Prometheus-style <code>/metrics</code> endpoint on the (then-existing) GUI HTTP server, or a separate <code>mcpmanagerd --metrics-addr</code> bind.</li>
+      <li>OpenTelemetry tracing spans across the wrapper-command → mcpmanagerd → MCP-server boundary. Per-request latency histograms.</li>
       <li>Standard MCP metrics: requests/sec, error rate, tool invocation counts per server, p50/p95/p99 latencies.</li>
     </ul>
     <p style="color:var(--fg-faint);font-size:0.85rem">Source: 2026-05-24 lockdown. Out of v1.0 scope because logs cover the user-facing case; metrics are ops-facing.</p>
@@ -190,11 +190,11 @@ mcpm toolchain list --remote</code></pre>
 
     <h3>v1.1 spec sketch</h3>
     <ol>
-      <li><strong>New crate <code>mcpd-shell-tauri</code></strong> — Tauri 2 app, dependency on <code>mcpd</code> as a sidecar, points the WebView at <code>localhost:NNNN</code>.</li>
+      <li><strong>New crate <code>mcpmanagerd-shell-tauri</code></strong> — Tauri 2 app, dependency on <code>mcpmanagerd</code> as a sidecar, points the WebView at <code>localhost:NNNN</code>.</li>
       <li><strong>No UI rewrite</strong> — Actix server and Askama templates from v1.0 are reused verbatim. The shell is purely a wrapper.</li>
-      <li><strong>Distribution:</strong> Tauri shell becomes the recommended download for non-developer users; the headless <code>mcpd</code> + browser-tab mode remains supported (and still required for LAN/mobile use).</li>
+      <li><strong>Distribution:</strong> Tauri shell becomes the recommended download for non-developer users; the headless <code>mcpmanagerd</code> + browser-tab mode remains supported (and still required for LAN/mobile use).</li>
       <li><strong>Native integrations:</strong> dock badge with running-server count, macOS Touch Bar entries for quick start/stop, system notifications for server crashes, native open/save dialogs for config import/export.</li>
-      <li><strong>Auto-update:</strong> Tauri's first-party updater for the shell binary; the bundled <code>mcpd</code> updates independently via Homebrew/apt/cargo.</li>
+      <li><strong>Auto-update:</strong> Tauri's first-party updater for the shell binary; the bundled <code>mcpmanagerd</code> updates independently via Homebrew/apt/cargo.</li>
     </ol>
 
     <h3>What can be done in v1.0 to NOT make this harder</h3>
@@ -219,9 +219,9 @@ mcpm toolchain list --remote</code></pre>
       </thead>
       <tbody>
         <tr>
-          <td>GUI (Actix + Askama inside mcpd)</td>
+          <td>GUI (Actix + Askama inside mcpmanagerd)</td>
           <td>v1.0 has shipped and TUI usability feedback indicates a real gap (e.g. user complaints about server-list browsing, log-tail multiplexing, or remote/mobile access)</td>
-          <td>~6–8 weeks: Actix server inside mcpd + Askama templates + HTMX wiring + tray-icon helper + PWA manifest. Architecture pre-decided in <a href="./research/ui-shootout/">ui-shootout</a>.</td>
+          <td>~6–8 weeks: Actix server inside mcpmanagerd + Askama templates + HTMX wiring + tray-icon helper + PWA manifest. Architecture pre-decided in <a href="./research/ui-shootout/">ui-shootout</a>.</td>
         </tr>
         <tr>
           <td>Secrets: rotation + vault providers</td>
@@ -235,7 +235,7 @@ mcpm toolchain list --remote</code></pre>
         </tr>
         <tr>
           <td>Observability (metrics, tracing, Prometheus)</td>
-          <td>Production deployments running mcpd as a service want SLOs / dashboards</td>
+          <td>Production deployments running mcpmanagerd as a service want SLOs / dashboards</td>
           <td>~3 weeks: <code>tracing</code> spans already exist; just add metrics emission + Prometheus exporter.</td>
         </tr>
         <tr>
@@ -250,7 +250,7 @@ mcpm toolchain list --remote</code></pre>
         </tr>
         <tr>
           <td>Plugin / extensibility system</td>
-          <td>Multiple credible third-party requests to extend mcpd in ways the TOML manifest can't express</td>
+          <td>Multiple credible third-party requests to extend mcpmanagerd in ways the TOML manifest can't express</td>
           <td>v2+ scope — not a v1.1 candidate. Real plugin SDK is months.</td>
         </tr>
         <tr>

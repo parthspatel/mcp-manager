@@ -101,7 +101,7 @@
         <strong>Keep secrets in the OS keychain.</strong> <code>mcpm secret set GITHUB_TOKEN</code> prompts via TTY, writes to macOS Keychain (or Linux libsecret), never to a plaintext file. Existing environment variables work as an escape hatch.
       </li>
       <li>
-        <strong>Run a real process supervisor.</strong> <code>mcpd</code> is the long-lived daemon. It spawns MCP servers under isolation, watches for crashes, restarts with exponential backoff + max-attempts (no thundering-herd, no infinite-loops), catches OOM kills, and writes an append-only audit log of every state change.
+        <strong>Run a real process supervisor.</strong> <code>mcpmanagerd</code> is the long-lived daemon. It spawns MCP servers under isolation, watches for crashes, restarts with exponential backoff + max-attempts (no thundering-herd, no infinite-loops), catches OOM kills, and writes an append-only audit log of every state change.
       </li>
       <li>
         <strong>Project the config into your editors.</strong> One canonical TOML config lives in <code>~/.config/mcp-manager/</code>. mcpm rewrites your editor configs (Claude Code, Cursor, Zed, JetBrains, VS Code, Windsurf, Continue, Cline, Goose, …) to point at the manager, using Ansible-style managed-block sync so your hand-edits outside the managed region are preserved.
@@ -113,7 +113,7 @@
         <strong>Per-project scoping.</strong> A project can override or extend a developer's user-level MCP set via a checked-into-repo <code>.mcp-manager.toml</code>. Direnv-style trust gate prevents cloned-from-elsewhere repos from silently configuring the manager.
       </li>
       <li>
-        <strong>Run anywhere mcpd is running.</strong> Auto-spawns from <code>mcpm exec</code> (no daemon-not-running errors). Opt-in registration with the user's service manager (launchd on macOS, systemd-user on Linux) on first launch.
+        <strong>Run anywhere mcpmanagerd is running.</strong> Auto-spawns from <code>mcpm exec</code> (no daemon-not-running errors). Opt-in registration with the user's service manager (launchd on macOS, systemd-user on Linux) on first launch.
       </li>
     </ol>
   </section>
@@ -125,7 +125,7 @@
 
     <pre><code># 1. Install MCP Manager (one of two paths)
 $ curl -sSf https://mcp-manager.dev/install.sh | sh
-   ✓ mcpd 1.0.0 installed to /usr/local/bin/mcpd
+   ✓ mcpmanagerd 1.0.0 installed to /usr/local/bin/mcpmanagerd
    ✓ mcpm 1.0.0 installed to /usr/local/bin/mcpm
    Run `mcpm init` to get started.
 
@@ -135,7 +135,7 @@ $ mcpm init
    Scope: user or project? [user]   ←
    Detected: Claude Code, Cursor, Zed. Project into all three? [Y/n]   ←
    Detected: Docker. Enable Docker MCP Catalog as a registry? [y/N]   ←
-   Register mcpd with launchd as a background service? [y/N]   ←
+   Register mcpmanagerd with launchd as a background service? [y/N]   ←
    ✓ Configured at ~/.config/mcp-manager/config.toml
 
 # 3. Add an MCP server
@@ -186,7 +186,7 @@ $ mcpm tui
         </tr>
         <tr>
           <td><strong>One server, many editors</strong></td>
-          <td>Per-editor configs are projected from a single canonical state. Cursor and Claude Code share the same mcpd-supervised process.</td>
+          <td>Per-editor configs are projected from a single canonical state. Cursor and Claude Code share the same mcpmanagerd-supervised process.</td>
         </tr>
         <tr>
           <td><strong>Real process supervision</strong></td>
@@ -206,7 +206,7 @@ $ mcpm tui
         </tr>
         <tr>
           <td><strong>Data-driven manifests, not hardcoded support</strong></td>
-          <td>Each editor's projection is a TOML manifest. When an editor's schema changes, ship a manifest update — no mcpd binary release required. Users can author manifests for new editors locally.</td>
+          <td>Each editor's projection is a TOML manifest. When an editor's schema changes, ship a manifest update — no mcpmanagerd binary release required. Users can author manifests for new editors locally.</td>
         </tr>
       </tbody>
     </table>
@@ -238,7 +238,7 @@ $ mcpm tui
       <li><strong>The same developer can move to a new machine and reach the same state in under 5 minutes</strong> — restore the canonical config from their dotfiles repo, re-set secrets, done.</li>
       <li><strong>A small engineering team can check in a <code>.mcp-manager.toml</code> + <code>.mcp-manager.lock</code></strong> and have new hires reach a working setup by running <code>mcpm init</code> in the repo.</li>
       <li><strong>An MCP server crash never leaves the developer wondering what happened</strong> — the audit log and per-server log tail tell the story.</li>
-      <li><strong>Adding a new editor target takes a third party an afternoon</strong>, by writing a TOML manifest — no mcpd PR, no release cycle.</li>
+      <li><strong>Adding a new editor target takes a third party an afternoon</strong>, by writing a TOML manifest — no mcpmanagerd PR, no release cycle.</li>
     </ol>
 
     <p>
