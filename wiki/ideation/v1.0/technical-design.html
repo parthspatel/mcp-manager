@@ -127,7 +127,7 @@
     <ul>
       <li><strong>mcpmanagerd is the single authority over canonical state.</strong> CLI/TUI/external clients always talk to mcpmanagerd over UDS; no client reads/writes the canonical TOML directly (except <code>$EDITOR</code> via the edit-and-reload flow, which is mediated).</li>
       <li><strong>Secrets never cross a process boundary except via env injection at spawn time.</strong> mcpmanagerd reads from the keychain and writes to the child server process's env when launching it. The wrapper <code>mcpm exec</code> never sees the value.</li>
-      <li><strong>One server, one process, one supervisor (singleton with refcount).</strong> If Cursor and Claude Code both want the github MCP, mcpmanagerd hands them stdio-pipes to the <em>same</em> spawned process. mcpd maintains a refcount per server; each <code>mcpm exec</code> increments, each editor exit decrements. When refcount → 0, the supervisor starts an idle timer (see <code>idle_ttl_secs</code> in the config schema). On the next <code>mcpm exec</code>, the refcount increments and the timer is cancelled; if the timer fires first, the server is gracefully stopped.</li>
+      <li><strong>Singleton-by-default, per-client opt-out.</strong> By default (<code>singleton = true</code> in a server's config), if Cursor and Claude Code both want the github MCP, mcpmanagerd hands them stdio-pipes to the <em>same</em> spawned process. mcpmanagerd maintains a refcount per server; each <code>mcpm exec</code> increments, each editor exit decrements. When refcount → 0, the supervisor starts an idle timer (see <code>idle_ttl_secs</code> in the config schema). On the next <code>mcpm exec</code>, the refcount increments and the timer is cancelled; if the timer fires first, the server is gracefully stopped. Per-server <code>singleton = false</code> flips this: each <code>mcpm exec</code> invocation gets a fresh process, indexed by <code>(server_name, client_id)</code> in the supervisor. Useful for stateful or sandboxed servers where crash blast-radius matters more than memory savings.</li>
       <li><strong>All state mutations are audit-logged.</strong> Every <code>config.change</code>, <code>secret.read</code>, <code>server.spawn</code>, <code>projection.write</code>, <code>service.unregister</code> emits a JSONL line with timestamp + actor + event-specific payload.</li>
     </ul>
   </section>
@@ -199,7 +199,7 @@
         </tr>
         <tr>
           <td><code>mcpm-supervisor</code></td>
-          <td>Spawns + supervises child MCP server processes. Implements the restart policy (jittered backoff + max-attempts), OOM detection (cgroupv2 events on Linux, jetsam-inferred on macOS), and resource limits (memory). Per-server tokio task; uses <code>tokio::process::Command</code>.</td>
+          <td>Spawns + supervises child MCP server processes. Implements the restart policy (jittered backoff + max-attempts), OOM detection (cgroupv2 events on Linux, jetsam-inferred on macOS), and resource limits (memory). Indexes processes by either <code>server_name</code> (singleton mode, default) or <code>(server_name, client_id)</code> (per-client mode, opt-in via <code>singleton = false</code>). One tokio task per managed process; uses <code>tokio::process::Command</code>.</td>
           <td><a href="./research/steady-bear-foundation/">S3</a> + directive #3</td>
         </tr>
         <tr>
@@ -336,6 +336,12 @@ restart       = { attempts_max = 5, window_secs = 600 }
 memory_max_mb = 512                      # cgroupv2 / RLIMIT_AS
 idle_ttl_secs = 1800                     # 30 min default; 0 = stop immediately
                                          # when refcount → 0; negative = never
+singleton     = true                     # default: one process shared across all
+                                         # `mcpm exec` invocations (refcounted).
+                                         # false → each `mcpm exec` gets its own
+                                         # fresh process. Higher memory (N copies),
+                                         # better crash isolation, useful for
+                                         # stateful or sandboxed servers.
 
 [server.&lt;name&gt;.env]
 &lt;ENV_NAME&gt; = "literal-value"             # injected at spawn time
@@ -449,13 +455,18 @@ mode           = "fetched" | "baked-in-fallback"  # see below</code></pre>
       <li>Editor spawns <code>mcpm exec github-mcp</code> as a child process, pipes stdio.</li>
       <li><code>mcpm exec</code> dials mcpmanagerd. Auto-spawns daemon if not running (200ms one-time + flock).</li>
       <li>JSON-RPC <code>server.start</code> → mcpmanagerd looks up the server config.</li>
-      <li>mcpmanagerd checks if the server is already running (cached process). If yes, reuses it; if no, calls <code>mcpm-supervisor</code> to spawn.</li>
+      <li>mcpmanagerd consults the server's <code>singleton</code> setting:
+        <ul>
+          <li><strong><code>singleton = true</code> (default)</strong>: look up the server in the per-name process map. If a process is already running, hand this client a stdio pipe to it (bump refcount, cancel any idle timer). If not, call <code>mcpm-supervisor</code> to spawn a fresh process and store it under the server's name.</li>
+          <li><strong><code>singleton = false</code></strong>: always spawn a fresh process for this client. The supervisor indexes the new process by <code>(server_name, client_id)</code> rather than by server name alone. <code>idle_ttl_secs</code> applies per-process; each instance has its own timer.</li>
+        </ul>
+      </li>
       <li><code>mcpm-supervisor</code>:
         <ul>
           <li>Resolves secrets via <code>mcpm-secrets</code>. Audit: <code>secret.read</code> for each.</li>
           <li>Builds env-var injection map. Plaintext lives in <code>secrecy::SecretString</code> until the spawn syscall.</li>
           <li>Spawns inside isolation wrapper (<code>devenv</code> profile + bubblewrap, etc.).</li>
-          <li>Audit: <code>server.spawn</code>.</li>
+          <li>Audit: <code>server.spawn { singleton: bool, client_id: "&lt;uds-peer-id&gt;|shared" }</code>. <code>singleton=true</code> spawns log <code>client_id="shared"</code>; <code>singleton=false</code> spawns log the actual client identity (the peer-credentialed connection that triggered the spawn). Makes the audit log self-describing for debugging "why are there N processes?".</li>
           <li>Tokio task watches the child: stdout → <code>mcpm-logs</code>, stderr → <code>mcpm-logs</code>, exit → restart policy.</li>
         </ul>
       </li>
@@ -607,9 +618,14 @@ $ nix profile install github:user/mcp-manager
   </section>
 
   <section class="section" id="open">
-    <h2>Implementation-level decisions <span class="pill success" style="font-size:0.75rem;margin-left:0.5rem">all 6 resolved 2026-05-24</span></h2>
+    <h2>Implementation-level decisions <span class="pill success" style="font-size:0.75rem;margin-left:0.5rem">all 7 resolved 2026-05-24</span></h2>
 
-    <p>Six engineering-level decisions originally flagged for thought, now resolved. Each summarises the decision and points at the body section where the resolution is fully captured.</p>
+    <p>Seven engineering-level decisions originally flagged for thought, now resolved. Each summarises the decision and points at the body section where the resolution is fully captured.</p>
+
+    <details class="accordion">
+      <summary>✓ Per-server singleton vs per-client process model <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p>Per-server <code>[server.&lt;name&gt;].singleton</code> in canonical config. Default <strong><code>true</code></strong>: one process shared across all <code>mcpm exec</code> invocations, with refcount + idle timer. <strong><code>singleton = false</code></strong>: each <code>mcpm exec</code> invocation spawns its own fresh process; the supervisor indexes processes by <code>(server_name, client_id)</code>; <code>idle_ttl_secs</code> applies per-process. Trade-off: shared mode minimises memory and crash blast-radius is one editor down; per-client mode N× the memory but a crashing server only affects one editor's session. Suitable per-server (e.g. read-only filesystem MCP → singleton; sandboxed code-execution MCP → per-client). Captured in <a href="#schemas">user-scope config schema</a>, <a href="#flows">Flow B step 5</a>, and the <a href="#architecture">"Singleton-by-default" invariant</a>.</p>
+    </details>
 
     <details class="accordion">
       <summary>✓ Idle-server termination policy <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
