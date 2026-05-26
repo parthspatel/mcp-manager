@@ -185,8 +185,8 @@ $ mcpm tui
           <td>OS keychain integration (macOS Keychain / Linux libsecret). CVE-2025-6514 is the canonical reason.</td>
         </tr>
         <tr>
-          <td><strong>One server, many editors</strong></td>
-          <td>Per-editor configs are projected from a single canonical state. Cursor and Claude Code share the same mcpmanagerd-supervised process.</td>
+          <td><strong>One server, many editors (configurable)</strong></td>
+          <td>Per-editor configs are projected from a single canonical state. <strong>By default</strong> (<code>singleton = true</code>), Cursor and Claude Code share the same mcpmanagerd-supervised process — one server, refcount-shared. <strong>Opt-in per-server</strong> (<code>singleton = false</code>): each editor gets its own fresh process, useful for sandboxed code-execution servers or anywhere crash blast-radius matters more than memory savings.</td>
         </tr>
         <tr>
           <td><strong>Real process supervision</strong></td>

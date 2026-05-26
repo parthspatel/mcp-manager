@@ -248,6 +248,8 @@
 
     <p>Three persistent files. All TOML. All hand-editable. mcpmanagerd reconciles on next read.</p>
 
+    <p>The examples below show the common-case fields. Per-server entries can additionally carry advanced lifecycle settings such as <code>idle_ttl_secs</code> (when refcount drops to 0, default 1800s; negative = never stop) and <code>singleton</code> (default <code>true</code> = one shared process across editors; <code>false</code> = each editor gets its own fresh process). See the <a href="./technical-design.html#schemas">technical design schema</a> for the full per-server field list.</p>
+
     <h3>User-scope config (<code>~/.config/mcp-manager/config.toml</code>)</h3>
     <pre><code># MCP Manager · user-scope canonical config
 # Hand-edit OR use `mcpm` CLI. mcpm reconciles both.
