@@ -127,7 +127,7 @@
     <ul>
       <li><strong>mcpmanagerd is the single authority over canonical state.</strong> CLI/TUI/external clients always talk to mcpmanagerd over UDS; no client reads/writes the canonical TOML directly (except <code>$EDITOR</code> via the edit-and-reload flow, which is mediated).</li>
       <li><strong>Secrets never cross a process boundary except via env injection at spawn time.</strong> mcpmanagerd reads from the keychain and writes to the child server process's env when launching it. The wrapper <code>mcpm exec</code> never sees the value.</li>
-      <li><strong>One server, one process, one supervisor.</strong> If Cursor and Claude Code both want the github MCP, mcpmanagerd hands them stdio-pipes to the <em>same</em> spawned process. No duplication.</li>
+      <li><strong>One server, one process, one supervisor (singleton with refcount).</strong> If Cursor and Claude Code both want the github MCP, mcpmanagerd hands them stdio-pipes to the <em>same</em> spawned process. mcpd maintains a refcount per server; each <code>mcpm exec</code> increments, each editor exit decrements. When refcount → 0, the supervisor starts an idle timer (see <code>idle_ttl_secs</code> in the config schema). On the next <code>mcpm exec</code>, the refcount increments and the timer is cancelled; if the timer fires first, the server is gracefully stopped.</li>
       <li><strong>All state mutations are audit-logged.</strong> Every <code>config.change</code>, <code>secret.read</code>, <code>server.spawn</code>, <code>projection.write</code>, <code>service.unregister</code> emits a JSONL line with timestamp + actor + event-specific payload.</li>
     </ul>
   </section>
@@ -189,12 +189,12 @@
         </tr>
         <tr>
           <td><code>mcpm-protocol</code></td>
-          <td>Wire types only. JSON-RPC schemas for <code>install</code>, <code>spawn</code>, <code>tail</code>, etc. Serde-derived. Versioned (this crate's semver tracks the wire's compat surface, separately from mcpmanagerd's release version).</td>
+          <td><strong>Small, stable, public surface.</strong> Wire types only — JSON-RPC schemas for <code>install</code>, <code>spawn</code>, <code>tail</code>, etc. Serde-derived. Versioned independently of mcpmanagerd's release (semver-disciplined). Required features only — convenience layers belong in <code>mcpm-client</code>. Third parties depend on this directly if they build alternative clients.</td>
           <td><a href="./research/precise-crane-conduit/">S4</a></td>
         </tr>
         <tr>
           <td><code>mcpm-client</code></td>
-          <td>Shared helpers for any client of mcpmanagerd's UDS API. Used by <code>mcpm</code> and (potentially) third-party tools. Re-exports types from <code>mcpm-protocol</code>. Handles the dial-or-auto-spawn dance.</td>
+          <td><strong>In-tree convenience layer; churns freely.</strong> Shared helpers for any first-party client of mcpmanagerd's UDS API. Used by <code>mcpm</code> (and a future Tauri/Actix GUI). Re-exports types from <code>mcpm-protocol</code>. Handles the dial-or-auto-spawn dance, retry policies, streaming-RPC ergonomics, error-mapping. Internal API — third parties should depend on <code>mcpm-protocol</code> instead.</td>
           <td><a href="./research/nimble-raven-toolkit/research-client-tools-shared.html">S5 shared</a></td>
         </tr>
         <tr>
@@ -270,8 +270,11 @@ secret.list                            -&gt; Vec&lt;SecretRef&gt;   // names onl
 secret.unset    { name }               -&gt; bool
 
 // Configuration
-config.get      { scope? }             -&gt; ConfigSnapshot
-config.put      { scope?, content, prior_hash? }  -&gt; ()
+config.get      { scope? }             -&gt; ConfigSnapshot { content, hash }
+config.put      { scope?, content, prior_hash }   -&gt; ()
+                          // prior_hash is REQUIRED. If it doesn't match the
+                          // current on-disk file_hash, returns E_CONFIG_CONFLICT
+                          // and the caller must re-read + offer merge/discard.
 config.validate { scope?, content }    -&gt; ValidationResult
 
 // Toolchain projection
@@ -331,6 +334,8 @@ secrets       = ["GITHUB_TOKEN", …]      # OS-keychain entries to inject
 test_on_update = true                    # per-server override of project default
 restart       = { attempts_max = 5, window_secs = 600 }
 memory_max_mb = 512                      # cgroupv2 / RLIMIT_AS
+idle_ttl_secs = 1800                     # 30 min default; 0 = stop immediately
+                                         # when refcount → 0; negative = never
 
 [server.&lt;name&gt;.env]
 &lt;ENV_NAME&gt; = "literal-value"             # injected at spawn time
@@ -390,7 +395,19 @@ granted_by  = "interactive" | "force"
 # Plus root-trust:
 [root]
 trust_toml_url = "https://trust.mcp-manager.dev/v1/trust.toml"
-last_refreshed = "2026-05-24T00:00:00Z"</code></pre>
+last_refreshed = "2026-05-24T00:00:00Z"
+mode           = "fetched" | "baked-in-fallback"  # see below</code></pre>
+
+    <h4>First-run trust bootstrap (offline-safe)</h4>
+    <p>
+      <code>mcpm init</code> needs the trust manifest to seed registry pubkeys. If the user is offline at first run:
+    </p>
+    <ol>
+      <li>mcpm-trust attempts to fetch <code>trust.toml</code> from the baked-in URL.</li>
+      <li>On any network failure (DNS, TLS, 4xx/5xx, timeout), <strong>fall back to "trusted-baked-in only" mode</strong>: use only the 3 default registry pubkeys baked into the mcpmanagerd binary. Set <code>[root].mode = "baked-in-fallback"</code>.</li>
+      <li>In this fallback mode, no registry can be refreshed and no user-added registries can be verified. Every <code>mcpm</code> CLI invocation prints a one-line warning at the top: <code>warning: trust manifest never fetched; using baked-in keys only. Run `mcpm trust refresh` when network is available.</code></li>
+      <li>Once a successful refresh happens (manually via <code>mcpm trust refresh</code>, or automatically on the next online <code>mcpm</code> call), <code>[root].mode</code> flips to <code>"fetched"</code> and the warning stops.</li>
+    </ol>
 
     <h3>Audit log entry (<code>$XDG_STATE_HOME/mcpmanagerd/audit/YYYY-MM-DD.jsonl</code>)</h3>
     <pre><code>{
@@ -444,7 +461,7 @@ last_refreshed = "2026-05-24T00:00:00Z"</code></pre>
       </li>
       <li>mcpmanagerd creates a pipe pair and tells <code>mcpm exec</code>: "your stdio is now linked to the server."</li>
       <li><code>mcpm exec</code> becomes a stdio relay: editor's stdin → mcpmanagerd → server stdin; server stdout → mcpmanagerd → editor's stdout. Bytes flow.</li>
-      <li>When editor exits, <code>mcpm exec</code> closes; mcpmanagerd decrements the server's refcount. If refcount → 0 and the server has no other clients, supervisor keeps it running for a configurable idle TTL (default: forever — server stays alive between editor sessions).</li>
+      <li>When editor exits, <code>mcpm exec</code> closes; mcpmanagerd decrements the server's refcount. If refcount → 0 and the server has no other clients, the supervisor starts an idle timer of <code>[server.&lt;name&gt;].idle_ttl_secs</code> (default 1800s / 30 min). <code>idle_ttl_secs = 0</code> stops the server immediately when refcount drops to 0; <strong>negative</strong> keeps the server alive forever (useful for "always warm" servers like an LSP-backed code-graph). On any subsequent <code>mcpm exec</code>, the refcount increments and the timer is cancelled.</li>
     </ol>
 
     <h3>Flow C: <code>mcpm secret set GITHUB_TOKEN</code></h3>
@@ -464,7 +481,13 @@ last_refreshed = "2026-05-24T00:00:00Z"</code></pre>
       <li>Supervisor checks restart policy: how many attempts in the last <code>window_secs</code>?</li>
       <li>If <code>attempts &lt; attempts_max</code>: compute delay = <code>min(base × 2^attempt × (1 + rand(0, 0.3)), cap)</code>. Sleep. Re-spawn (same secrets, same isolation).</li>
       <li>If <code>attempts ≥ attempts_max</code>: mark server <code>failed</code> in registry. Stop retrying. Audit: <code>server.failed { attempts, window }</code>. TUI shows the failure with the last log line; user must run <code>mcpm restart github-mcp</code> explicitly to clear.</li>
-      <li>If the child was OOM-killed (Linux: <code>memory.events.oom_kill</code> incremented; macOS: SIGKILL + recent memory-pressure → inferred): audit <code>server.oom</code> instead of <code>server.crash</code>, count toward attempts, otherwise same flow.</li>
+      <li>If the child was OOM-killed, audit <code>server.oom</code> (instead of <code>server.crash</code>), count toward the restart-attempts budget, otherwise same flow. OOM detection per platform:
+        <ul>
+          <li><strong>Linux + cgroupv2</strong> (modern Ubuntu / Fedora / Arch): watch <code>memory.events.oom_kill</code> increment. Deterministic.</li>
+          <li><strong>Linux + cgroupv1</strong> (legacy distros — older RHEL, CentOS 7, etc.): per-server memory limits via <code>RLIMIT_AS</code> + observe SIGKILL on child exit. Emit a "may have been OOM, no perfect signal on this kernel" warning in the audit details. Graceful degradation.</li>
+          <li><strong>macOS</strong>: no native OOM event. Inferred from <em>all three</em>: SIGKILL on child exit + memory-pressure within the last 30 s (<code>host_processor_info</code>) + server's last-known RSS &gt; 80% of any configured limit. If all three match, classify as <code>server.oom</code>; otherwise <code>server.crash</code>.</li>
+        </ul>
+      </li>
     </ol>
 
     <h3>Flow E: <code>mcpm tui</code> opens, user navigates</h3>
@@ -584,38 +607,38 @@ $ nix profile install github:user/mcp-manager
   </section>
 
   <section class="section" id="open">
-    <h2>Implementation-level open questions</h2>
+    <h2>Implementation-level decisions <span class="pill success" style="font-size:0.75rem;margin-left:0.5rem">all 6 resolved 2026-05-24</span></h2>
 
-    <p>These are decisions that don't need product-owner input, but engineers will hit them. Captured here for early thought rather than mid-implementation surprise.</p>
+    <p>Six engineering-level decisions originally flagged for thought, now resolved. Each summarises the decision and points at the body section where the resolution is fully captured.</p>
 
     <details class="accordion">
-      <summary>Idle-server termination policy</summary>
-      <p>Servers with refcount=0 (no editor connected) currently stay alive forever. Should we add a configurable idle-TTL after which the supervisor stops them gracefully? Pro: memory hygiene for users with 20+ rarely-used servers. Con: cold-start cost when an editor reconnects. Suggested default: 30min idle → stop; configurable per-server via <code>[server.&lt;name&gt;].idle_ttl_secs</code>.</p>
+      <summary>✓ Idle-server termination policy <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p>Per-server <code>[server.&lt;name&gt;].idle_ttl_secs</code> in canonical config. Default <strong>1800 (30 min)</strong>: when refcount → 0, start an idle timer; if the timer fires, stop the server gracefully; if a new <code>mcpm exec</code> arrives first, cancel the timer. <strong><code>idle_ttl_secs = 0</code></strong> means "stop immediately when refcount = 0" (for memory-hungry servers); <strong>negative</strong> means "never stop" (for always-warm servers). Captured in the <a href="#schemas">user-scope config schema</a> and <a href="#flows">Flow B step 9</a>.</p>
     </details>
 
     <details class="accordion">
-      <summary>cgroupv2 unavailability on older Linux distros</summary>
-      <p>cgroupv2-only distros (recent Ubuntu, Fedora) are fine. Distros still on cgroupv1 (older RHEL/CentOS) lose per-server memory limits and OOM detection. Options: (a) fall back to <code>RLIMIT_AS</code> + SIGKILL-with-warning detection (degrades gracefully but no perfect OOM signal), (b) refuse to start with a clear error, (c) attempt to detect cgroupv1 and use it (high implementation cost, low return).</p>
+      <summary>✓ cgroupv2 unavailability on older Linux distros <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p>Fall back to <code>RLIMIT_AS</code> + SIGKILL-with-warning detection. Degrades gracefully — per-server memory limits still work; OOM detection is best-effort (we observe SIGKILL but cannot definitively attribute to OOM, so audit entries carry a "may have been OOM, no perfect signal on this kernel" warning). Captured in <a href="#flows">Flow D step 6</a> and the per-platform OOM table.</p>
     </details>
 
     <details class="accordion">
-      <summary>macOS jetsam OOM-inference heuristic</summary>
-      <p>macOS doesn't expose a clean OOM-kill event. We infer from SIGKILL + recent memory pressure (<code>host_processor_info</code>). What's the right heuristic threshold for "recent" and "high"? Initial guess: SIGKILL + memory-pressure within last 30s + server's last-known RSS &gt; 80% of any limit. Calibrate after we have real telemetry — but oh wait, we have no telemetry. So: calibrate by user reports.</p>
+      <summary>✓ macOS jetsam OOM-inference heuristic <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p>Classify as <code>server.oom</code> iff <strong>all three</strong>: (a) child exit by SIGKILL with no exit code, (b) <code>host_processor_info</code> reports memory-pressure within the last 30 seconds, (c) the server's last-known RSS exceeded 80% of any configured memory limit (or the system's per-process default). Otherwise classify as <code>server.crash</code>. Captured in <a href="#flows">Flow D step 6</a>.</p>
     </details>
 
     <details class="accordion">
-      <summary>Trust manifest fetch on first run (network bootstrap)</summary>
-      <p>First-run <code>mcpm init</code> needs to fetch <code>trust.toml</code> to seed its trust state. If the user is offline, what happens? Options: (a) refuse to init with a clear error + hint to retry, (b) init in "trusted-baked-in only" mode (no registry refresh; only the 3 default sources at their baked-in pubkeys; warn on every CLI call until refreshed), (c) silently use baked-in pubkeys without warning. Recommend (b).</p>
+      <summary>✓ Trust manifest fetch on first run (network bootstrap) <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p>Fall back to <strong>"trusted-baked-in only" mode</strong> on network failure. Only the 3 default registry pubkeys baked into the mcpmanagerd binary are valid; no user-added registries can be verified. Every <code>mcpm</code> CLI invocation prints a one-line warning until <code>mcpm trust refresh</code> succeeds. <code>[root].mode</code> in <code>trust.toml</code> flips from <code>"baked-in-fallback"</code> to <code>"fetched"</code> on first successful refresh. Captured in the <a href="#schemas">trust-file schema</a> + the "First-run trust bootstrap" sub-section.</p>
     </details>
 
     <details class="accordion">
-      <summary>Concurrent <code>config.put</code> from CLI + TUI + $EDITOR</summary>
-      <p>If the TUI is running and the user simultaneously hand-edits <code>config.toml</code> in vim, the two writes race. Mitigation: every <code>config.put</code> includes the prior <code>file_hash</code> (CAS-style). If hash mismatches, the put fails with a clear "config changed on disk" error and the TUI re-reads + offers to merge or discard. This is fail-safe but the error UX needs work.</p>
+      <summary>✓ Concurrent <code>config.put</code> race <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p>CAS-style guard: every <code>config.put</code> RPC includes a <code>prior_hash</code> field (required). If the on-disk file's hash doesn't match, the put returns <code>E_CONFIG_CONFLICT</code>; the caller (TUI / CLI / <code>$EDITOR</code> wrapper) re-reads via <code>config.get</code> and offers to merge or discard. <code>config.get</code> returns a snapshot containing <code>{content, hash}</code> so every reader has the hash it needs for the next write. Captured in the <a href="#wire">wire protocol</a> definitions for <code>config.get</code> and <code>config.put</code>.</p>
     </details>
 
     <details class="accordion">
-      <summary>What ships in <code>mcpm-protocol</code> vs <code>mcpm-client</code>?</summary>
-      <p>The split matters: <code>mcpm-protocol</code> is the public-facing wire crate (third parties depend on this if they build alternative clients). <code>mcpm-client</code> is the in-tree convenience layer used by <code>mcpm</code>. <code>mcpm-protocol</code> should be small and stable; <code>mcpm-client</code> can churn freely.</p>
+      <summary>✓ <code>mcpm-protocol</code> vs <code>mcpm-client</code> split <span class="pill success" style="font-size:0.7rem;margin-left:0.5rem">resolved</span></summary>
+      <p><code>mcpm-protocol</code> is the <strong>small, stable, public surface</strong> — wire types only, required features only, semver-disciplined. Third parties depend on it directly to build alternative clients. <code>mcpm-client</code> is the <strong>in-tree convenience layer</strong> — first-party only, churns freely, wraps <code>mcpm-protocol</code> with retry policies, streaming-RPC ergonomics, error-mapping, and the dial-or-auto-spawn dance. Captured in the <a href="#components">per-crate table</a>.</p>
     </details>
   </section>
 
