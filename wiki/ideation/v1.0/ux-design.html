@@ -110,6 +110,7 @@
         <tr><td><code>mcpm status</code></td><td>One-line per server: status + uptime + last error if any.</td><td><code>--json</code></td></tr>
         <tr><td><code>mcpm stop &lt;server&gt;</code></td><td>Graceful SIGTERM (5s timeout, then SIGKILL).</td><td><code>--force</code> (immediate SIGKILL)</td></tr>
         <tr><td><code>mcpm test &lt;server&gt;</code></td><td>Health check: spawn → initialize → tools/list → report. CI-friendly.</td><td><code>--json</code> · <code>--timeout N</code></td></tr>
+        <tr><td><code>mcpm trust &lt;refresh|status|verify&gt;</code></td><td>Manage the registry-pubkey trust manifest. <code>refresh</code> fetches the latest <code>trust.toml</code> from the baked-in URL; <code>status</code> shows the current trust mode (<code>fetched</code> or <code>baked-in-fallback</code>) and last-refresh time; <code>verify</code> re-checks the manifest signature without fetching.</td><td><code>--force</code> (fetch even within TTL)</td></tr>
         <tr><td><code>mcpm tui</code></td><td>Open the interactive TUI.</td><td>—</td></tr>
         <tr><td><code>mcpm uninstall</code></td><td>Remove MCP Manager. Unregisters from service manager, stops daemon + servers, removes config dir, preserves audit log + keychain.</td><td><code>--keep-config</code> · <code>--purge-secrets</code></td></tr>
         <tr><td><code>mcpm update [&lt;server&gt;]</code></td><td>Update servers (one or all). Shows diff; runs <code>mcpm test</code> after each; rolls back on failure.</td><td><code>--accept-breaking</code> · <code>--no-test</code> · <code>--dry-run</code></td></tr>
@@ -284,7 +285,7 @@ auth       = { type = "bearer", secret = "CORP_REGISTRY_TOKEN" }</code></pre>
 
 [mcpm]
 inherit          = "all"        # "all" | ["server1", "server2"] | "none"
-min_mcpd_version = "1.0"
+min_mcpm_version = "1.0"
 description      = "ACME data pipeline tooling"
 test_on_update   = true
 
@@ -424,7 +425,7 @@ This is the first time mcpm has seen this project config. Trust it?
         <tr><td><code>E_PROJECTION_DRIFT</code></td><td>An editor config file's managed-block was hand-edited; projection refuses to overwrite blind.</td><td><code>mcpm projection diff &lt;tool&gt;</code> shows the conflict. Re-sync with <code>--force</code> after review.</td></tr>
         <tr><td><code>E_PROJECT_UNTRUSTED</code></td><td>Project config exists but wasn't trust-granted in this session.</td><td>Run <code>mcpm project allow</code> (prompts to review) or <code>mcpm project allow --force</code>.</td></tr>
         <tr><td><code>E_KEYCHAIN_UNAVAILABLE</code></td><td>OS keychain service (libsecret / Keychain Services) isn't reachable.</td><td>Linux: install <code>gnome-keyring</code> or <code>kwallet</code>. Use <code>--from-env</code> as escape hatch.</td></tr>
-        <tr><td><code>E_DAEMON_VERSION</code></td><td>mcpmanagerd version is older than project's <code>min_mcpd_version</code>.</td><td>Update mcpmanagerd via curl installer or <code>nix flake update</code>.</td></tr>
+        <tr><td><code>E_DAEMON_VERSION</code></td><td>mcpmanagerd version is older than project's <code>min_mcpm_version</code>.</td><td>Update mcpmanagerd via curl installer or <code>nix flake update</code>.</td></tr>
       </tbody>
     </table>
 

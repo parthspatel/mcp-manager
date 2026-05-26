@@ -113,13 +113,13 @@
 │                       └──────────┘                                    │
 │                                                                       │
 │  Persistent state on disk:                                            │
-│   ~/.config/mcp-manager/config.toml           (user canonical)        │
-│   &lt;repo&gt;/.mcp-manager.toml + .mcp-manager.lock (project, optional)    │
-│   ~/.config/mcp-manager/projection.lock       (user lock)             │
-│   ~/.config/mcp-manager/trust.toml            (project trust gates)   │
-│   $XDG_STATE_HOME/mcpmanagerd/audit/YYYY-MM-DD.jsonl (audit log, rotated)    │
-│   $XDG_STATE_HOME/mcpmanagerd/logs/&lt;server&gt;/*.log    (per-server log rings)  │
-│   OS keychain entries: dev.mcp-manager.mcpmanagerd/&lt;server&gt;/&lt;name&gt;           │
+│   ~/.config/mcp-manager/config.toml         (user canonical)          │
+│   &lt;repo&gt;/.mcp-manager.toml + .mcp-manager.lock  (project, optional)   │
+│   ~/.config/mcp-manager/projection.lock     (user lock)               │
+│   ~/.config/mcp-manager/trust.toml          (project trust gates)     │
+│   $XDG_STATE_HOME/mcpmanagerd/audit/*.jsonl (audit log, daily rot.)   │
+│   $XDG_STATE_HOME/mcpmanagerd/logs/&lt;server&gt;/ (per-server log rings)   │
+│   OS keychain: dev.mcp-manager.mcpmanagerd/&lt;server&gt;/&lt;name&gt;             │
 └───────────────────────────────────────────────────────────────────────┘
 </code></pre>
 
@@ -359,7 +359,7 @@ priority   = 100                          # search-result rank tiebreaker</code>
     <h3>Project-scope config (<code>&lt;repo&gt;/.mcp-manager.toml</code>)</h3>
     <pre><code>[mcpm]
 inherit          = "all" | ["server1", …] | "none"    # layered overlay default: "all"
-min_mcpd_version = "1.0"
+min_mcpm_version = "1.0"
 description      = "ACME data pipeline tooling"
 test_on_update   = true
 
