@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Product overview — MCP Manager v1.0</title>
+<meta name="description" content="What MCP Manager is, who it's for, and why it exists. Audience-facing summary for product, exec, and new contributors.">
+<link rel="stylesheet" href="./assets/styles.css">
+<script type="module" src="./assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">product overview · v1.0</span></div>
+    <div class="crumbs"><a href="./index.html">← v1.0 overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Product overview</h1>
+
+  <p class="lede">
+    <strong>MCP Manager is Docker for Model Context Protocol servers.</strong> A small Rust daemon and a polished CLI/TUI replace the current "edit five different JSON files and paste your tokens into all of them" experience. One canonical configuration, one set of secrets in the OS keychain, one process supervisor — and your existing AI tools (Claude Code, Cursor, Zed, JetBrains IDEs, VS Code) keep working with no changes.
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#problem">The problem</a></li>
+      <li><a href="#user">Who it's for</a></li>
+      <li><a href="#solution">What MCP Manager does</a></li>
+      <li><a href="#feel">What using it feels like</a></li>
+      <li><a href="#differentiators">Differentiators</a></li>
+      <li><a href="#nongoals">Non-goals</a></li>
+      <li><a href="#success">What success looks like</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="problem">
+    <h2>The problem</h2>
+
+    <p>
+      The Model Context Protocol (<a href="https://modelcontextprotocol.io">MCP</a>) lets AI assistants call out to external tools: a GitHub MCP that reads PRs and creates issues, a filesystem MCP that browses local files, a SQL MCP that queries a developer's database, etc. Each MCP server is a separate process the assistant launches and talks to over stdio or HTTP. The Anthropic/OpenAI ecosystem has converged on this protocol and there are now dozens of MCP servers actively maintained.
+    </p>
+
+    <p>
+      What's missing is <em>management</em>. Today, if a developer wants the GitHub MCP available in both Cursor and Claude Code:
+    </p>
+
+    <ul>
+      <li>They install the server twice (or three times, or four — once per editor) and configure it separately in each.</li>
+      <li>They paste their <code>GITHUB_TOKEN</code> into multiple plaintext config files. CVE-2025-6514 (mcp-remote RCE, CVSS 9.6) demonstrated this exact pattern getting weaponized — secrets in plaintext editor configs are a real, exploited attack surface.</li>
+      <li>Each editor spawns its own copy of the server, so updating one doesn't update the others. Crashes are silent. Memory is double-counted. Restart-on-failure depends on the editor, not the user.</li>
+      <li>If they want to share an MCP setup with a teammate, there's no portable format. Each editor's config schema is different. <a href="./research/curious-otter-survey/research-mcp-config-schema.html">Our survey found 6 top-level config keys, 10 file locations, and 4 different env-variable expansion syntaxes</a> across the major editors.</li>
+      <li>When something breaks, the developer has no central log to investigate. Each editor logs differently, if at all.</li>
+    </ul>
+
+    <p>
+      The current state is genuinely broken UX. As MCP server count per developer grows from 2-3 (today) to 10+ (likely in 2026), the friction compounds.
+    </p>
+  </section>
+
+  <section class="section" id="user">
+    <h2>Who it's for</h2>
+
+    <div class="card-grid">
+      <article class="card">
+        <h4>Primary: the AI-assisted developer</h4>
+        <p>
+          A developer using one or more AI coding assistants (Claude Code, Cursor, Zed AI, JetBrains AI Assistant, VS Code Copilot/Continue, …) who has reached a handful of MCP servers and started feeling the management pain. They have a dev machine, run a few personal projects + maybe some work projects, and want the AI tooling to "just work."
+        </p>
+      </article>
+
+      <article class="card">
+        <h4>Secondary: the platform / dev-experience engineer</h4>
+        <p>
+          Someone at a small-to-medium engineering org responsible for "make AI tools work consistently across our team." Wants to standardize the MCP server set, pin versions, audit secret access, and onboard new engineers without per-laptop ceremony. Per-project config + lockfile-in-repo is the surface they care most about.
+        </p>
+      </article>
+
+      <article class="card">
+        <h4>Tertiary: the contributor / extender</h4>
+        <p>
+          A developer who wants to <em>publish</em> an MCP server or <em>add support for a new editor</em>. v1.0 ships TOML manifests for both: third parties can publish servers to a registry and ship a TOML toolchain manifest describing their editor's config shape. No PR to MCP Manager itself required.
+        </p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="solution">
+    <h2>What MCP Manager does</h2>
+
+    <p>One central place to manage MCP servers — install, configure, secret-set, supervise — with everything else flowing automatically.</p>
+
+    <ol>
+      <li>
+        <strong>Install servers from any registry.</strong> 3 default registries baked in (official LF-stewarded MCP Registry, GitHub MCP Registry, Docker MCP Catalog). Private/corporate registries via <code>mcpm registry add</code>. All signed (minisign on index, cosign-when-present on packages).
+      </li>
+      <li>
+        <strong>Keep secrets in the OS keychain.</strong> <code>mcpm secret set GITHUB_TOKEN</code> prompts via TTY, writes to macOS Keychain (or Linux libsecret), never to a plaintext file. Existing environment variables work as an escape hatch.
+      </li>
+      <li>
+        <strong>Run a real process supervisor.</strong> <code>mcpd</code> is the long-lived daemon. It spawns MCP servers under isolation, watches for crashes, restarts with exponential backoff + max-attempts (no thundering-herd, no infinite-loops), catches OOM kills, and writes an append-only audit log of every state change.
+      </li>
+      <li>
+        <strong>Project the config into your editors.</strong> One canonical TOML config lives in <code>~/.config/mcp-manager/</code>. mcpm rewrites your editor configs (Claude Code, Cursor, Zed, JetBrains, VS Code, Windsurf, Continue, Cline, Goose, …) to point at the manager, using Ansible-style managed-block sync so your hand-edits outside the managed region are preserved.
+      </li>
+      <li>
+        <strong>Provide an interactive surface.</strong> <code>mcpm tui</code> opens a lazygit/k9s-style terminal UI: three panes (Servers / Toolchains / Secrets) on the left, contextual right pane (logs / details / edit). Mouse + keyboard. Log tails for the daemon, each server, and the audit log are all one <code>Tab</code> away.
+      </li>
+      <li>
+        <strong>Per-project scoping.</strong> A project can override or extend a developer's user-level MCP set via a checked-into-repo <code>.mcp-manager.toml</code>. Direnv-style trust gate prevents cloned-from-elsewhere repos from silently configuring the manager.
+      </li>
+      <li>
+        <strong>Run anywhere mcpd is running.</strong> Auto-spawns from <code>mcpm exec</code> (no daemon-not-running errors). Opt-in registration with the user's service manager (launchd on macOS, systemd-user on Linux) on first launch.
+      </li>
+    </ol>
+  </section>
+
+  <section class="section" id="feel">
+    <h2>What using it feels like</h2>
+
+    <p>A worked example. New developer on macOS, just installed MCP Manager:</p>
+
+    <pre><code># 1. Install MCP Manager (one of two paths)
+$ curl -sSf https://mcp-manager.dev/install.sh | sh
+   ✓ mcpd 1.0.0 installed to /usr/local/bin/mcpd
+   ✓ mcpm 1.0.0 installed to /usr/local/bin/mcpm
+   Run `mcpm init` to get started.
+
+# 2. First-run setup (fully interactive; or `mcpm init --defaults -y` for non-interactive)
+$ mcpm init
+   What's your name? [Parth Patel]   ←
+   Scope: user or project? [user]   ←
+   Detected: Claude Code, Cursor, Zed. Project into all three? [Y/n]   ←
+   Detected: Docker. Enable Docker MCP Catalog as a registry? [y/N]   ←
+   Register mcpd with launchd as a background service? [y/N]   ←
+   ✓ Configured at ~/.config/mcp-manager/config.toml
+
+# 3. Add an MCP server
+$ mcpm search github
+   official/github-mcp        v0.4.2   GitHub PR + Issue MCP (Anthropic)
+   github/octocode-mcp        v0.3.1   GitHub code-search MCP (community)
+   ...
+$ mcpm install github-mcp
+   ✓ Installed github-mcp v0.4.2 from official, pinned to ^0.4
+   ⚠ Server requires secret: GITHUB_TOKEN
+     Run `mcpm secret set GITHUB_TOKEN` to provide it.
+
+# 4. Add the secret
+$ mcpm secret set GITHUB_TOKEN
+   Enter value (input hidden): **********
+   ✓ Stored in OS keychain.
+
+# 5. Verify it works
+$ mcpm test github-mcp
+   ✓ initialize    (12ms)
+   ✓ tools/list    (8 tools advertised)
+   ✓ tools/call create_issue  (dry-run)
+   Server is healthy.
+
+# 6. Editor configs are already updated. Open Cursor / Claude Code /
+#    Zed and the github-mcp is wired up automatically.
+
+# 7. Browse with the TUI
+$ mcpm tui
+   (lazygit-style interface, server statuses, live log tails)</code></pre>
+
+    <p>
+      From here, normal day-to-day is invisible: the daemon runs in the background, restarts servers when they crash, and rewrites editor configs whenever the canonical state changes.
+    </p>
+  </section>
+
+  <section class="section" id="differentiators">
+    <h2>Differentiators</h2>
+
+    <p>Things MCP Manager does that the alternatives (mostly: "edit your editor configs by hand") don't:</p>
+
+    <table class="compare">
+      <thead><tr><th>Differentiator</th><th>Why it matters</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Secrets never on disk in plaintext</strong></td>
+          <td>OS keychain integration (macOS Keychain / Linux libsecret). CVE-2025-6514 is the canonical reason.</td>
+        </tr>
+        <tr>
+          <td><strong>One server, many editors</strong></td>
+          <td>Per-editor configs are projected from a single canonical state. Cursor and Claude Code share the same mcpd-supervised process.</td>
+        </tr>
+        <tr>
+          <td><strong>Real process supervision</strong></td>
+          <td>Restart-on-crash with jittered backoff + max-attempts; OOM detection; audit log. Editors do none of this consistently.</td>
+        </tr>
+        <tr>
+          <td><strong>Per-project + per-user scope, layered</strong></td>
+          <td>Personal toolkit available everywhere; project-specific tools added in repo. Layered with name-override (mise-style); explicit isolation available for privacy-sensitive client work.</td>
+        </tr>
+        <tr>
+          <td><strong>Zero telemetry, ever</strong></td>
+          <td>No phone-home. Not opt-in, not opt-out — never collected. Permanent project commitment.</td>
+        </tr>
+        <tr>
+          <td><strong>JetBrains XML projection</strong></td>
+          <td>The hard one. JetBrains IDEs store MCP config in XML; we ship support out of the box in v1.0.</td>
+        </tr>
+        <tr>
+          <td><strong>Data-driven manifests, not hardcoded support</strong></td>
+          <td>Each editor's projection is a TOML manifest. When an editor's schema changes, ship a manifest update — no mcpd binary release required. Users can author manifests for new editors locally.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section" id="nongoals">
+    <h2>Non-goals</h2>
+
+    <p>What MCP Manager <em>deliberately doesn't do</em>:</p>
+
+    <ul>
+      <li><strong>Implement MCP itself.</strong> The official Rust SDK (<code>rmcp</code>) is our dependency. We're a manager of MCP servers, not an MCP implementation.</li>
+      <li><strong>Compete with the AI assistants.</strong> We project configs into Cursor / Claude Code / Zed / JetBrains; we don't replace them.</li>
+      <li><strong>Run MCP servers in the cloud.</strong> v1.0 is a local-only developer tool. Cloud hosting is out of scope.</li>
+      <li><strong>Support Windows.</strong> Permanent project decision. macOS + Linux only.</li>
+      <li><strong>Telemetry.</strong> No usage metrics, no anonymous crash reports, no opt-in pings. Permanent.</li>
+      <li><strong>Scale to thousands of MCPs.</strong> Architecture optimizes for "a few dozen managed servers per user," not a package-index workload.</li>
+      <li><strong>GUI in v1.0.</strong> Deferred (research preserved). v1.0 is CLI + TUI + config files.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="success">
+    <h2>What success looks like</h2>
+
+    <p>We will know v1.0 succeeded if:</p>
+
+    <ol>
+      <li><strong>An AI-assisted developer with 5 MCP servers reaches "everything just works" in under 10 minutes</strong> from <code>curl … | sh</code> to "Cursor sees my github MCP and the token came from the keychain."</li>
+      <li><strong>The same developer can move to a new machine and reach the same state in under 5 minutes</strong> — restore the canonical config from their dotfiles repo, re-set secrets, done.</li>
+      <li><strong>A small engineering team can check in a <code>.mcp-manager.toml</code> + <code>.mcp-manager.lock</code></strong> and have new hires reach a working setup by running <code>mcpm init</code> in the repo.</li>
+      <li><strong>An MCP server crash never leaves the developer wondering what happened</strong> — the audit log and per-server log tail tell the story.</li>
+      <li><strong>Adding a new editor target takes a third party an afternoon</strong>, by writing a TOML manifest — no mcpd PR, no release cycle.</li>
+    </ol>
+
+    <p>
+      The deeper success criterion is qualitative: developers should <em>enjoy</em> using mcpm. lazygit/k9s set the bar — the TUI we ship has to feel like that, not like a half-finished admin panel. The "OBSESSED about UX" product-owner mandate drives the entire surface.
+    </p>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Next: <a href="./technical-design.html">Technical design + specification</a> — how it's built.
+    Or jump to <a href="./ux-design.html">UX design</a> — how it feels.
+    For the full design audit trail, see <a href="./research/">research/</a>.
+  </p>
+</main>
+</body>
+</html>

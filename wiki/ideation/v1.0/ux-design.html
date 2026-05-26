@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UX design — MCP Manager v1.0</title>
+<meta name="description" content="The v1.0 user-facing UX: CLI surface, TUI shape and behavior, config-file schemas, onboarding flows, and error UX patterns.">
+<link rel="stylesheet" href="./assets/styles.css">
+<script type="module" src="./assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ux design · v1.0</span></div>
+    <div class="crumbs"><a href="./index.html">← v1.0 overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>UX design</h1>
+
+  <p class="lede">
+    How MCP Manager <em>feels</em> to use. CLI surface, TUI layout + behaviors, config-file shapes, onboarding flow, error UX, and help system. v1.0 ships three interactive surfaces — <strong>CLI</strong>, <strong>TUI</strong>, <strong>config files</strong> — with the GUI <a href="./future-features-v1.1.html#gui">deferred</a>. Distilled from the <a href="./research/ux-design-tui-config.html">2026-05-24 design exercise</a> and the <a href="./research/closing-gaps/onboarding/">onboarding agent's recommendation</a>; this page is the consolidated reference.
+  </p>
+
+  <p>
+    <span class="evidence-badge">CLI: 12 top-level subcommands</span>
+    <span class="evidence-badge">TUI: lazygit/k9s-style</span>
+    <span class="evidence-badge">Config: TOML, hand-editable</span>
+    <span class="evidence-badge">Mouse + keyboard</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#principles">UX principles</a></li>
+      <li><a href="#cli">CLI surface — all subcommands</a></li>
+      <li><a href="#tui">TUI layout + behaviors</a></li>
+      <li><a href="#keymap">Keymap (full)</a></li>
+      <li><a href="#config">Config files</a></li>
+      <li><a href="#onboarding">Onboarding flow</a></li>
+      <li><a href="#errors">Error UX</a></li>
+      <li><a href="#help">Help &amp; docs</a></li>
+      <li><a href="#a11y">Accessibility commitments</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="principles">
+    <h2>UX principles</h2>
+
+    <p>The "OBSESSED about UX" mandate, made operational:</p>
+
+    <div class="card-grid">
+      <article class="card">
+        <h4>Discoverability over memorization</h4>
+        <p>The TUI's bottom hint bar is always on and context-aware. The CLI's help text shows real examples, not just flag descriptions. <code>?</code> in the TUI shows the full keymap modal. Users should never have to guess what's available.</p>
+      </article>
+
+      <article class="card">
+        <h4>Idempotent everywhere</h4>
+        <p>Re-running <code>mcpm init</code> is a no-op + summary. Re-running <code>mcpm install foo</code> when foo is already installed is a no-op + summary. Re-running <code>mcpm secret set X</code> overwrites cleanly. Replay-safety is a UX feature; users don't have to remember whether they already did the thing.</p>
+      </article>
+
+      <article class="card">
+        <h4>Reversible by default; destructive ops are explicit</h4>
+        <p>Start, stop, restart, edit: no confirmation. Delete a server: <code>y/N</code> prompt. Wipe all canonical state: type literally <code>WIPE</code>. Purge a secret: type the secret name. Asymmetry on purpose — friction matches reversibility.</p>
+      </article>
+
+      <article class="card">
+        <h4>Show what you're about to change</h4>
+        <p><code>mcpm update</code> shows a diff before applying. <code>mcpm install</code> reports which editor configs were touched. <code>mcpm uninstall</code> lists exactly what will be removed before doing it. The user is never surprised after the fact.</p>
+      </article>
+
+      <article class="card">
+        <h4>Non-interactive everything</h4>
+        <p>Every interactive flow has CLI flags that fully replace it. <code>mcpm init --defaults -y</code> sets up zero-input. <code>mcpm install foo --version=^0.4</code> skips the version prompt. CI / Nix / scripts shouldn't fight the tool.</p>
+      </article>
+
+      <article class="card">
+        <h4>Trust the user's editor</h4>
+        <p>When the user edits a config, the TUI spawns <code>$EDITOR</code>. We don't reinvent text editing. The same goes for diffs (use <code>git diff</code> if available), prompts (use the TTY), and pagination (use <code>$PAGER</code>).</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="cli">
+    <h2>CLI surface — all subcommands</h2>
+
+    <p>The CLI is the primary surface for power users + automation + scripting. Every interactive flow has a non-interactive equivalent.</p>
+
+    <h3>Top-level commands (alphabetical)</h3>
+
+    <table class="compare">
+      <thead><tr><th>Command</th><th>Purpose</th><th>Key flags</th></tr></thead>
+      <tbody>
+        <tr><td><code>mcpm config &lt;get|put|validate|edit&gt;</code></td><td>Inspect / modify canonical config. <code>edit</code> opens <code>$EDITOR</code>.</td><td><code>--scope user|project</code></td></tr>
+        <tr><td><code>mcpm exec &lt;server&gt;</code></td><td>Run an MCP server (as a stdio proxy to mcpd). Used by editors via projected configs; rarely typed by humans.</td><td><code>--secrets-from env</code> (escape hatch)</td></tr>
+        <tr><td><code>mcpm help [&lt;topic&gt;]</code></td><td>Rich help with worked examples. Without topic = top-level overview.</td><td><code>--man</code> (open the manpage in $PAGER)</td></tr>
+        <tr><td><code>mcpm init [&lt;path&gt;]</code></td><td>First-run setup. Interactive by default; non-interactive with flags.</td><td><code>--defaults</code> · <code>-y</code> · <code>--scope user|project</code> · <code>--docker-enable=true|false</code> · <code>--service-register=true|false</code></td></tr>
+        <tr><td><code>mcpm install &lt;source&gt;</code></td><td>Install an MCP server from a registry source (e.g. <code>github-mcp</code>, <code>official/github-mcp@^0.4</code>).</td><td><code>--scope</code> · <code>--name &lt;alias&gt;</code> · <code>--runtime devenv|docker|…</code> · <code>--accept-unsigned</code></td></tr>
+        <tr><td><code>mcpm logs [&lt;server&gt;]</code></td><td>Tail one of the three log streams.</td><td><code>--follow</code> · <code>--daemon</code> · <code>--audit</code> · <code>--since</code> · <code>--lines N</code> · <code>--grep PATTERN</code></td></tr>
+        <tr><td><code>mcpm outdated</code></td><td>Preview which servers have updates available. Read-only.</td><td><code>--json</code></td></tr>
+        <tr><td><code>mcpm project &lt;init|allow|list&gt;</code></td><td>Project-scope helpers. <code>init</code> creates <code>.mcp-manager.toml</code>; <code>allow</code> trusts a cloned-elsewhere project config.</td><td><code>--force</code> (skip trust prompt)</td></tr>
+        <tr><td><code>mcpm registry &lt;add|list|remove|refresh|verify&gt;</code></td><td>Manage upstream registries.</td><td><code>--signed-by &lt;pubkey&gt;</code> · <code>--auth-header</code></td></tr>
+        <tr><td><code>mcpm restart &lt;server&gt;</code></td><td>Restart a server (clears <code>failed</code> state if applicable).</td><td><code>--force</code> (skip wait)</td></tr>
+        <tr><td><code>mcpm search &lt;query&gt;</code></td><td>Search active registries. Local BM25 over cached indexes.</td><td><code>--source &lt;name&gt;</code> · <code>--language</code> · <code>--license</code> · <code>--json</code></td></tr>
+        <tr><td><code>mcpm secret &lt;set|list|unset&gt;</code></td><td>Manage OS-keychain secrets. Values prompted via TTY; never on argv.</td><td><code>--from-env VAR</code> (read from env instead of TTY)</td></tr>
+        <tr><td><code>mcpm start &lt;server&gt;</code></td><td>Start a stopped server.</td><td>—</td></tr>
+        <tr><td><code>mcpm status</code></td><td>One-line per server: status + uptime + last error if any.</td><td><code>--json</code></td></tr>
+        <tr><td><code>mcpm stop &lt;server&gt;</code></td><td>Graceful SIGTERM (5s timeout, then SIGKILL).</td><td><code>--force</code> (immediate SIGKILL)</td></tr>
+        <tr><td><code>mcpm test &lt;server&gt;</code></td><td>Health check: spawn → initialize → tools/list → report. CI-friendly.</td><td><code>--json</code> · <code>--timeout N</code></td></tr>
+        <tr><td><code>mcpm tui</code></td><td>Open the interactive TUI.</td><td>—</td></tr>
+        <tr><td><code>mcpm uninstall</code></td><td>Remove MCP Manager. Unregisters from service manager, stops daemon + servers, removes config dir, preserves audit log + keychain.</td><td><code>--keep-config</code> · <code>--purge-secrets</code></td></tr>
+        <tr><td><code>mcpm update [&lt;server&gt;]</code></td><td>Update servers (one or all). Shows diff; runs <code>mcpm test</code> after each; rolls back on failure.</td><td><code>--accept-breaking</code> · <code>--no-test</code> · <code>--dry-run</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>Universal flags (all commands)</h3>
+    <ul>
+      <li><code>--verbose</code> / <code>-v</code> — extra diagnostic output</li>
+      <li><code>--quiet</code> / <code>-q</code> — suppress non-essential output</li>
+      <li><code>--json</code> — machine-readable output (where applicable)</li>
+      <li><code>--no-color</code> — disable color output (also respects <code>NO_COLOR</code> env)</li>
+      <li><code>--config-dir &lt;path&gt;</code> — override <code>~/.config/mcp-manager</code></li>
+    </ul>
+  </section>
+
+  <section class="section" id="tui">
+    <h2>TUI layout + behaviors</h2>
+
+    <p>Single-screen, lazygit/k9s style. Three concern-grouped panes on the left (Servers / Toolchains / Secrets), contextual right pane (logs / details / edit).</p>
+
+    <pre><code>┌─ MCP Manager ────────────────────── github · 12:34:08 ┐
+│ Servers ▸                       │ Logs · github         │
+│ ──────                          │ [server][mcpd][audit] │
+│ ▸ github     ●● running  14h    │ ──────                │
+│   filesystem ●● running   3d    │ 12:34:01 connected    │
+│   sqlite     ●○ stopped         │ 12:34:02 listed tools │
+│   github-pr  ⚠  failed (5/5)    │ 12:34:05 tools/list   │
+│                                 │ 12:34:08 ready        │
+│ Toolchains ▾                    │                       │
+│ ──────────                      │                       │
+│   ✓ claude-code  sync           │                       │
+│   ✓ cursor       sync           │                       │
+│   ⚠ zed          drifted        │                       │
+│                                 │                       │
+│ Secrets ▾                       │                       │
+│ ───────                         │                       │
+│   GITHUB_TOKEN  set             │                       │
+│   SQLITE_PATH   set             │                       │
+├─────────────────────────────────┴───────────────────────┤
+│ ? help · / search · enter view · l logs · s start · q quit │
+└─────────────────────────────────────────────────────────┘
+</code></pre>
+
+    <h3>Pane focus + key affordances</h3>
+    <ul>
+      <li>The focused pane has a highlighted border. Single-character actions in the hint bar apply to the focused pane's selected entity.</li>
+      <li>The hint bar is <strong>context-aware</strong>: when a server is <code>stopped</code>, <code>s</code> appears; when it's <code>running</code>, <code>d</code> appears instead. Inapplicable affordances are hidden.</li>
+      <li>Pane focus cycles with <code>Shift+Tab</code>. <code>Tab</code> alone cycles log streams in the right pane.</li>
+    </ul>
+
+    <h3>Log multiplexing</h3>
+    <ul>
+      <li>Tab order in the right pane: <code>server → mcpd → audit → combined → server → …</code></li>
+      <li>Each tab maintains its own scroll position.</li>
+      <li>Switching server in the left pane carries the tab forward (audit on github → switch to filesystem → still on audit, but for filesystem).</li>
+      <li><strong>Follow mode</strong> on by default; <code>f</code> toggles. When paused, scrollback works without losing new entries (they're buffered).</li>
+      <li><code>/</code> within the log pane greps the current buffer; <code>n</code>/<code>N</code> next/previous match; <code>Esc</code> clears.</li>
+    </ul>
+
+    <h3>Editing</h3>
+    <ul>
+      <li><code>e</code> on the focused entity opens <code>$EDITOR</code> with that entity's TOML stanza extracted to a temp file.</li>
+      <li>On editor save: validate via <code>config.validate</code> → atomic write back → audit-log → mcpd reload.</li>
+      <li>On validation failure: re-enter TUI with a modal showing the error + offending line; temp file preserved so the user can retry with <code>e</code> again.</li>
+    </ul>
+
+    <h3>Confirmation patterns</h3>
+    <table class="compare">
+      <thead><tr><th>Action</th><th>Confirmation</th></tr></thead>
+      <tbody>
+        <tr><td>Start / stop / restart server</td><td>None (reversible)</td></tr>
+        <tr><td>Edit canonical config</td><td>None (edit is non-destructive until save; validation gates the save)</td></tr>
+        <tr><td><code>mcpm update</code></td><td>Diff shown; single Enter to apply; <code>-y</code> skips</td></tr>
+        <tr><td>Delete a server config</td><td><code>y/N</code> prompt</td></tr>
+        <tr><td>Purge a secret</td><td>Type the secret name (matches <code>gh repo delete</code> paranoid pattern)</td></tr>
+        <tr><td>Wipe all canonical state</td><td>Type literally <code>WIPE</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>Mouse support</h3>
+    <ul>
+      <li>Click to focus a pane; click to select an entity; double-click = drill into detail (same as <code>Enter</code>).</li>
+      <li>Mouse wheel scrolls the focused pane (including log scrollback).</li>
+      <li>Right-click is unbound in v1.0 — no context menus yet.</li>
+      <li><strong>Option/Alt bypass:</strong> holding Option (macOS) / Alt (Linux) while click-dragging suspends mouse capture so native terminal text selection works for copy/paste. Documented in the help modal.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="keymap">
+    <h2>Keymap (full)</h2>
+
+    <h3>Single-key actions</h3>
+    <table class="compare">
+      <thead><tr><th>Key</th><th>Action</th><th>Applies when</th></tr></thead>
+      <tbody>
+        <tr><td><code>l</code></td><td>Open logs for the focused entity</td><td>Server or daemon focused</td></tr>
+        <tr><td><code>e</code></td><td>Edit the focused entity in <code>$EDITOR</code></td><td>Always</td></tr>
+        <tr><td><code>r</code></td><td>Restart the focused server</td><td>Server is <code>running</code> or <code>failed</code></td></tr>
+        <tr><td><code>d</code></td><td>Stop the focused server</td><td>Server is <code>running</code></td></tr>
+        <tr><td><code>s</code></td><td>Start the focused server</td><td>Server is <code>stopped</code> or <code>failed</code></td></tr>
+        <tr><td><code>f</code></td><td>Toggle follow mode in the active log pane</td><td>Log pane focused</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Navigation + control</h3>
+    <table class="compare">
+      <thead><tr><th>Key</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><code>?</code></td><td>Open full keymap modal</td></tr>
+        <tr><td><code>/</code></td><td>Incremental search within focused pane</td></tr>
+        <tr><td><code>q</code> / <code>Ctrl+C</code></td><td>Quit</td></tr>
+        <tr><td><code>Esc</code></td><td>Cancel modal / clear search / collapse pane</td></tr>
+        <tr><td><code>Tab</code></td><td>Cycle log streams in the right pane</td></tr>
+        <tr><td><code>Shift+Tab</code></td><td>Cycle left-column pane focus</td></tr>
+        <tr><td><code>Enter</code></td><td>Drill into the focused entity (expand for detail)</td></tr>
+        <tr><td>Arrow keys, <code>j</code>/<code>k</code>/<code>h</code>/<code>l</code></td><td>Navigate within focused pane</td></tr>
+        <tr><td><code>PgUp</code>/<code>PgDn</code></td><td>Page within focused pane (incl. log scrollback)</td></tr>
+        <tr><td><code>g</code>/<code>G</code></td><td>Jump to top/bottom of focused pane</td></tr>
+        <tr><td><code>n</code>/<code>N</code></td><td>Next / previous search match (after <code>/</code>)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Reserved for future versions</h3>
+    <p>Intentionally unbound in v1.0 to preserve muscle memory when v1.x adds features:</p>
+    <ul>
+      <li><code>x</code>, <code>D</code> — destructive deletes (will require typed confirmation)</li>
+      <li><code>v</code> — visual-select multi-pick for batch actions</li>
+      <li><code>T</code>, <code>S</code>, <code>L</code> — context-shortcuts to jump to Toolchains / Secrets / Logs panes directly</li>
+    </ul>
+  </section>
+
+  <section class="section" id="config">
+    <h2>Config files</h2>
+
+    <p>Three persistent files. All TOML. All hand-editable. mcpd reconciles on next read.</p>
+
+    <h3>User-scope config (<code>~/.config/mcp-manager/config.toml</code>)</h3>
+    <pre><code># MCP Manager · user-scope canonical config
+# Hand-edit OR use `mcpm` CLI. mcpm reconciles both.
+
+[mcpd]
+audit_retention_days = 90
+log_ring_buffer_mb   = 10
+service_register     = true
+
+[server.github]
+registry  = "official"
+package   = "github-mcp"
+version   = "^0.4"
+isolation = "devenv"
+secrets   = ["GITHUB_TOKEN"]
+
+[server.github.env]
+GITHUB_OWNER = "anthropic"
+
+[projection.claude-code]
+enabled = true
+scope   = "user"
+
+[registry.official]
+url = "https://registry.modelcontextprotocol.io"
+# pubkey verified via baked-in trust.toml; no per-source key here
+
+[registry.corp]
+url        = "https://internal.example.com/mcp-registry"
+signed_by  = "RWQabc…"
+auth       = { type = "bearer", secret = "CORP_REGISTRY_TOKEN" }</code></pre>
+
+    <h3>Project-scope config (<code>&lt;repo&gt;/.mcp-manager.toml</code>)</h3>
+    <pre><code># MCP Manager · project-scope canonical config (checked into repo)
+
+[mcpm]
+inherit          = "all"        # "all" | ["server1", "server2"] | "none"
+min_mcpd_version = "1.0"
+description      = "ACME data pipeline tooling"
+test_on_update   = true
+
+[server.acme-db]
+registry  = "official"
+package   = "postgres-mcp"
+version   = "^0.3"
+isolation = "devenv"
+secrets   = ["ACME_DB_URL"]
+
+[server.github]                 # project-local override of user's github
+allowed_paths = ["/work/acme-project"]
+# Other keys (registry/package/version/secrets) inherited from user config.</code></pre>
+
+    <h3>Per-project layering — the three modes</h3>
+    <ul>
+      <li><code>inherit = "all"</code> (default) — project servers OVERLAY user servers. Same-name = project wins.</li>
+      <li><code>inherit = ["s1", "s2"]</code> — allowlist; only the named user servers are pulled in.</li>
+      <li><code>inherit = "none"</code> — full isolation (venv-style). For privacy-sensitive client work.</li>
+    </ul>
+    <p><code>[server.&lt;name&gt;] disabled = true</code> in a project config hides an inherited user-level server in that project only.</p>
+
+    <h3>Lockfile (<code>.lock</code> at each scope)</h3>
+    <pre><code>version  = 1
+metadata = { generated = "…", mcpm = "1.0.0" }
+
+[[server]]
+name            = "github"
+registry        = "official"
+package         = "github-mcp"
+version         = "0.4.2"            # exact pin, resolved from "^0.4"
+checksum        = "sha256:9f4e2d…"
+advertised_spec = "2025-06-18"
+resolved_at     = "2026-05-24T14:33:01Z"
+
+[[projection]]
+tool         = "cursor"
+managed_at   = "2026-05-24T14:33:01Z"
+managed_hash = "sha256:8b3c…"        # hash of the managed-block region only</code></pre>
+
+    <h3>Trust file (<code>~/.config/mcp-manager/trust.toml</code>)</h3>
+    <pre><code># Managed by mcpm; do not hand-edit.
+[trust."9c4f8a7d2e…"]
+path        = "/work/acme-project"
+config_hash = "8a9f2d1b4c…"
+granted_at  = "2026-05-24T15:22:01Z"
+granted_by  = "interactive"</code></pre>
+
+    <h3>Locations per OS</h3>
+    <table class="compare">
+      <thead><tr><th>File</th><th>macOS</th><th>Linux</th></tr></thead>
+      <tbody>
+        <tr><td>User config</td><td><code>~/Library/Application Support/mcp-manager/config.toml</code> <em>or</em> <code>~/.config/mcp-manager/config.toml</code></td><td><code>$XDG_CONFIG_HOME/mcp-manager/config.toml</code></td></tr>
+        <tr><td>Audit log</td><td><code>~/Library/Logs/mcp-manager/audit/</code></td><td><code>$XDG_STATE_HOME/mcp-manager/audit/</code></td></tr>
+        <tr><td>Per-server log rings</td><td><code>~/Library/Logs/mcp-manager/servers/</code></td><td><code>$XDG_STATE_HOME/mcp-manager/servers/</code></td></tr>
+        <tr><td>Trust file</td><td>(co-located with config)</td><td>(co-located with config)</td></tr>
+        <tr><td>UDS socket</td><td><code>~/Library/Application Support/mcp-manager/mcpd.sock</code></td><td><code>$XDG_RUNTIME_DIR/mcp-manager/mcpd.sock</code></td></tr>
+        <tr><td>Project config</td><td><code>&lt;repo&gt;/.mcp-manager.toml</code></td><td><code>&lt;repo&gt;/.mcp-manager.toml</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section" id="onboarding">
+    <h2>Onboarding flow</h2>
+
+    <p>From the <a href="./research/closing-gaps/onboarding/">onboarding agent's recommendation</a>: <code>mcpm init</code> is a thin scaffolder (not a doctor). Modeled on <code>aws configure</code> defaults + <code>terraform init</code> staged output + <code>npm init -y</code> skip flag. Idempotent; <code>-y</code> skips confirmations; <code>--defaults</code> accepts every default.</p>
+
+    <h3>Lucky-day interactive (~30 seconds)</h3>
+    <pre><code>$ mcpm init
+   What's your name? [Parth Patel]   ←
+   Scope: user or project? [user]   ←
+   Detected: Claude Code, Cursor, Zed. Project into all three? [Y/n]   ←
+   Detected: Docker. Enable Docker MCP Catalog as a registry? [y/N]   ←
+   Register mcpd with launchd as a background service? [y/N]   ←
+   ✓ Wrote ~/.config/mcp-manager/config.toml
+   ✓ Wrote ~/.config/mcp-manager/trust.toml
+   ✓ Projected canonical state into 3 editor configs
+   ✓ Refreshed trust.toml (4 registry pubkeys, valid until 2027-…)
+
+   Next: `mcpm install &lt;server&gt;` to add an MCP server.</code></pre>
+
+    <h3>Full non-interactive (CI / Nix / scripted)</h3>
+    <pre><code>$ mcpm init --defaults -y
+   ✓ Initialized (user scope, default projections, no Docker, no service-register).</code></pre>
+
+    <h3>Project-scope (in a repo)</h3>
+    <pre><code>$ cd /work/acme-project
+$ mcpm project init
+   Project name: [acme-project]   ←
+   Inherit user-level servers? [all]   ←
+   Description: ACME data pipeline tooling   ←
+   ✓ Wrote .mcp-manager.toml
+   Suggestion: commit this file. Teammates run `mcpm project init` here
+   to add the project to their own setup.</code></pre>
+
+    <h3>Cloned-from-elsewhere project (trust gate)</h3>
+    <pre><code>$ cd /work/cloned-from-github
+mcp-manager: detected new project config:  /work/cloned-from-github/.mcp-manager.toml
+             servers declared:             1 added (acme-db), 1 override (github)
+             inherit mode:                 "all"
+             registry sources:             official (trusted)
+             secrets referenced:           ACME_DB_URL (not in your keychain)
+
+This is the first time mcpm has seen this project config. Trust it?
+  y) yes, trust this exact config (sha256: 8a9f2d…)
+  n) no, ignore the project config for this session
+  e) edit it before deciding
+
+[y/n/e]:</code></pre>
+
+    <h3>Service-manager registration (first launch)</h3>
+    <p>If <code>service_register=true</code> in onboarding, mcpm runs:</p>
+    <ul>
+      <li><strong>macOS:</strong> <code>launchctl bootstrap gui/$UID ~/Library/LaunchAgents/dev.mcp-manager.mcpd.plist</code></li>
+      <li><strong>Linux:</strong> <code>systemctl --user enable --now mcpd.service</code></li>
+    </ul>
+    <p>Audit-logged as <code>service.register</code>. Reversed by <code>mcpm uninstall</code> (audit: <code>service.unregister</code>).</p>
+  </section>
+
+  <section class="section" id="errors">
+    <h2>Error UX</h2>
+
+    <p>Errors are a UX surface, not forensics. Every error tells the user (1) what happened, (2) why, and (3) what to do next.</p>
+
+    <h3>Error taxonomy</h3>
+    <table class="compare">
+      <thead><tr><th>Code</th><th>Meaning</th><th>Typical fix</th></tr></thead>
+      <tbody>
+        <tr><td><code>E_SECRET_MISSING</code></td><td>Server requires a secret that isn't in the keychain or env.</td><td>Run <code>mcpm secret set &lt;NAME&gt;</code> (the exact command is printed).</td></tr>
+        <tr><td><code>E_SERVER_OOM</code></td><td>Server was killed for OOM. Memory limit hit or system pressure.</td><td>Raise <code>[server.&lt;name&gt;].memory_max_mb</code> or investigate leak via <code>mcpm logs &lt;name&gt;</code>.</td></tr>
+        <tr><td><code>E_SERVER_FAILED</code></td><td>Server crashed too many times in the restart window. mcpd stopped retrying.</td><td>Investigate logs, then <code>mcpm restart &lt;name&gt;</code> to clear failed state.</td></tr>
+        <tr><td><code>E_CONFIG_INVALID</code></td><td>Canonical config failed validation (TOML parse, schema, type, or constraint).</td><td>Error message points at line/column. Re-open with <code>mcpm config edit</code> or revert.</td></tr>
+        <tr><td><code>E_CONFIG_CONFLICT</code></td><td>Canonical config changed on disk while a concurrent <code>config.put</code> was in flight.</td><td>TUI re-reads + offers to merge or discard. CLI: re-run command.</td></tr>
+        <tr><td><code>E_REGISTRY_UNREACHABLE</code></td><td>Registry network fetch failed (DNS, TLS, 5xx).</td><td>Check connectivity. Cached index continues to work for <code>mcpm search</code>.</td></tr>
+        <tr><td><code>E_REGISTRY_SIGFAIL</code></td><td>Registry index signature didn't verify. Possible compromise OR rotated key.</td><td>Run <code>mcpm registry verify</code>. Refresh trust manifest. Report if persistent.</td></tr>
+        <tr><td><code>E_SPEC_UNSUPPORTED</code></td><td>Server advertises an MCP spec version mcpd's allow-list doesn't accept.</td><td>Override with <code>[server.&lt;name&gt;].spec = "…"</code> if you trust the server, or wait for an mcpd update.</td></tr>
+        <tr><td><code>E_PROJECTION_DRIFT</code></td><td>An editor config file's managed-block was hand-edited; projection refuses to overwrite blind.</td><td><code>mcpm projection diff &lt;tool&gt;</code> shows the conflict. Re-sync with <code>--force</code> after review.</td></tr>
+        <tr><td><code>E_PROJECT_UNTRUSTED</code></td><td>Project config exists but wasn't trust-granted in this session.</td><td>Run <code>mcpm project allow</code> (prompts to review) or <code>mcpm project allow --force</code>.</td></tr>
+        <tr><td><code>E_KEYCHAIN_UNAVAILABLE</code></td><td>OS keychain service (libsecret / Keychain Services) isn't reachable.</td><td>Linux: install <code>gnome-keyring</code> or <code>kwallet</code>. Use <code>--from-env</code> as escape hatch.</td></tr>
+        <tr><td><code>E_DAEMON_VERSION</code></td><td>mcpd version is older than project's <code>min_mcpd_version</code>.</td><td>Update mcpd via curl installer or <code>nix flake update</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Error presentation — CLI</h3>
+    <pre><code>$ mcpm start github
+   ✗ Failed to start github (E_SECRET_MISSING)
+
+   The server requires a secret that isn't available:
+     GITHUB_TOKEN  (not in keychain, not in environment)
+
+   To fix:
+     $ mcpm secret set GITHUB_TOKEN
+
+   Then re-run:
+     $ mcpm start github</code></pre>
+
+    <h3>Error presentation — TUI</h3>
+    <p>
+      Errors appear as modal overlays on the TUI. The modal has: error code (top-left), one-line title, multi-line explanation, suggested-fix command (copy-able with <code>y</code>), <code>Esc</code> to dismiss, <code>l</code> to jump to relevant logs. A small ✗ badge appears next to the affected entity in the left pane until cleared.
+    </p>
+
+    <h3>What we deliberately don't do</h3>
+    <ul>
+      <li><strong>Silent fallbacks.</strong> If a secret is missing, we refuse to spawn — never spawn with a missing-value fallback. Same for unsigned registries (unless <code>--accept-unsigned</code>), failed projections, etc. Loud refusal beats quiet wrong-state.</li>
+      <li><strong>Stack traces in user-facing output.</strong> Stack traces go to <code>mcpm logs --daemon</code>. The error UX is the curated subset.</li>
+      <li><strong>Generic "an error occurred" messages.</strong> Every error has a code, an explanation, and a fix.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="help">
+    <h2>Help &amp; docs</h2>
+
+    <h3><code>mcpm help</code></h3>
+    <p>Rich help built into the binary. Every subcommand's help text includes:</p>
+    <ul>
+      <li>One-line purpose</li>
+      <li>Full flag list (with defaults)</li>
+      <li><strong>At least 3 worked examples</strong> with real arguments (not <code>&lt;ARG&gt;</code>)</li>
+      <li>"See also" links to related subcommands</li>
+      <li>Pointer into the mdbook docs for deeper reading</li>
+    </ul>
+
+    <pre><code>$ mcpm help install
+   mcpm install &lt;source&gt;  —  install an MCP server from a registry
+
+   USAGE:
+     mcpm install &lt;source&gt; [--scope user|project] [--name &lt;alias&gt;] [--runtime &lt;rt&gt;]
+
+   FLAGS:
+     --scope &lt;scope&gt;        user (default) | project
+     --name &lt;alias&gt;         override the server name in canonical config
+     --runtime &lt;runtime&gt;    devenv (default) | docker | podman | uvx-npx | none
+     --accept-unsigned      install without minisign verification (audit-logged)
+     --dry-run              show what would happen; write nothing
+
+   EXAMPLES:
+
+     # Install latest 0.4.x of the official github MCP, user-scope
+     $ mcpm install official/github-mcp@^0.4
+
+     # Install at a specific version, project-scope, isolated under docker
+     $ cd /work/acme-project
+     $ mcpm install acme-corp/internal-mcp@=0.2.1 --scope project --runtime docker
+
+     # Install from a private registry under an alias
+     $ mcpm install corp/sql-helper --name local-sql
+
+   SEE ALSO:
+     mcpm search    discover servers across registries
+     mcpm test      verify a newly-installed server is healthy
+     mcpm registry  manage upstream registries
+
+   DOCS:
+     https://docs.mcp-manager.dev/cli/install</code></pre>
+
+    <h3>mdbook docs in repo (<code>docs/</code>)</h3>
+    <ul>
+      <li>Source: <code>docs/src/*.md</code>. Built with <code>mdbook build</code>. Deployed to <code>docs.mcp-manager.dev</code>.</li>
+      <li>Single source of truth for non-CLI documentation: architecture overview, tutorials, recipes, FAQ.</li>
+      <li>Versioned per-release: <code>docs.mcp-manager.dev/v1.0/</code>, <code>v1.1/</code>, etc.</li>
+      <li>Searchable via mdbook's built-in client-side search.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="a11y">
+    <h2>Accessibility commitments</h2>
+
+    <ul>
+      <li><strong>Color is never the only carrier of information.</strong> Status indicators use color AND glyph (<code>●</code> running, <code>○</code> stopped, <code>⚠</code> failed). Severity in logs uses color AND prefix (<code>[ERR]</code>, <code>[WARN]</code>).</li>
+      <li><strong><code>NO_COLOR</code> env var respected.</strong> Also <code>$COLORTERM</code> for capability detection.</li>
+      <li><strong>8-color palette as the base;</strong> 256-color or truecolor enhancement when available.</li>
+      <li><strong>Configurable theme</strong> via <code>~/.config/mcp-manager/tui-theme.toml</code>. Bundled themes: <code>default</code>, <code>high-contrast</code>, <code>monochrome</code>.</li>
+      <li><strong>Keyboard-only operation always works.</strong> Mouse is enhancement, never required.</li>
+      <li><strong>Screen-reader output</strong> in v1.0 is best-effort — modern terminals + ratatui have decent support, but we don't claim WCAG conformance. v1.x may add an explicit screen-reader mode.</li>
+      <li><strong>No flashing / strobing</strong> in the TUI (per WCAG seizure guidance, even though we don't claim conformance).</li>
+    </ul>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Previous: <a href="./technical-design.html">Technical design</a>. For the full UX design exercise with rejected alternatives recorded, see <a href="./research/ux-design-tui-config.html">research/ux-design-tui-config.html</a>. For the onboarding agent's recommendation in full, see <a href="./research/closing-gaps/onboarding/">research/closing-gaps/onboarding/</a>.
+  </p>
+</main>
+</body>
+</html>

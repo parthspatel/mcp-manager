@@ -365,6 +365,57 @@ function buildSidebarResearchHubLink(loc) {
   );
 }
 
+function buildSidebarProductOverviewLink(loc) {
+  const active = loc.isV1Root && loc.file === "product-overview.html";
+  return el(
+    "a",
+    {
+      href: loc.prefix + "product-overview.html",
+      class: "sidebar-link sidebar-hub-link" + (active ? " is-active" : ""),
+      "aria-current": active ? "page" : null,
+      title: "Product overview — what MCP Manager is, who it's for",
+    },
+    [
+      el("span", { class: "sidebar-link-badge kind-index", "aria-hidden": "true" }, ["P"]),
+      el("span", { class: "sidebar-link-label" }, ["Product overview"]),
+    ]
+  );
+}
+
+function buildSidebarTechnicalDesignLink(loc) {
+  const active = loc.isV1Root && loc.file === "technical-design.html";
+  return el(
+    "a",
+    {
+      href: loc.prefix + "technical-design.html",
+      class: "sidebar-link sidebar-hub-link" + (active ? " is-active" : ""),
+      "aria-current": active ? "page" : null,
+      title: "Technical design + specification — how it's built",
+    },
+    [
+      el("span", { class: "sidebar-link-badge kind-analysis", "aria-hidden": "true" }, ["T"]),
+      el("span", { class: "sidebar-link-label" }, ["Technical design"]),
+    ]
+  );
+}
+
+function buildSidebarUxDesignLink(loc) {
+  const active = loc.isV1Root && loc.file === "ux-design.html";
+  return el(
+    "a",
+    {
+      href: loc.prefix + "ux-design.html",
+      class: "sidebar-link sidebar-hub-link" + (active ? " is-active" : ""),
+      "aria-current": active ? "page" : null,
+      title: "UX design — CLI, TUI, config files, errors",
+    },
+    [
+      el("span", { class: "sidebar-link-badge kind-recommendation", "aria-hidden": "true" }, ["★"]),
+      el("span", { class: "sidebar-link-label" }, ["UX design"]),
+    ]
+  );
+}
+
 function buildSidebarStreamSection(stream, loc, storedOpen) {
   const isCurrentStream = loc.streamId === stream.id;
 
@@ -445,8 +496,11 @@ function buildSidebar(loc) {
   sidebar.appendChild(
     el("div", { class: "sidebar-hub-section" }, [
       buildSidebarHubLink(loc),
-      buildSidebarResearchHubLink(loc),
+      buildSidebarProductOverviewLink(loc),
+      buildSidebarTechnicalDesignLink(loc),
+      buildSidebarUxDesignLink(loc),
       buildSidebarFutureLink(loc),
+      buildSidebarResearchHubLink(loc),
     ])
   );
 
