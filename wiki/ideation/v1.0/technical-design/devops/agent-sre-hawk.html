@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SRE Hawk — DevOps deep dive — MCP Manager v1.0</title>
+<meta name="description" content="The SRE on-call view of mcpmanagerd: structured JSON logs, hash-chained audit JSONL, mcpm doctor, lossless rotation, runbook-ready operations — local only, no vendor telemetry.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">devops · sre-hawk</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">devops overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The SRE Hawk's DevOps</h1>
+  <p class="lede">
+    Structured logs. Hash-chained audit. <code>mcpm doctor</code>. Lossless rotation. Runbook-shaped docs.
+    When <code>mcpmanagerd</code> wakes a developer at 3am because their morning standup is broken,
+    the logs must explain everything. Local-only — no telemetry to vendor servers, ever.
+  </p>
+
+  <p>
+    <span class="evidence-badge">JSON-line daemon logs</span>
+    <span class="evidence-badge">Hash-chained audit JSONL</span>
+    <span class="evidence-badge">mcpm doctor</span>
+    <span class="evidence-badge">journald-compatible</span>
+    <span class="evidence-badge">no vendor telemetry</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments</a>
+        <ul>
+          <li><a href="#vs-nix-purist">vs. nix-purist</a></li>
+          <li><a href="#vs-distro-packager">vs. distro-packager</a></li>
+          <li><a href="#vs-supply-chain-sec">vs. supply-chain-sec</a></li>
+          <li><a href="#vs-curl-installer-defender">vs. curl-installer-defender</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design</a>
+        <ul>
+          <li><a href="#design-logs">JSON log schema</a></li>
+          <li><a href="#design-audit">Audit JSONL with hash chain</a></li>
+          <li><a href="#design-rotation">Lossless log rotation</a></li>
+          <li><a href="#design-doctor"><code>mcpm doctor</code></a></li>
+          <li><a href="#design-health">Health endpoints</a></li>
+          <li><a href="#design-journald">journald / launchd integration</a></li>
+          <li><a href="#design-spawn-race">Auto-spawn race + lockfile</a></li>
+          <li><a href="#design-update">Rolling daemon update</a></li>
+          <li><a href="#design-uninstall"><code>mcpm uninstall</code></a></li>
+          <li><a href="#design-runbook">Runbook outline (mdbook)</a></li>
+        </ul>
+      </li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <h3>The 3am test</h3>
+    <p>
+      The way I evaluate any operational design is the <strong>3am test</strong>: someone is paged because their workflow broke; the only context they have is a log file, a state file, and a tired brain. Can they fix it without me? For MCP Manager that means: the daemon is logging, the audit log is intact, and a single subcommand (<code>mcpm doctor</code>) enumerates every plausible thing that could be wrong. There is no "phone home" — there is no Anthropic, no vendor backend, no Sentry — because the v1.0 spec locked <em>no telemetry</em><a class="citation-ref" href="#cite-v1-overview">[1]</a>. Fine. That means the local artifacts (logs, audit, doctor output, runbook) carry <em>all</em> of the diagnostic weight that a vendor SaaS would normally absorb. They have to be excellent.
+    </p>
+
+    <p>
+      The v1.0 spec is already in good shape on the bones: three log streams (daemon / per-server / audit), append-only audit JSONL, ring buffers, a streaming <code>logs.tail</code> RPC<a class="citation-ref" href="#cite-tech-design">[2]</a>. What the spec doesn't quite say yet — and where I want to push hard:
+    </p>
+
+    <ol>
+      <li><strong>Every daemon log line must be JSON</strong> (one object per line), with a stable schema. Not "structured-ish via tracing's default format" — JSON, always, in production. Charity Majors and Honeycomb have been preaching this for a decade: high-cardinality structured events beat free-form text by orders of magnitude when you are reasoning about failure modes<a class="citation-ref" href="#cite-charity-honeycomb">[3]</a>. Cindy Sridharan's writing makes the same point from the SRE side — observability is not "metrics + tracing + logs", it is "the ability to ask new questions of your system without re-deploying"<a class="citation-ref" href="#cite-cindy-observability">[4]</a>. At 3am, the only way to ask new questions is to <code>jq</code> over JSON.</li>
+      <li><strong>The audit log is the source of truth for "what did mcpmanagerd actually do?"</strong> It needs sequence numbers (so a missing line is detectable), a hash chain (so tampering is detectable), and append-only file semantics (so a crash mid-write doesn't corrupt the previous lines). This is the same shape as Linux <code>auditd</code>'s journal<a class="citation-ref" href="#cite-auditd">[5]</a> or the Chronicle / Sigstore Rekor transparency log<a class="citation-ref" href="#cite-rekor">[6]</a>, just scoped to a single user's machine.</li>
+      <li><strong><code>mcpm doctor</code> exists from day one.</strong> Every Unix tool that I trust at 3am has a "tell me what's wrong" subcommand: <code>brew doctor</code>, <code>git fsck</code>, <code>kubectl get events</code>, <code>systemctl status --all</code>, <code>docker system info</code>. The v1.0 spec doesn't list <code>doctor</code> in its CLI surface<a class="citation-ref" href="#cite-tech-design">[2]</a> and that's the one omission that genuinely makes me nervous. We add it.</li>
+      <li><strong>Log rotation must never lose bytes.</strong> The naive pattern — <code>logger &gt; log.txt</code> + <code>cron mv log.txt log.1</code> — drops in-flight writes between the rename and the next reopen on many systems. Real rotation is "rename, signal the writer to reopen, and copy out-of-band"<a class="citation-ref" href="#cite-logrotate">[7]</a>. Tail readers (the TUI's <code>logs.tail</code> stream) have to cope with the rename atomically. This is solvable but it needs explicit design.</li>
+    </ol>
+
+    <h3>Why journald-compatible matters, but is not required</h3>
+    <p>
+      On Linux with systemd, <code>mcpmanagerd</code> registered as a <code>systemd --user</code> unit will have its stdout/stderr piped into the journal by default<a class="citation-ref" href="#cite-systemd-journal">[8]</a>. If we emit JSON-per-line on stdout, <code>journalctl --user-unit mcpmanagerd --output=json</code> Just Works. That's a huge ergonomic win for our Linux users: they don't have to know <em>where</em> our log files live; they already know <code>journalctl</code>. On macOS, the same pattern works for launchd (<code>StandardOutPath</code> + <code>StandardErrorPath</code> in the plist), though there's no equivalent indexed query — they get a file. <strong>So our design constraint is: emit JSON-per-line on stdout to be friendly to journald, AND also tee to our own files</strong> (because journald isn't universal and per-server log isolation matters). Belt and braces.
+    </p>
+
+    <h3>What the locked "no telemetry" decision actually costs us</h3>
+    <p>
+      I have nothing against the no-telemetry stance — it's the right call for a tool that handles secrets and runs on developer machines<a class="citation-ref" href="#cite-no-telemetry-debate">[9]</a>. But I want to name what it costs, so we can design around it:
+    </p>
+    <ul>
+      <li><strong>We don't know our error rates in the field.</strong> If 30% of users hit a registry-refresh failure tomorrow, we won't see it until they email us. Mitigation: <code>mcpm doctor --share</code> produces a redacted bundle the user can paste into a GitHub issue, with a documented schema in the runbook. We push <em>users</em> to be the telemetry channel, opt-in per-incident.</li>
+      <li><strong>We can't proactively detect a CVE-impact wave.</strong> If <code>rmcp</code> ships a CVE and 8% of users are on a pinned-old version, we don't know which ones. Mitigation: documented <code>mcpm doctor</code> output that prints the version + a "compare against the latest at..." URL the user can hit themselves.</li>
+      <li><strong>Our supportability is bounded by the quality of our local artifacts.</strong> This is the through-line of everything below. If <code>mcpm doctor</code> + the runbook can't talk a user through a problem, we have no fallback.</li>
+    </ul>
+
+    <h3>Where I diverge from the other four agents</h3>
+    <p>
+      <strong>nix-purist</strong> wants everything reproducible — flakes, devenv, hermetic. I love it for the build but I will fight hard against making any operational tool depend on a flake. The doctor has to work on a machine where the user might have <em>broken</em> their nix setup. <strong>distro-packager</strong> wants deb/rpm/FHS — yes, I want this too for ops sanity, but only as a <em>second</em> install channel after the curl-installer (because most v1.0 users will not be on a distro that has us packaged yet). <strong>supply-chain-sec</strong> wants signed everything — I want this too and I want the SBOM signed and reproducibly built. <strong>curl-installer-defender</strong> wants frictionless install — I agree the curl-installer is the right primary channel, but only if it leaves behind a doctor-checkable artifact (an installation receipt) so we can detect "this binary was installed by the curl-installer at version X, signed by minisign key Y, on date Z". The curl-installer's <em>output</em> is what I care about; the input is fine.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments</h2>
+
+    <h3 id="vs-nix-purist">Against <code>nix-purist</code></h3>
+    <p>
+      I respect the nix-purist's instinct: a flake locks every input, hermetic builds give us reproducibility, devenv gives us a clean dev shell, and the supply chain becomes a graph rather than a wish. For the <em>build</em> side, I'm with you. <strong>Where I push back is the operational side.</strong> Imagine the 3am scenario: a user's MCP server stopped working. They run <code>mcpm doctor</code>. The doctor needs to read its own config, hit the keychain, list installed servers, parse the audit log — fast — and tell the user what's wrong. <em>The doctor must not depend on a working nix store</em>. If the user has a broken <code>nix profile</code> or their flake registry is unreachable, the diagnostic tool that exists to fix problems can itself be the problem. So: yes to nix for build + reproducible CI; no to nix as a runtime dependency of operational tooling.
+    </p>
+    <p>
+      Concrete ask of nix-purist's design: the binary <code>mcpmanagerd</code> we ship must be a fully-statically-linked-or-rpath-OK ELF/Mach-O, runnable on a stock macOS / stock Ubuntu / stock Fedora <em>without</em> any nix in <code>PATH</code>. The flake is an alternative install channel for users who want reproducibility — not the only channel, and not a runtime dep. If your design accommodates that, we're aligned.
+    </p>
+    <p>
+      Where I cede ground: I want the build to be flake-able for CI, because a reproducible build is the only honest way to claim a meaningful SBOM<a class="citation-ref" href="#cite-reproducible-builds">[10]</a>. <em>How</em> we build doesn't have to constrain <em>where</em> we run.
+    </p>
+
+    <h3 id="vs-distro-packager">Against <code>distro-packager</code></h3>
+    <p>
+      The distro-packager wants FHS layout, deb/rpm, proper systemd units shipped by the distro. I'm 80% in agreement — this is the right path for the second year of MCP Manager, when Debian / Fedora / Arch volunteers start packaging us. But for v1.0 I want to push back on three specifics.
+    </p>
+    <p>
+      <strong>One: don't put logs in <code>/var/log/mcpmanagerd/</code> for a user-mode daemon.</strong> The daemon is per-user (single-user SO_PEERCRED auth, by the v1.0 spec<a class="citation-ref" href="#cite-tech-design">[2]</a>). <code>/var/log</code> is system-mode by convention<a class="citation-ref" href="#cite-fhs">[11]</a>. The right home is <code>$XDG_STATE_HOME/mcpmanagerd/logs/</code> (default <code>~/.local/state/mcpmanagerd/logs/</code>), per the XDG Base Directory spec<a class="citation-ref" href="#cite-xdg">[12]</a>. The v1.0 spec already uses XDG; let's keep doing that. A future v1.x system-mode daemon (multi-user) would justify <code>/var/log</code>; v1.0 is per-user.
+    </p>
+    <p>
+      <strong>Two: the systemd unit should be a <code>--user</code> unit, not a system unit.</strong> The packager's instinct to ship a system unit means root-owned mcpmanagerd or per-user-instance complications. <code>systemctl --user enable mcpmanagerd</code> with the unit file at <code>/usr/lib/systemd/user/mcpmanagerd.service</code> is the right shape<a class="citation-ref" href="#cite-systemd-user">[13]</a>. <code>StandardOutput=journal</code> + <code>StandardError=journal</code>; logs route to the per-user journal; <code>journalctl --user-unit mcpmanagerd --output=json</code> gives the operator a queryable stream for free. This is exactly the win I want from JSON-per-line logging.
+    </p>
+    <p>
+      <strong>Three: the .deb/.rpm postinstall scripts must be idempotent and survive a botched install.</strong> If postinstall fails halfway, the package manager must be able to retry. The audit log entries for <code>install.start</code> / <code>install.complete</code> from the daemon are <em>different</em> from the OS package-manager's view of "is the binary installed?" — both views need to be correct independently. (And honestly, this is why the curl-installer is friendlier for v1.0: one tarball, one minisign signature, one extract. The deb/rpm path is for distro-natives who already know how to recover, but it adds combinatorial test surface we shouldn't pay yet.)
+    </p>
+    <p>
+      Where I cede ground: I want man pages, a proper FHS-respecting layout for system files (binaries in <code>/usr/local/bin</code>; user state in XDG), and a documented systemd-user unit file shipped in the tarball. The distro-packager's discipline is exactly what makes the runbook readable a year from now.
+    </p>
+
+    <h3 id="vs-supply-chain-sec">Against <code>supply-chain-sec</code></h3>
+    <p>
+      We agree on more than we disagree. Sign the binaries (minisign for Linux, Apple notarization + Developer ID for macOS). Sign the registry indexes. Verify-when-present on packages. Generate and sign an SBOM<a class="citation-ref" href="#cite-sbom-cyclonedx">[14]</a>. Where I want a sharper line is at the <strong>operational</strong> end: signatures are pre-incident artifacts, but the SRE cares about post-incident verifiability. <em>Two specific asks:</em>
+    </p>
+    <p>
+      <strong>One: the audit log itself should be hash-chained.</strong> Every line includes <code>seq</code> (monotonic per-day) and <code>prev_hash</code> (sha256 of the previous line, base64). If anything tampers with the log, the chain breaks; if anything was dropped (e.g. a write happened during a power loss), the seq numbers gap. This is the Linux <code>auditd</code> approach<a class="citation-ref" href="#cite-auditd">[5]</a> simplified for our scale: we don't need a kernel-side audit ring, but we do need the SRE-grade "did the log lie to me?" check. This works because we're append-only<a class="citation-ref" href="#cite-tech-design">[2]</a>. <code>mcpm doctor</code> verifies the chain on demand.
+    </p>
+    <p>
+      <strong>Two: SBOM verification has to be doable by the user, not just by us.</strong> Sign the SBOM with the same minisign key we sign the tarball with. Publish the public key fingerprint in the README and on every release page. <code>mcpm doctor</code> prints the binary's SBOM hash + the public-key fingerprint it was verified against. The user can pin <em>both</em> in their threat model.
+    </p>
+    <p>
+      Where I cede ground on supply-chain-sec: their instinct to insist on Sigstore-everywhere is correct in spirit but premature in v1.0 — sigstore's keyless flow requires a working OIDC at sign time<a class="citation-ref" href="#cite-sigstore">[15]</a>, which is fine for our CI but not something we should require for <em>users</em> of the registry. minisign for our own signing (zero infra, one keypair) + cosign-verify-when-present for OCI registry sources is the right v1.0 shape.
+    </p>
+
+    <h3 id="vs-curl-installer-defender">Against <code>curl-installer-defender</code></h3>
+    <p>
+      The curl-installer-defender is right that <code>curl … | sh</code> is the most frictionless install path, and right that the friction in alternative paths (homebrew formula approval, distro packaging cycles, MS Store) is real and the dominant install channel for a v1.0 dev tool is the one-liner. I'm not arguing against that. <strong>What I want is an operational receipt:</strong> after install, on disk, there's a file like <code>~/.local/state/mcpmanagerd/install-receipt.json</code> that records:
+    </p>
+    <ul>
+      <li>install channel (<code>"curl"</code> | <code>"nix"</code> | <code>"deb"</code> | <code>"rpm"</code> | <code>"manual"</code>),</li>
+      <li>tarball URL + sha256 + minisign verifying key fingerprint + signature-verification timestamp,</li>
+      <li>binary location + sha256 at install time,</li>
+      <li>installer version + git-sha,</li>
+      <li>signature of the receipt itself (HMAC over the above using a per-install random key, so the file isn't trivially editable without us noticing — though a sophisticated attacker can always swap the whole thing; this is anti-mistake, not anti-attacker).</li>
+    </ul>
+    <p>
+      <code>mcpm doctor</code> reads the receipt and verifies the binary on disk still matches the recorded sha256. If a user is on a machine where someone (themselves, last quarter) overwrote <code>/usr/local/bin/mcpmanagerd</code> with a debug build, doctor flags it.
+    </p>
+    <p>
+      Second ask: the curl-installer prints, on success, the exact <code>journalctl</code> / <code>log show</code> command they should bookmark, and the path to the audit log. This is the single highest-leverage thing the installer can do for future debuggability — make sure the user knows where to look <em>before</em> they need to.
+    </p>
+    <p>
+      Where I cede ground: the curl-installer's friction-minimisation is in fact the right primary path, and I don't want to gate it on signing them up for an account, sending telemetry, or any other friction-add. The receipt is purely a local artifact.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3 id="design-logs">JSON log schema (daemon stream)</h3>
+
+    <p>
+      Every line on the daemon's log stream (whether to stdout/journald or to <code>logs/daemon-YYYY-MM-DD.jsonl</code>) is a single JSON object, one per line, never spanning newlines. <code>tracing-subscriber</code> with the <code>json</code> formatter does this for free<a class="citation-ref" href="#cite-tracing-json">[16]</a>. The schema:
+    </p>
+
+    <pre><code>{
+  "ts":        "2026-05-27T19:15:02.413913Z",     // RFC3339 UTC, microsecond precision
+  "level":     "INFO" | "WARN" | "ERROR" | "DEBUG" | "TRACE",
+  "target":    "mcpm_supervisor::child",          // module path; matches tracing's `target`
+  "event":     "server.spawn"                     // controlled vocabulary; see below
+              | "server.exit"
+              | "server.oom"
+              | "server.restart"
+              | "rpc.call"
+              | "rpc.error"
+              | "config.reload"
+              | "registry.refresh"
+              | "trust.refresh"
+              | "doctor.run"
+              | "log.rotate"
+              | "secret.read"            // never logs values, only names
+              | "auth.failed",
+  "outcome":   "ok" | "error" | "denied" | "miss" | "lagged" | null,
+  "server":    "github-mcp" | null,               // server name when relevant
+  "client_id": "claude-code/1.2.3" | "cli" | "tui" | null,
+  "pid":       84219,                             // mcpmanagerd's pid
+  "child_pid": 84992,                             // child server's pid when relevant
+  "req_id":    "req_01HF9XYZ...",                 // correlation id across the request
+  "span":      "rpc.server.start",                // current tracing span name
+  "msg":       "spawned github-mcp under devenv profile",
+  "fields":    {                                  // event-specific payload
+    "isolation": "devenv",
+    "duration_ms": 87,
+    "exit_code": null
+  },
+  "err":       null                               // structured error object on level=ERROR
+}</code></pre>
+
+    <p>
+      Fixed-vocabulary <code>event</code> is the load-bearing design choice. Free-text searches over logs scale to about 100 servers before they collapse; structured event names scale to a million. The vocabulary is enumerated, versioned (<code>v</code> field at file header), and reviewed at every release.
+    </p>
+
+    <p>
+      <strong>Where the lines go.</strong> The daemon writes to <em>both</em> stdout (so journald/launchd capture it) AND <code>~/.local/state/mcpmanagerd/logs/daemon-YYYY-MM-DD.jsonl</code> with daily rotation. Belt and braces; the file is the canonical replay artifact, journald is the queryable index for Linux users.
+    </p>
+
+    <h3 id="design-audit">Audit JSONL with hash chain</h3>
+
+    <p>
+      The audit log is structurally similar to the daemon log but with stricter guarantees: <strong>append-only, sequence-numbered, hash-chained.</strong> One file per day under <code>~/.local/state/mcpmanagerd/audit/YYYY-MM-DD.jsonl</code>. The shape:
+    </p>
+
+    <pre><code>{
+  "v":         1,                                // schema version
+  "seq":       4129,                             // monotonic per-day; resets to 0 at file open
+  "ts":        "2026-05-27T19:15:02.413913Z",
+  "actor":     { "kind": "cli"|"tui"|"editor"|"daemon-internal",
+                 "id":   "zed/0.150.3",
+                 "pid":  84219,
+                 "uid":  501 },
+  "event":     "server.spawn" | "server.crash" | "server.oom"
+              | "secret.read" | "secret.write" | "secret.delete"
+              | "config.change" | "projection.write"
+              | "service.register" | "service.unregister"
+              | "project.trust" | "auth.failed"
+              | "registry.refresh" | "registry.add" | "registry.remove"
+              | "install.start" | "install.complete" | "install.fail"
+              | "update.start"  | "update.complete"  | "update.fail"
+              | "doctor.run"    | "uninstall",
+  "server":    "github-mcp" | null,
+  "outcome":   "ok" | "denied" | "backend-error" | "miss",
+  "details":   { ... event-specific },
+  "prev_hash": "sha256:9f4e2d8c...",             // sha256 of previous line's canonical-JSON
+                                                 //   (or "GENESIS" for seq=0)
+  "line_hash": "sha256:6a1b3f0e..."              // sha256 of this line's canonical-JSON
+                                                 //   excluding the line_hash field itself
+}</code></pre>
+
+    <p>
+      <strong>Why both <code>seq</code> and <code>prev_hash</code>?</strong> The seq number detects <em>gaps</em> (a missing line in the middle: seq jumps from 50 to 52). The prev_hash detects <em>tampering</em> (someone edited line 17 in place: line 18's prev_hash no longer matches). Together, they detect both append-then-truncate attacks and in-place rewrites. Linux's <code>auditd</code> uses a similar approach<a class="citation-ref" href="#cite-auditd">[5]</a>; Sigstore's Rekor uses a Merkle tree<a class="citation-ref" href="#cite-rekor">[6]</a> for the same property at scale. A daily hash chain is the right scale for one developer's daemon.
+    </p>
+
+    <p>
+      <strong>Day-boundary handling.</strong> When the local clock crosses midnight UTC, the daemon closes the current day's file (fsync), opens the next day's file with seq=0 and prev_hash="GENESIS", and writes a final line to the previous day's file: <code>{"event":"audit.day-close","seq":N,"line_hash":"...","total_lines":N+1,"sha256_file":"..."}</code>. The opening line of the new day references the previous file's closing line_hash in its <code>prev_hash</code> (cross-file chain), so the chain spans days, not just within them.
+    </p>
+
+    <p>
+      <strong>Verifier.</strong> <code>mcpm doctor</code> runs the chain verifier as part of its checks; <code>mcpm audit verify</code> is a dedicated subcommand. Verifier output names the first broken line by seq + offset.
+    </p>
+
+    <h3 id="design-rotation">Lossless log rotation</h3>
+
+    <p>
+      Naive rotation loses bytes when a writer doesn't reopen its FD on rename. The right pattern is the <code>logrotate(8)</code> + <code>copytruncate</code> dance, or — better, since we control the writer — <strong>rename + signal-driven reopen</strong><a class="citation-ref" href="#cite-logrotate">[7]</a>:
+    </p>
+
+    <ol>
+      <li>The writer (mcpmanagerd's <code>mcpm-logs</code> crate) holds an FD on <code>daemon.jsonl</code>.</li>
+      <li>The rotator (a tokio task on a daily timer, or triggered by file-size threshold) calls <code>rename("daemon.jsonl", "daemon-YYYY-MM-DD.jsonl")</code>. The writer's open FD still points to the old inode; writes continue to land in the renamed file.</li>
+      <li>The rotator sends an internal <code>RotateSignal</code> to the writer over a tokio channel. The writer opens a fresh <code>daemon.jsonl</code> and swaps FDs atomically. <em>No bytes between rename and reopen are lost</em> — they went to the renamed file.</li>
+      <li>The tailer (the <code>logs.tail</code> RPC subscriber) gets a structured <code>{"event":"log.rotate","old_path":"...","new_path":"...","new_inode":...}</code> notification in its stream so a TUI can re-open the new file if it wants to follow on disk.</li>
+    </ol>
+
+    <p>
+      Per-server logs (one file per managed MCP server, under <code>logs/&lt;server&gt;/</code>) follow the same pattern. Rotation is size-based (default 16MB) or daily, whichever comes first. Old logs are gzipped after rotation, retained for <code>log_retention_days</code> (default 14), then deleted.
+    </p>
+
+    <h3 id="design-doctor"><code>mcpm doctor</code> — the 3am subcommand</h3>
+
+    <p>
+      A new subcommand that the v1.0 technical-design CLI surface doesn't yet enumerate<a class="citation-ref" href="#cite-tech-design">[2]</a> but absolutely should. Output sketch (real terminal output, color-coded):
+    </p>
+
+    <pre><code>$ mcpm doctor
+running 14 checks...
+
+[OK]    binary integrity: /usr/local/bin/mcpmanagerd
+        sha256 matches install receipt (curl-installer, v1.0.0, 2026-05-12)
+        minisign signature verified against baked-in pubkey
+        installed: 14 days ago
+
+[OK]    daemon: running, pid 84219, uptime 9h 12m
+        socket: /run/user/501/mcpmanagerd.sock (mode 0600, owner uid 501)
+        last heartbeat: 0.4s ago
+
+[OK]    config: ~/.config/mcp-manager/config.toml
+        valid TOML, 8 servers configured, 3 projections enabled
+        last modified 2 days ago, hash matches in-memory state
+
+[WARN]  audit log: ~/.local/state/mcpmanagerd/audit/2026-05-27.jsonl
+        hash chain VALID through seq 4128
+        seq 4129 has line_hash mismatch (file likely edited externally)
+        → run `mcpm audit verify --explain` for details
+
+[OK]    log rotation: 3 daemon log files retained, 142 MB total
+        no rotate errors in last 7 days
+
+[FAIL]  server: notion-mcp
+        last 3 restart attempts failed within 600s; marked FAILED
+        last exit: signal=SIGKILL, no exit code
+        suspected: OOM (memory_max_mb=256, last RSS 248 MB)
+        last 5 log lines:
+          2026-05-27T19:14:01Z ERROR  http connect timeout
+          2026-05-27T19:14:02Z ERROR  http connect timeout
+          2026-05-27T19:14:03Z ERROR  retry exhausted, aborting
+          2026-05-27T19:14:03Z ERROR  panic: assertion failed
+          2026-05-27T19:14:03Z FATAL  server exiting
+        → fix: increase [server.notion-mcp].memory_max_mb,
+                or `mcpm restart notion-mcp` to retry
+
+[OK]    secret store: os-keyring (libsecret) reachable
+        12 secrets registered, none referenced by failed servers
+
+[OK]    registry: 3 sources configured (official, github, docker)
+        last refresh: 4h ago, all sources reachable
+        trust manifest mode: fetched (last 2h ago)
+
+[WARN]  projection drift: cursor
+        managed-block hash in .cursor/mcp.json doesn't match lockfile
+        someone edited the file outside mcpm
+        → run `mcpm projection sync cursor` to overwrite
+
+[INFO]  share with support: `mcpm doctor --share` writes
+        ~/Downloads/mcpm-doctor-2026-05-27-191503.tar.gz
+        (redacted: no secret values, no usernames, no project paths)
+
+summary: 9 OK, 2 WARN, 1 FAIL
+exit code: 2  (FAIL present)</code></pre>
+
+    <p>
+      The flag <code>--share</code> bundles: doctor output, last 7 days of audit log (chain re-verified), last 1MB of each per-server log, the canonical config (with secret <em>names</em> only — never values), the lockfile, the install receipt, the daemon stdout/stderr from the current pid (or last 24h from journald). Bundled as a tar.gz with a manifest listing every file's sha256. <strong>This is our telemetry channel</strong> — opt-in per-incident, no auto-upload.
+    </p>
+
+    <h3 id="design-health">Health endpoints (Unix-socket only)</h3>
+
+    <p>
+      Two new RPC methods on the UDS-only socket, called by <code>mcpm doctor</code> and <code>mcpm status</code>:
+    </p>
+
+    <pre><code>// Daemon-level health
+daemon.status            -> {
+  ok:              true,
+  uptime_secs:     33120,
+  socket_path:     "/run/user/501/mcpmanagerd.sock",
+  active_servers:  6,
+  failed_servers:  1,
+  audit_seq:       4129,
+  audit_chain_ok:  false,                  // recomputed lazily; cached
+  last_chain_ok_at:"2026-05-27T15:00:00Z",
+  config_hash:     "sha256:...",
+  config_loaded:   "2026-05-25T...",
+  warnings:        ["projection.drift: cursor", "audit.chain.break: 2026-05-27 seq=4129"]
+}
+
+// Per-server health, EXPLAINS failure modes
+server.&lt;name&gt;.status     -> {
+  name:                "notion-mcp",
+  state:               "running"|"restarting"|"failed"|"stopped"|"spawning",
+  pid:                 84992,             // null if not running
+  client_refcount:     2,
+  uptime_secs:         8730,
+  last_health_check:   { ts: "...", ok: true, latency_ms: 14 },
+  restart_attempts:    { window_start: "...", count: 3, max: 5 },
+  memory:              { current_mb: 87, peak_mb: 248, limit_mb: 256 },
+  isolation:           "devenv",
+  last_exit:           null,              // populated when in failed/stopped
+  last_5_log_lines:    [ ... ],
+  warnings:            []
+}</code></pre>
+
+    <p>
+      Note the <strong>explanation orientation</strong>: <code>last_5_log_lines</code> is embedded directly in the health response so the caller doesn't have to make a second RPC. <code>warnings</code> is an array of human-readable strings keyed off the same controlled-vocabulary events used in the log schema. SREs reading this output get the "why" not just the "down".
+    </p>
+
+    <h3 id="design-journald">journald / launchd integration</h3>
+
+    <p>
+      The systemd-user unit (<code>/usr/lib/systemd/user/mcpmanagerd.service</code> when packaged; <code>~/.config/systemd/user/mcpmanagerd.service</code> when the curl-installer drops it):
+    </p>
+
+    <pre><code>[Unit]
+Description=MCP Manager daemon
+Documentation=https://docs.mcp-manager.dev/runbook
+After=default.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/mcpmanagerd
+Restart=on-failure
+RestartSec=2s
+
+# Logs route through journald; we emit one JSON object per stdout line.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mcpmanagerd
+
+# Resource hygiene
+MemoryHigh=200M
+MemoryMax=512M
+TasksMax=200
+
+# Filesystem hardening (where applicable for a user daemon)
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=%h/.config/mcp-manager %h/.local/state/mcpmanagerd
+
+[Install]
+WantedBy=default.target</code></pre>
+
+    <p>
+      <code>Type=notify</code> means mcpmanagerd calls <code>sd_notify(READY=1)</code> when the UDS is bound and listening<a class="citation-ref" href="#cite-systemd-user">[13]</a>. <code>journalctl --user-unit mcpmanagerd --output=json</code> gives operators a structured-log query for free.
+    </p>
+
+    <p>
+      On macOS, the launchd plist at <code>~/Library/LaunchAgents/dev.mcp-manager.mcpmanagerd.plist</code> mirrors the same: <code>RunAtLoad</code>, <code>KeepAlive</code> with <code>SuccessfulExit</code>, <code>StandardOutPath</code> and <code>StandardErrorPath</code> pointing at our log files (no journald equivalent). <code>EnvironmentVariables</code> sets <code>XDG_STATE_HOME</code> if not already set, so paths are consistent with the Linux side.
+    </p>
+
+    <h3 id="design-spawn-race">Auto-spawn race + lockfile</h3>
+
+    <p>
+      The v1.0 spec's auto-spawn behavior<a class="citation-ref" href="#cite-tech-design">[2]</a> notes that <code>flock(2)</code> prevents two parallel <code>mcpm</code> invocations from racing to spawn two daemons. From an SRE angle, I want a sharper picture of what happens when the race <em>does</em> hit the lock:
+    </p>
+
+    <ol>
+      <li>Both <code>mcpm</code> clients try to connect to the socket, both fail with <code>ENOENT</code>.</li>
+      <li>Both try to <code>flock(2)</code> <code>~/.local/state/mcpmanagerd/spawn.lock</code> exclusively.</li>
+      <li>Whichever wins forks+execs <code>mcpmanagerd</code>. The loser blocks on the flock with a 5-second timeout.</li>
+      <li>The winning daemon binds the socket, calls <code>sd_notify(READY=1)</code> (or writes <code>spawn.lock.ready</code> marker on non-systemd hosts), and releases the flock.</li>
+      <li>The losing <code>mcpm</code> wakes, sees the ready marker, retries connecting, succeeds.</li>
+      <li>If the winning daemon failed to bind within 5s (port-already-in-use, permission error), the loser releases the flock, logs <code>{"event":"daemon.spawn.race.timeout"}</code>, and surfaces an actionable error: "another process tried to start mcpmanagerd but didn't become ready in time. Check journalctl --user-unit mcpmanagerd."</li>
+    </ol>
+
+    <p>
+      <strong>Crash-during-spawn recovery.</strong> If the winning daemon crashes <em>after</em> binding but before serving a request, the socket file remains on disk (the kernel doesn't auto-clean UDS files on process exit). The next <code>mcpm</code> client gets <code>ECONNREFUSED</code> rather than <code>ENOENT</code>. The auto-spawn logic must handle both: <em>treat ECONNREFUSED the same as ENOENT for purposes of spawning</em>, but log a higher-severity event <code>{"event":"daemon.spawn.stale-socket","outcome":"ok"}</code> so we can audit how often this happens. <code>mcpm doctor</code> reports stale-socket-recovery counts in the last 7 days.
+    </p>
+
+    <h3 id="design-update">Rolling daemon update</h3>
+
+    <p>
+      v1.0 spec says we don't ship a self-updater<a class="citation-ref" href="#cite-tech-design">[2]</a>, but the user-driven re-curl path still has a hot question: <strong>what happens to the running mcpmanagerd when the binary on disk is replaced?</strong> Options:
+    </p>
+
+    <ul>
+      <li><strong>Option A (chosen):</strong> the installer doesn't stop the daemon. It atomically replaces the binary via <code>rename(2)</code> (so any process with the file open continues running the old image). It then prints: "mcpmanagerd is running an older version; restart with <code>mcpm daemon restart</code> when convenient. Active MCP servers will be re-spawned on restart." This is the same shape as `apt-get upgrade` + needs-restart.</li>
+      <li><strong>Option B (rejected):</strong> the installer stops the daemon, replaces, restarts. Rejected because it forces an interruption to every editor's MCP session at install time — and the user may have just been demoing to a customer.</li>
+    </ul>
+
+    <p>
+      On <code>mcpm daemon restart</code>, the daemon goes through a graceful shutdown:
+    </p>
+
+    <ol>
+      <li>Stop accepting new RPC connections; <code>daemon.status</code> reports <code>state: "draining"</code>.</li>
+      <li>Notify every <code>logs.tail</code> subscriber with <code>{"event":"daemon.shutdown.imminent","grace_secs":10}</code> so TUIs can show a banner.</li>
+      <li>For each managed MCP server: send SIGTERM, wait up to <code>shutdown_grace_secs</code> (default 5s), then SIGKILL.</li>
+      <li>Audit log: <code>{"event":"daemon.shutdown","outcome":"ok","servers_stopped":N}</code>.</li>
+      <li>fsync the audit log file. Close FDs. Exit 0.</li>
+      <li>systemd-user / launchd restarts the daemon. New process picks up the new binary. Reads canonical config. Re-spawns servers marked <code>autostart = true</code>. Audit: <code>{"event":"daemon.boot","version":"1.0.1","prev_version":"1.0.0"}</code>.</li>
+    </ol>
+
+    <p>
+      A future v1.1 feature would be a true <strong>zero-downtime hand-off</strong> via SCM_RIGHTS-passing of child stdio FDs between old and new daemon processes (the systemd socket-activation trick<a class="citation-ref" href="#cite-systemd-journal">[8]</a>). Out of scope for v1.0.
+    </p>
+
+    <h3 id="design-uninstall"><code>mcpm uninstall</code> correctness</h3>
+
+    <p>
+      A subcommand the v1.0 CLI list includes<a class="citation-ref" href="#cite-tech-design">[2]</a> but doesn't specify the semantics of. My take: <strong>uninstall does the obvious thing, asks before deleting anything irreversible, and leaves an audit trail.</strong>
+    </p>
+
+    <pre><code>$ mcpm uninstall
+this will:
+  - stop mcpmanagerd (currently running, pid 84219)
+  - unregister the systemd-user unit
+  - remove the binary at /usr/local/bin/mcpmanagerd and /usr/local/bin/mcpm
+  - keep these (default; pass --purge to remove):
+      ~/.config/mcp-manager/                  (your config + lockfile)
+      ~/.local/state/mcpmanagerd/audit/       (audit history)
+      ~/.local/state/mcpmanagerd/logs/        (daemon + per-server logs)
+      OS keychain entries (12 secrets)        (only `mcpm secret unset` removes these)
+  - DOES NOT touch the per-editor projections in:
+      ~/.cursor/mcp.json (will keep the static MCP entries we projected)
+      ~/.config/Claude/claude_desktop_config.json
+      ...
+    To remove these, run `mcpm projection unsync --all` BEFORE uninstall.
+
+confirm? [y/N]</code></pre>
+
+    <p>
+      <strong>Logs are retained by default.</strong> Rationale: if uninstall is happening because of a problem, the user (or the support thread) may want to look at the audit log a week later. <code>--purge</code> removes everything including keychain entries (with a separate y/N prompt for that, since secrets cannot be recovered).
+    </p>
+
+    <p>
+      <strong>Last act of the uninstall</strong> is to write a final audit line: <code>{"event":"uninstall","outcome":"ok","purge":false,"audit_kept":true,"logs_kept":true}</code>, fsync, then drop the binary. The audit file now ends with a clear marker.
+    </p>
+
+    <p>
+      <strong>What happens to <code>mcpm exec</code> shims in editor configs?</strong> If <code>mcpm</code> is uninstalled while a projection points at it, the next time the editor spawns the MCP, it'll fail with "command not found". The uninstall preamble explicitly warns about this and points the user at <code>mcpm projection unsync --all</code> as the first step. (We can't run unsync automatically because some users will reinstall in 30 minutes and want the projections preserved.)
+    </p>
+
+    <h3 id="design-runbook">Runbook outline (mdbook section)</h3>
+
+    <p>
+      The mdbook at <code>docs/</code> needs a Runbook section, not just an installation guide. The chapter shape:
+    </p>
+
+    <pre><code>Runbook
+├── Daily operations
+│   ├── Where are the logs?
+│   ├── How to read the audit log
+│   ├── `mcpm doctor` interpretation
+│   └── `mcpm status` cheatsheet
+├── Common failures
+│   ├── "Daemon won't start"
+│   │   - check journald / launchd
+│   │   - socket already in use → mcpm doctor will say
+│   │   - permission denied on socket dir → fix XDG_RUNTIME_DIR
+│   ├── "MCP server keeps restarting"
+│   │   - check `mcpm doctor` for OOM signal
+│   │   - check the server's per-server log for the panic
+│   │   - increase memory_max_mb if appropriate
+│   ├── "Secret not found"
+│   │   - keychain locked? (macOS Touch ID, gnome-keyring not unlocked)
+│   │   - secret name typo: `mcpm secret list`
+│   ├── "Projection drift"
+│   │   - someone edited an editor config outside mcpm
+│   │   - `mcpm projection diff &lt;tool&gt;` to see the delta
+│   │   - `mcpm projection sync &lt;tool&gt;` to overwrite (or move their edits inside the managed block)
+│   └── "Audit chain broken"
+│       - usually means the file was edited externally (text editor, recovery tool)
+│       - `mcpm audit verify --explain` shows the first broken seq
+│       - chain cannot be repaired; subsequent lines are still chained from the break onward
+├── Incident response
+│   ├── How to bundle data for a support ticket: `mcpm doctor --share`
+│   ├── How to roll back to a previous version
+│   ├── How to start mcpmanagerd in debug mode
+│   └── How to disable auto-spawn temporarily
+├── Recovery procedures
+│   ├── Corrupt config → restore from `~/.config/mcp-manager/config.toml.bak`
+│   ├── Lost keychain → re-run `mcpm secret set` for each
+│   └── Lost lockfile → `mcpm sync` re-derives
+└── Reference
+    ├── Log event vocabulary
+    ├── Audit event vocabulary
+    ├── Exit codes
+    └── Environment variables</code></pre>
+
+    <p>
+      Style: every chapter section opens with a one-line "you'll see this when..." and ends with "to fix:" + an exact command. Google's SRE Book makes this a central tenet of operational documentation<a class="citation-ref" href="#cite-google-sre">[17]</a>: a runbook entry should be actionable in under 2 minutes by an oncall who has never seen this specific failure before.
+    </p>
+
+    <p>
+      The runbook source lives in the same repo as the code so it ships in lockstep. Every PR that adds a new log event or audit event must update the Reference appendix in the same commit (CI check: enumerate all <code>tracing::event!(... "..." )</code> calls' event names, diff against the mdbook reference; fail if any new ones are missing from the docs).
+    </p>
+
+    <h3>Pulling it together: end-to-end 3am scenario</h3>
+
+    <p>
+      Imagine: a developer wakes to find their morning standup is broken because Cursor can no longer reach <code>github-mcp</code>. They run:
+    </p>
+
+    <pre><code>$ mcpm doctor
+  ... [WARN] server github-mcp restarted 4 times in 600s
+  ... [FAIL] secret GITHUB_TOKEN read failed: keyring locked
+
+$ mcpm doctor --explain GITHUB_TOKEN
+  GITHUB_TOKEN was last read 14h ago, before macOS rebooted at 02:14.
+  The system keychain is locked after reboot; unlock with Touch ID or password.
+  → fix: run any keychain-touching command, e.g.
+          `security unlock-keychain ~/Library/Keychains/login.keychain-db`
+
+$ # they unlock, then:
+$ mcpm restart github-mcp
+  github-mcp restarted; health check ok in 230ms</code></pre>
+
+    <p>
+      No vendor was contacted. No telemetry was sent. The audit log records the entire sequence. The doctor command did the diagnostic work that a SaaS error tracker would do. The runbook explains how to interpret the doctor's output if the user has never seen this failure before. <strong>This is the operational property that justifies "no telemetry": we built the diagnostic capacity into the tool.</strong>
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+
+    <ol class="citations">
+      <li id="cite-v1-overview">
+        <a href="https://modelcontextprotocol.io">Model Context Protocol — official site</a>.
+        Referenced by the v1.0 overview's locked-decisions table (macOS+Linux only, Apache 2.0, no telemetry).
+        See also: <a href="../../index.html#decisions">v1.0 overview: locked design decisions</a>.
+      </li>
+      <li id="cite-tech-design">
+        <a href="../../technical-design.html">MCP Manager v1.0 technical design</a> —
+        Section "Component breakdown" (<code>mcpm-logs</code>, 3-stream tail API) and
+        "Configuration" (audit-log path under <code>$XDG_STATE_HOME</code>) define the baseline I extend here.
+      </li>
+      <li id="cite-charity-honeycomb">
+        Charity Majors — <a href="https://www.honeycomb.io/blog/observability-3-0-and-the-database-for-it">"Observability 3.0 and the database for it"</a> + earlier writing on structured events at Honeycomb. Cardinality + structure beat free text.
+      </li>
+      <li id="cite-cindy-observability">
+        Cindy Sridharan — <a href="https://copyconstruct.medium.com/monitoring-and-observability-8417d1952e1c">"Monitoring and Observability"</a>; her writing established the modern definition: observability = the ability to ask new questions of your system without re-deploying.
+      </li>
+      <li id="cite-auditd">
+        <a href="https://man7.org/linux/man-pages/man8/auditd.8.html">auditd(8) — Linux audit daemon</a>. The hash-chained, append-only journal pattern I'm borrowing for our user-mode audit log.
+      </li>
+      <li id="cite-rekor">
+        <a href="https://docs.sigstore.dev/logging/overview/">Sigstore Rekor — transparency log overview</a>. Merkle-tree-based append-only log; same correctness shape at much larger scale.
+      </li>
+      <li id="cite-logrotate">
+        <a href="https://man7.org/linux/man-pages/man8/logrotate.8.html">logrotate(8)</a> — the canonical Unix log-rotation tool. The rename-then-signal-reopen pattern (and the <code>copytruncate</code> alternative) are documented here.
+      </li>
+      <li id="cite-systemd-journal">
+        <a href="https://www.freedesktop.org/software/systemd/man/latest/systemd-journald.service.html">systemd-journald.service(8)</a> and
+        <a href="https://www.freedesktop.org/software/systemd/man/latest/journalctl.html">journalctl(1)</a>. JSON output mode (<code>--output=json</code>) is what makes journald-routed JSON-line logs queryable in production.
+      </li>
+      <li id="cite-no-telemetry-debate">
+        <a href="../../product-overview.html">MCP Manager v1.0 product overview</a> — the "no telemetry, ever" rationale.
+        Background reading: <a href="https://lwn.net/Articles/884301/">LWN — "Audacity's telemetry controversy"</a> for the type of trust loss that motivates the policy.
+      </li>
+      <li id="cite-reproducible-builds">
+        <a href="https://reproducible-builds.org/">reproducible-builds.org</a> — the project that defines what a meaningful build provenance claim looks like.
+      </li>
+      <li id="cite-fhs">
+        <a href="https://refspecs.linuxfoundation.org/FHS_3.0/fhs/index.html">Filesystem Hierarchy Standard 3.0</a> — <code>/var/log</code> is for system daemons; user-mode daemons follow XDG instead.
+      </li>
+      <li id="cite-xdg">
+        <a href="https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html">XDG Base Directory Specification</a> — defines <code>$XDG_STATE_HOME</code> (defaulting to <code>~/.local/state</code>), which is where our audit log + per-server logs belong.
+      </li>
+      <li id="cite-systemd-user">
+        <a href="https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html">systemd.service(5)</a> — particularly the <code>Type=notify</code> + <code>--user</code> service pattern. Plus <a href="https://wiki.archlinux.org/title/Systemd/User">ArchWiki — Systemd/User</a> for the per-user-unit conventions.
+      </li>
+      <li id="cite-sbom-cyclonedx">
+        <a href="https://cyclonedx.org/specification/overview/">CycloneDX SBOM specification</a>. The format I'd default to for our signed SBOM — broadly adopted, JSON-based, signed-attachment-friendly.
+      </li>
+      <li id="cite-sigstore">
+        <a href="https://www.sigstore.dev/">Sigstore project home</a> + <a href="https://docs.sigstore.dev/cosign/signing/overview/">cosign signing overview</a>. Why I want it for verify-when-present on OCI packages but not as a requirement for our own release signing in v1.0.
+      </li>
+      <li id="cite-tracing-json">
+        <a href="https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/format/struct.Json.html">tracing-subscriber JSON formatter docs</a>. One line per event, fields embedded, exactly the shape we need for journald + jq workflows.
+      </li>
+      <li id="cite-google-sre">
+        Google — <a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering (the SRE Book)</a>, particularly the chapter "Being On-Call" and the postmortem culture chapter. The "every alert has a runbook entry" principle is theirs.
+      </li>
+      <li id="cite-launchd">
+        Apple — <a href="https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html">"Creating launchd Jobs"</a> + <a href="https://www.launchd.info/">launchd.info</a>. macOS-side equivalent to the systemd-user unit; same notify/keepalive/std-out-path pattern.
+      </li>
+      <li id="cite-charity-pillars">
+        Charity Majors — <a href="https://charity.wtf/2020/03/03/observability-a-3-year-retrospective/">"Observability — a 3-year retrospective"</a>. Establishes that the value of high-cardinality structured events comes from the ability to slice them post-hoc; without that property, logs are just paginated despair.
+      </li>
+      <li id="cite-brendan-perf">
+        Brendan Gregg — <a href="https://www.brendangregg.com/usemethod.html">"The USE Method"</a>. For per-server <code>server.status</code> reporting: Utilization, Saturation, Errors are the three dimensions we surface (memory current/peak/limit + restart_attempts + last_exit). The framework predates microservices but applies cleanly to a per-MCP-server health check.
+      </li>
+    </ol>
+  </section>
+
+  <hr>
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Devops deep dive · sre-hawk agent · 1 of 5 in the devops facet · MCP Manager v1.0 ideation
+    · <a href="./overview.html">devops overview</a>
+    · <a href="../index.html">all deep dives</a>
+    · <a href="../../technical-design.html">main technical design</a>
+  </p>
+</main>
+</body>
+</html>

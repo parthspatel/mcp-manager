@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onboarding Novice — Frontend deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">frontend · onboarding-novice</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">frontend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Onboarding Novice's Frontend</h1>
+  <p class="lede">
+    Examples in every <code>--help</code>. Errors that suggest the next command. A tutorial mode that builds the mental model before the user has to commit to anything. I am the agent who downloaded <code>mcpm</code> an hour ago, doesn't know what JSON-RPC is, has never typed <code>launchctl bootstrap</code> in their life, and just wants to connect Claude Code to a GitHub MCP and feel productive. Everything below is in service of that human, because if we lose them at <code>mcpm init</code>, the other 18 subcommands never get to prove themselves.
+  </p>
+
+  <p>
+    <span class="evidence-badge">19 subcommands — daunting</span>
+    <span class="evidence-badge">examples in every --help</span>
+    <span class="evidence-badge">errors propose next command</span>
+    <span class="evidence-badge">tutorial mode opt-in</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments with peers</a></li>
+      <li><a href="#design">Design — the 4 onboarding transcripts, tutorial TUI, error messages</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      Here is the truth that the rest of this team — peers and architects — keeps wanting to forget: <strong>the first hour of a user's relationship with a tool decides whether they ever use it again.</strong> Steve Krug's book is literally titled <em>Don't Make Me Think</em>, and Krug's rule one is the single sharpest piece of UX writing ever shipped on a glossy paperback. We've all read it. We don't all act on it. I'm here to act on it.
+    </p>
+
+    <p>
+      Look at the locked design. <code>mcpm</code> ships 19 top-level subcommands. That's <strong>more than Git's plumbing/porcelain split was in 2005</strong>, and Git has spent two decades training developers on it. A novice opening <code>mcpm --help</code> for the first time will see a wall of nineteen things and most of them — <code>exec</code>, <code>projection</code>, <code>trust</code>, <code>registry verify</code>, <code>outdated</code> — make zero sense if you don't already know what MCP Manager <em>does</em>. The Microsoft CLI guidelines explicitly call out that a help screen should be "task-oriented, not feature-oriented." We are currently feature-oriented. That's a debt I want to start paying down today.
+    </p>
+
+    <p>
+      Two structural design choices have already been made that I have to work inside, and I want to name them up front so I'm not arguing against locked decisions:
+    </p>
+
+    <ol>
+      <li><strong>19 subcommands stays.</strong> I don't get to hide <code>exec</code>, <code>projection</code>, or <code>trust</code>. They exist because mcpmanagerd needs them. What I <em>can</em> do is hide them from the novice's first impression — by what <code>mcpm</code> with no args shows, by what <code>mcpm help</code> with no topic shows, and by how the <code>--help-me</code> tutorial introduces them in waves of "now you need this."</li>
+      <li><strong>The TUI is lazygit/k9s-style.</strong> A novice probably won't even open it on day one. Cool. But the moment they do — probably triggered by an error message saying "for a richer view, run <code>mcpm tui</code>" — we have ~10 seconds before they bail. The bottom hint bar earns its keep here, and a one-time first-launch tour overlay is non-negotiable, with a do-not-show-again checkbox.</li>
+    </ol>
+
+    <p>
+      What I want, in priority order: (1) every <code>--help</code> ends with three real worked examples, not synopsis-only — Stripe CLI does this and the difference between Stripe's CLI onboarding and AWS's is <em>night and day</em>; (2) every error message ends with the literal next command to run, copy-pasteable; (3) <code>mcpm --help-me</code> opens a guided tutorial TUI that takes the user from zero to "Claude Code can call a GitHub tool" in under five minutes; (4) <code>mcpm init</code> shows a preview before committing, because nothing kills trust like a tool that wrote files in your home directory before you knew it was going to.
+    </p>
+
+    <p>
+      I'll also push hard on what GitHub CLI calls "the empty-state principle": every screen where the user has nothing yet should explain what they could have and how to get there. <code>mcpm status</code> with no servers configured shouldn't say "no servers." It should say: "You don't have any MCP servers configured yet. Run <code>mcpm search github</code> to find one to install, or <code>mcpm install official/github-mcp</code> if you already know what you want." That's three lines of code that saves a Slack message to a teammate.
+    </p>
+
+    <p>
+      One more thing before I go to bat with my peers. The "doctor" command pattern — <code>brew doctor</code>, <code>flutter doctor</code>, <code>rustup check</code>, <code>nvm doctor</code> — does not appear anywhere in the locked v1.0 CLI surface, and that's a gap. Novices break their setups in dozens of tiny ways: missing keychain, wrong <code>$EDITOR</code>, registry unreachable, launchd plist not loaded. They need <em>one</em> command that says "here's everything that's wrong with your installation and how to fix each thing." I'd argue this is the 20th subcommand. I'll defend that position below.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments with peers</h2>
+
+    <h3>vs. vim-power-user</h3>
+
+    <p>
+      My friend the modal-keyboard absolutist will tell me that <code>--help-me</code> is condescending and that real developers read the man page. I will counter with: <strong>your version of "real developers" is a survivorship-biased view of the ones who never bounced off your tool.</strong> Vim itself has a built-in tutor (<code>vimtutor</code>) that every Vim user I respect has gone through at least once, including emacs holdouts who wanted to know what the fuss was about. There is no incompatibility between "the TUI is keyboard-first lazygit-style for daily use" and "the TUI has a one-time guided tour the first time it opens." Those two things <em>compound</em> — the tour teaches the keybindings the power-user wants people to memorize, so by lesson three the user is hitting <code>l</code> for logs and <code>s</code> for start without thinking.
+    </p>
+
+    <p>
+      Concrete compromise I'll offer: the <code>--help-me</code> tutorial mode is <em>opt-in</em>, never auto-launches on second run (only the first), and a single keystroke (<code>q</code>) exits it permanently. The hint bar and the keymap modal (<code>?</code>) — those are the power-user's terrain and I won't touch them. We agree that <code>?</code> shows the full keymap, that the hint bar is context-aware, and that no modal dialog ever steals focus during normal flow.
+    </p>
+
+    <p>
+      Where we'll fight: <strong>I want <code>mcpm</code> with no arguments to print a friendly orientation, not the bare 19-command list.</strong> Power-user wants the bare list (matches Git, Cargo, kubectl). I'll concede that <code>mcpm --help</code> shows the bare list — that's what aliased keystrokes expect — but <code>mcpm</code> with literally no arguments shows: top three "next likely commands" based on whether init has been run, whether any servers are installed, and whether any are running. GitHub CLI does this, and it's universally praised. The cost is two lines of branching in <code>main.rs</code>. The benefit is the novice doesn't have to interpret nineteen one-line descriptions on first contact.
+    </p>
+
+    <h3>vs. accessibility-advocate</h3>
+
+    <p>
+      Accessibility is the ally I want, not the peer I fight. Almost everything they ask for I already want. <code>NO_COLOR</code> respected — yes. Status conveyed by both color and glyph — yes (the UX-design page already mandates this). Screen-reader-friendly stdout — yes, especially for the non-interactive flows my novices will paste into ChatGPT to debug.
+    </p>
+
+    <p>
+      Where we genuinely disagree: <strong>animated progress indicators during <code>mcpm install</code>.</strong> Accessibility-advocate will want a static line that updates only on state change. I want a Stripe-CLI-style spinner because novices read static output as "did the command hang?" The win-win is the existing universal flag <code>--quiet</code> — but I want the default to be the spinner, and the spinner to degrade to plain text under <code>NO_COLOR</code> or when stdout is not a TTY. clig.dev explicitly supports this pattern.
+    </p>
+
+    <p>
+      We'll fight one more skirmish over <code>--help-me</code>'s tutorial TUI: I want a "press SPACE to continue" pacing model where each lesson waits for an input. Accessibility-advocate may want auto-advance with a configurable delay. My answer: auto-advance is hostile to screen-reader users (they haven't finished reading when the screen changes), so SPACE-to-advance is actually the accessible choice. Hope I've won them over with that.
+    </p>
+
+    <h3>vs. cli-unix-purist</h3>
+
+    <p>
+      The Unix-purist is going to read this whole document and say: "Why is this tool printing emoji checkmarks? Why is it suggesting next commands? Stdout is a pipe, behave like one." I'll grant their core point: <strong>when stdout is not a TTY, mcpm becomes a different program.</strong> No spinner, no checkmarks, no "Next:" hints, no colors, no friendly framing — pure machine-readable output. We already have <code>--json</code> as a universal flag for the strict-machine case. What I want to nail down with the purist is the auto-detection branch: <code>isatty(STDOUT_FILENO)</code> at startup, and adapt every output decision off that. clig.dev calls this the "humans first, machines second" principle but it's really "humans on a TTY, machines on a pipe."
+    </p>
+
+    <p>
+      Where the purist and I genuinely diverge: <strong>I think error output should always include the next-command hint, even when piped.</strong> The argument: if a script catches a non-zero exit, the developer reading the logs to debug it benefits from seeing the suggested fix. The purist will say: "errors go to stderr, and stderr should be the error code and the message, period." Concession I can offer: the next-command hint goes to stderr but <em>after</em> a blank line, so a script that does <code>cmd 2&gt;error.log</code> and parses the first line of <code>error.log</code> only sees the proper error. The hint is for the human reading the file later.
+    </p>
+
+    <p>
+      We agree on this: <code>mcpm --version</code> prints one line of version info and exits, no decoration. <code>mcpm status --json</code> emits parseable JSON with no human framing. <code>mcpm install</code> with stdout piped doesn't show a spinner. <code>$NO_COLOR</code>, <code>$CI</code>, and <code>$TERM=dumb</code> all flip the humanism off.
+    </p>
+
+    <h3>vs. visual-designer</h3>
+
+    <p>
+      Visual-designer will want box-drawing characters, careful column alignment, theme support, and probably a sparkline somewhere. I want all of that — provided it never costs information density on a small terminal. Specifically: on an 80-column terminal (still the default in many places, especially over SSH), the tutorial-mode TUI has to fit. I'll insist on this.
+    </p>
+
+    <p>
+      Where I'll push back: I do <em>not</em> want a visual-designer-style "welcome" splash screen with ASCII art on first <code>mcpm</code> launch. We have ten seconds of attention. Spending three of them on art is a cost we can't pay. The first thing a novice sees is information they need.
+    </p>
+
+    <p>
+      Where I'll concede: yes, color it nicely; yes, support a dark-mode theme; yes, use box-drawing for the tutorial overlay so it's visually distinct from the panes underneath; yes, a status-glyph-plus-color combo (per the locked a11y commitments). What I will <em>not</em> trade away: the bottom hint bar in the TUI stays one row tall. No multi-line "tip of the day" banner. The hint bar is the user's lifeline; it has to be uniformly placed every time.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <p>
+      Below: the four onboarding transcripts I want to ship in v1.0, the tutorial-mode TUI sketch, the <code>--help-me</code> command, and a worked set of error messages with recovery commands. The transcripts overlap with the ones in the <a href="../../ux-design.html#onboarding">UX design page</a> and the <a href="../../research/closing-gaps/onboarding/recommendation-onboarding-flow-summary.html">onboarding research recommendation</a> — what's new here is the novice-lens annotation on every prompt.
+    </p>
+
+    <h3>Transcript 1 — <code>mcpm init</code> (interactive, lucky day, novice)</h3>
+
+    <p>
+      The user has never run <code>mcpm</code> before. They've just installed it via Homebrew. They open a terminal, type <code>mcpm</code> with no arguments, and we hand-hold from there.
+    </p>
+
+    <pre><code>$ mcpm
+
+mcpm v1.0.0 — Docker-style management for MCP servers
+You haven't run setup yet. To get started:
+
+  mcpm init           First-time setup (interactive, ~30 seconds)
+  mcpm --help-me      Guided tutorial (~5 minutes, builds your first server)
+  mcpm --help         Full command reference (19 commands)
+
+Pick one or run `mcpm help` to learn more.
+
+$ mcpm init
+
+Welcome to MCP Manager. This will set up your machine to manage
+Model Context Protocol servers and project them into your editors.
+
+We'll write to:
+  ~/.config/mcp-manager/config.toml          (your preferences)
+  ~/.config/mcp-manager/trust.toml           (registry signatures)
+  ~/Library/Application Support/mcp-manager/audit.log   (1 line)
+
+Nothing else will be touched until you say so. Press Ctrl-C any time to bail.
+
+[1/5] What name should I use to greet you? [Parth Patel]: ⏎
+
+[2/5] Setup scope: where should this configuration live?
+        user      Your personal MCP setup, applies to every project (recommended)
+        project   Per-repo setup, lives in .mcp-manager.toml in this directory
+      Choose [user]: ⏎
+
+[3/5] I detected these editors on your machine:
+        ✓ Claude Code CLI    (~/.claude/)
+        ✓ Cursor             (~/Library/Application Support/Cursor/)
+        ✓ Zed                (~/.config/zed/)
+
+      Should I project MCP servers into all three? [Y/n]: ⏎
+      (You can change this any time with `mcpm projection`)
+
+[4/5] Docker is installed. Enable the Docker MCP Catalog as a server registry?
+      This gives you access to Docker's official MCP server list. [y/N]: ⏎
+
+[5/5] Register mcpmanagerd as a background service so it survives logout?
+      You don't need this for daily use — `mcpm exec` starts the daemon
+      on demand. Registering only matters if you want fast cold-starts
+      between long gaps. [y/N]: ⏎
+
+About to write:
+  ~/.config/mcp-manager/config.toml          (new, 412 bytes)
+  ~/.config/mcp-manager/trust.toml           (new, 1.1 KB)
+  ~/Library/Application Support/mcp-manager/audit.log   (new, 1 line)
+
+  Editors that will sync MCP servers: claude-code, cursor, zed
+  Registries subscribed: official
+  Service registration: skipped (daemon auto-spawns)
+
+Looks good? [Y/n]: ⏎
+
+✓ Wrote ~/.config/mcp-manager/config.toml
+✓ Wrote ~/.config/mcp-manager/trust.toml
+✓ Refreshed trust.toml (4 registry pubkeys, valid until 2027-05-27)
+✓ Projected canonical state into 3 editor configs
+
+You're set up. Some good next steps:
+
+  mcpm search github       Find MCP servers related to GitHub
+  mcpm install official/github-mcp    Install the official GitHub server
+  mcpm --help-me           Run the guided tutorial if you'd like a tour
+
+Done in 0.18s.
+</code></pre>
+
+    <p>
+      Annotations on this transcript, from the novice's lens:
+    </p>
+
+    <ul>
+      <li><strong>Bare <code>mcpm</code> with no args is an orientation page</strong>, not a usage error. It detects that init hasn't been run and tells the user the three things they could do next. (This is the GitHub CLI pattern; see citations.)</li>
+      <li><strong>The "we'll write to" preview comes before the first question.</strong> Novices want to know what's about to happen to their disk before they commit even one keystroke. This is direct application of Krug rule one — don't make them wonder.</li>
+      <li><strong>Each prompt has a bracketed default,</strong> and a single ⏎ accepts. <code>create-next-app</code> does this; <code>npm init</code> does this. It's the lowest-friction interaction model still possible.</li>
+      <li><strong>The "scope" question has explanations of both choices on the prompt line itself,</strong> not "see the docs." Novices don't go to docs — they just pick whichever sounds less scary and live with the consequences. Explaining inline is the difference between "user (recommended)" being chosen knowingly versus accidentally.</li>
+      <li><strong>The service-manager question explicitly de-emphasizes itself</strong> ("you don't need this for daily use"). This is where peer agents have argued I'm being too friendly. I'm not — I'm protecting the user from a choice they don't yet have the context to make well.</li>
+      <li><strong>The "looks good?" pre-commit confirmation is non-negotiable.</strong> The novice has now answered five questions; they need a single "yes, do the thing" before bytes hit the disk. This is the preview-before-commit principle from Stripe CLI and Vercel CLI.</li>
+      <li><strong>Each line of "Next:" is a literal copy-pasteable command,</strong> not "consider installing some servers." The novice's mouse is on their trackpad ready to triple-click.</li>
+    </ul>
+
+    <h3>Transcript 2 — <code>mcpm install official/github-mcp</code> (first server, novice)</h3>
+
+    <p>
+      User has finished init and is following the "next" suggestion. They've never installed an MCP server before. They don't know what a registry is, what a runtime is, or what a signing key is.
+    </p>
+
+    <pre><code>$ mcpm install official/github-mcp
+
+Resolving official/github-mcp@latest from registry 'official' ... 0.4.2 ✓
+Verifying minisign signature (key RWQabc…) ... ok ✓
+Verifying SHA-256 checksum ... ok ✓
+
+About to install:
+  Server name:    github-mcp           (you can rename with --name)
+  Version:        0.4.2                (pinned in lockfile)
+  Source:         official/github-mcp  (community registry)
+  Runtime:        devenv               (sandboxed; no Docker required)
+  Required secrets: GITHUB_TOKEN       (you don't have this set yet)
+
+Looks good? [Y/n]: ⏎
+
+✓ Downloaded github-mcp 0.4.2 (3.2 MB)
+✓ Verified signature
+✓ Wrote ~/.config/mcp-manager/config.toml
+✓ Updated lockfile
+✓ Projected into claude-code, cursor, zed
+
+Almost ready. github-mcp needs a secret you don't have yet:
+  GITHUB_TOKEN  (a personal access token from github.com/settings/tokens)
+
+To set it now:
+  mcpm secret set GITHUB_TOKEN
+
+Once set, you can verify the server works:
+  mcpm test github-mcp
+
+Or just open Claude Code — the server will start automatically when called.
+</code></pre>
+
+    <p>
+      Things I want to call out here:
+    </p>
+
+    <ul>
+      <li><strong>"Required secrets: GITHUB_TOKEN (you don't have this set yet)"</strong> is the single most important line in this entire transcript. Novices install things, then nothing works, and they don't know why. Telling them <em>before</em> install completes that they'll need a token, plus the URL where to get one, plus the literal command to set it, eliminates a 20-minute frustration loop.</li>
+      <li><strong>"Runtime: devenv (sandboxed; no Docker required)"</strong> — the parenthetical defends the choice. Novice doesn't know what devenv is, but "no Docker required" answers the question they were about to ask.</li>
+      <li><strong>"Looks good?" again.</strong> Same principle: never commit without an explicit OK on the first interaction. Once the user has done this two or three times they can use <code>-y</code>.</li>
+      <li><strong>The final paragraph offers two paths:</strong> set the secret now, or just go use Claude Code and let it discover the missing secret organically. Both are valid; both are surfaced.</li>
+    </ul>
+
+    <h3>Transcript 3 — Cloned-from-elsewhere project (trust gate)</h3>
+
+    <p>
+      Most stressful scenario for a novice. They've <code>git clone</code>'d a repo their teammate shared. They <code>cd</code> in. Suddenly mcpm starts asking about trust and signatures. I want this to feel <em>friendly</em>, not scary. The direnv-style trust gate is non-negotiable for safety, but it's also the moment we most risk the novice giving up.
+    </p>
+
+    <pre><code>$ cd /work/cloned-from-github
+$ mcpm status
+
+This project has an MCP Manager config you haven't seen before:
+  Path:    /work/cloned-from-github/.mcp-manager.toml
+  Author:  alice@acme.com  (from the git log, not verified)
+
+Before mcpm activates it, here's what it would do:
+  Add 1 new server:        acme-db (postgres-mcp 0.3.4 from 'official')
+  Override 1 existing:     github (restrict to /work/cloned-from-github)
+  Inherit mode:            "all" — your user-scope servers stay available
+
+This config doesn't run any local executables from the repo itself, which
+is the most common scenario where you'd want to read the code first.
+
+What would you like to do?
+  y) Trust this exact config and apply it (sha256: 8a9f2d…)
+  n) Ignore the project config for this session
+  e) Edit it in $EDITOR before deciding
+  ?) Explain trust gates in more detail
+
+Choose [n]: ?
+
+About trust gates
+─────────────────
+When you clone a repo with an .mcp-manager.toml file, mcpm doesn't apply
+it automatically — because that file could declare servers that read your
+filesystem, call external APIs, or run code from the repo itself.
+
+Saying "yes" stores a sha256 hash of the file in your trust list. If the
+file ever changes (e.g. a teammate updates it), mcpm asks you again.
+
+You can change your mind any time:
+  mcpm project allow         Trust the current project's config
+  mcpm project deny          Remove trust for the current project
+
+This is the same model `direnv` uses for shell env vars. It exists to
+protect you, not slow you down — if you're working in your own repos
+all day, you'll see this prompt once per project.
+
+Choose [n]: y
+
+✓ Recorded trust in ~/.config/mcp-manager/trust.toml
+✓ Activated project config
+✓ Projected into claude-code, cursor, zed
+
+Almost ready. acme-db needs a secret you don't have yet:
+  ACME_DB_URL  (your local postgres connection string)
+
+To set it:
+  mcpm secret set ACME_DB_URL
+</code></pre>
+
+    <p>
+      What matters here:
+    </p>
+
+    <ul>
+      <li><strong>The fourth option in the prompt — <code>?</code> for "explain trust gates" — is the friendly novice escape hatch.</strong> direnv famously assumes you already know what direnv does. We can't. The <code>?</code> answer is short (eight lines of plain prose), names the analogy (<code>direnv</code>), and gives the user the commands to change their mind later. After reading it, the user types <code>y</code> with confidence, not because they got tired of reading.</li>
+      <li><strong>"This config doesn't run any local executables from the repo itself" is a safety reassurance.</strong> The onboarding research recommendation specifically called out local executables as the riskiest case. Here we tell the novice <em>this is not that case</em>, so they can relax. Conversely, if it <em>were</em> that case, we'd shout it.</li>
+      <li><strong>"alice@acme.com (from the git log, not verified)"</strong> — naming who wrote the file gives social context without overclaiming authentication.</li>
+      <li><strong>Default is "n", not "y".</strong> Per accessibility-advocate's likely-correct point: if the user just spams ⏎, the safe thing happens. Saying yes is a typed key.</li>
+    </ul>
+
+    <h3>Transcript 4 — Hit an error, recover (E_SECRET_MISSING)</h3>
+
+    <p>
+      The novice tries to use the server in Claude Code; Claude Code calls <code>mcpm exec github-mcp</code>; the server can't start because <code>GITHUB_TOKEN</code> isn't set. mcpm reports back via stderr; the user runs <code>mcpm status</code> to see what's wrong.
+    </p>
+
+    <pre><code>$ mcpm status
+
+Servers:
+  github-mcp  ⚠ failed     last error: E_SECRET_MISSING (12:34:01)
+  acme-db     ●● running    14m
+
+Editors: claude-code (synced), cursor (synced), zed (synced)
+Daemon:  mcpmanagerd 1.0.0, running 14m, PID 47821
+
+⚠ One server has a problem. Run `mcpm logs github-mcp` for details
+   or `mcpm doctor github-mcp` for a guided fix.
+
+$ mcpm doctor github-mcp
+
+Checking github-mcp ...
+
+  ✓ Config valid                 (~/.config/mcp-manager/config.toml)
+  ✓ Lockfile entry present       (0.4.2, sha256 matches)
+  ✓ Binary downloaded            (~/.cache/mcp-manager/devenv/github-mcp/)
+  ✓ Signature verified           (registry 'official', key RWQabc…)
+  ✓ Runtime available            (devenv profile present)
+  ✗ Secret GITHUB_TOKEN missing  (not in keychain, not in environment)
+
+1 problem found:
+
+  Missing secret: GITHUB_TOKEN
+  ────
+  github-mcp's config declares it needs GITHUB_TOKEN. It's not in your
+  OS keychain (we checked Keychain Services) and not in your shell
+  environment (we checked at daemon spawn time).
+
+  To fix:
+    mcpm secret set GITHUB_TOKEN
+
+  This will prompt you for the value (input is hidden) and store it in
+  your macOS Keychain. You only need to do this once.
+
+  Get a token at: https://github.com/settings/tokens
+                  Required scopes: repo, read:user
+
+After setting the secret, re-run:
+  mcpm restart github-mcp
+</code></pre>
+
+    <p>
+      Things to notice in this transcript:
+    </p>
+
+    <ul>
+      <li><strong>I'm proposing a 20th subcommand: <code>mcpm doctor</code></strong>, modeled on <code>brew doctor</code>, <code>flutter doctor</code>, <code>rustup check</code>, and <code>npm doctor</code>. It does deep diagnostics on a single server (or the whole installation). The locked 19-subcommand list doesn't include it, but I think this is the case where we add one. <code>mcpm test</code> exists, but it spawns the server and checks if it speaks MCP — that's a smoke test, not a diagnostic. <code>doctor</code> walks the chain (config → lockfile → binary → signature → runtime → secrets) and tells you the first thing that broke. I'd happily merge it with <code>mcpm test</code> if naming has to stay at 19 — call the combined command <code>mcpm test</code> by default, and add a <code>--diagnostic</code> mode that runs the whole chain.</li>
+      <li><strong>"Get a token at: https://github.com/settings/tokens" with required scopes</strong> is the kind of hand-holding that pays for itself a hundred times. The Stripe CLI does this for every API key it asks you to set.</li>
+      <li><strong>The error tells the user what we checked, not just what's missing.</strong> "Not in your OS keychain (we checked Keychain Services) and not in your shell environment (we checked at daemon spawn time)" — this is reassurance the tool did its homework, and it teaches the novice the mental model for where secrets live.</li>
+    </ul>
+
+    <h3>The <code>--help-me</code> tutorial mode</h3>
+
+    <p>
+      My signature ask. Vim has <code>vimtutor</code>; I want <code>mcpm --help-me</code>. It's an opt-in TUI walkthrough that takes the user from zero to "I just connected an MCP server and called it from Claude Code." It's not auto-launched; novices type the words because they want it. Five lessons, each ~60 seconds.
+    </p>
+
+    <pre><code>$ mcpm --help-me
+
+┌─ MCP Manager · guided tour ───────────────────────────────────────┐
+│                                                                   │
+│  Lesson 1 of 5: What is MCP Manager?                              │
+│                                                                   │
+│  MCP Manager (mcpm) is a tool for managing Model Context          │
+│  Protocol servers. MCP servers are little programs that give      │
+│  AI assistants like Claude Code access to specific tools and      │
+│  data — your GitHub repos, your database, your filesystem.        │
+│                                                                   │
+│  Without MCP Manager, each AI tool (Claude Code, Cursor, Zed)     │
+│  has its own config for which MCP servers it knows about.         │
+│  MCP Manager keeps ONE config and projects it into ALL of them.   │
+│                                                                   │
+│  Think of it like Homebrew, but for AI assistant capabilities.    │
+│                                                                   │
+│                                                                   │
+│  ──── progress ────                                                │
+│  ●●○○○                                                            │
+│                                                                   │
+├───────────────────────────────────────────────────────────────────┤
+│ SPACE next · b back · q quit tour · ? what does each key do      │
+└───────────────────────────────────────────────────────────────────┘
+</code></pre>
+
+    <p>
+      Lesson plan:
+    </p>
+
+    <ol>
+      <li><strong>What is MCP Manager?</strong> The orientation paragraph above. No interaction needed; just SPACE to advance.</li>
+      <li><strong>Your first command: <code>mcpm search</code>.</strong> The tour drops the user into a real <code>mcpm search github</code>, shows them the BM25 results, and explains what each column means.</li>
+      <li><strong>Install something.</strong> The tour offers to install <code>filesystem-mcp</code> (no secret required, no network calls — the most "Hello World"-y MCP server we have). User says yes; tour runs the install for them and explains each line of output as it happens.</li>
+      <li><strong>Open the TUI for the first time.</strong> Tour launches <code>mcpm tui</code> with a special first-launch overlay (described below) and shepherds the user through the panes.</li>
+      <li><strong>Use it from Claude Code.</strong> Tour shows the projected config in <code>~/.claude/mcp.json</code>, points at the new <code>filesystem</code> entry, and tells the user to open Claude Code and ask "list files in /tmp" to verify everything works.</li>
+    </ol>
+
+    <p>
+      Important properties of <code>--help-me</code>:
+    </p>
+
+    <ul>
+      <li><strong>SPACE to advance, not auto-advance.</strong> Already argued; accessibility-advocate agrees.</li>
+      <li><strong>Real commands, not simulations.</strong> When lesson 3 says "we're going to install filesystem-mcp," it actually installs filesystem-mcp. The user comes out of the tour with a working setup, not just having watched a demo.</li>
+      <li><strong>Every lesson has a <code>q</code> escape hatch that exits cleanly,</strong> leaving whatever was installed installed. If the user bails at lesson 3, they still have filesystem-mcp.</li>
+      <li><strong>Tour state persists.</strong> <code>~/.config/mcp-manager/state.toml</code> records that the tour was completed (or which lesson the user quit at). Running <code>mcpm --help-me</code> again offers to resume or restart.</li>
+      <li><strong>Tour is offered exactly once after <code>mcpm init</code></strong> as part of the "Next:" suggestions. It is never <em>forced</em> on the user — no autorun, no popup.</li>
+    </ul>
+
+    <h3>First-launch TUI overlay</h3>
+
+    <p>
+      When the user opens <code>mcpm tui</code> for the first time (or via lesson 4 of the tour), a translucent overlay appears for ten seconds — or until any key is pressed. It points at three things and gives a one-line label for each. Then it dissolves and the lazygit-style TUI is in front of them.
+    </p>
+
+    <pre><code>┌─ MCP Manager ────────────────────── github · 12:34:08 ┐
+│ Servers ▸                       │ Logs · github         │
+│ ──────  ←── three panes here    │                       │
+│   github     ●● running         │   ↑                   │
+│   filesystem ●● running         │   logs / details      │
+│   sqlite     ●○ stopped         │   appear on the right │
+│                                 │   for the selected    │
+│ Toolchains ▾                    │   entity              │
+│                                 │                       │
+│   ✓ claude-code  sync           │                       │
+│                                 │                       │
+├─────────────────────────────────┴───────────────────────┤
+│ ? help · / search · enter view · l logs · s start · q quit │ ←── always-on hints
+└─────────────────────────────────────────────────────────┘
+
+  Press ? at any time for the full keymap. Press any key to dismiss.
+</code></pre>
+
+    <p>
+      Three callouts, one sentence each, gone in ten seconds. Visual-designer can theme this however they want; I just want the structural decision locked in: <em>first-launch is annotated; second-launch is naked.</em>
+    </p>
+
+    <h3>Examples in every <code>--help</code></h3>
+
+    <p>
+      Every single subcommand's <code>--help</code> ends with at least three real examples. Not placeholder syntax — real arguments. This is the Stripe CLI standard and the Microsoft Command Line Guidelines standard. The example for <code>mcpm install --help</code> is already in the UX-design page. I want to lock in the rule: <strong>any future PR that adds a subcommand without three worked examples in <code>--help</code> is blocked.</strong>
+    </p>
+
+    <h3>Error UX — worked examples</h3>
+
+    <p>
+      Five errors from the 12-row taxonomy, written the way I want them in v1.0. Each follows the format: code · what · why · what to do next.
+    </p>
+
+    <pre><code>$ mcpm start github-mcp
+
+✗ Failed to start github-mcp  (E_SECRET_MISSING)
+
+  github-mcp's config declares it requires this secret:
+    GITHUB_TOKEN  — not in keychain, not in environment
+
+  To fix:
+    mcpm secret set GITHUB_TOKEN
+
+  Then re-run:
+    mcpm start github-mcp
+
+  Need a token? https://github.com/settings/tokens (scopes: repo, read:user)
+</code></pre>
+
+    <pre><code>$ mcpm install corp/internal-mcp
+
+✗ Failed to install corp/internal-mcp  (E_REGISTRY_UNREACHABLE)
+
+  I tried to fetch the index from:
+    https://internal.example.com/mcpm-registry
+
+  ... and got: connection refused (errno 111)
+
+  This usually means:
+    1. You're not on the corporate VPN (try: connect to VPN, retry)
+    2. The registry is down (check #infra Slack channel)
+    3. Your registry URL is wrong (check: mcpm registry list)
+
+  Your cached index from 2 days ago is still searchable:
+    mcpm search internal-mcp --source corp
+
+  To retry once the registry is back:
+    mcpm install corp/internal-mcp
+</code></pre>
+
+    <pre><code>$ mcpm install official/github-mcp
+
+✗ Failed to install official/github-mcp  (E_REGISTRY_SIGFAIL)
+
+  The downloaded package's signature didn't verify with the trusted
+  public key for registry 'official'.
+
+  This could mean:
+    1. A new key was rotated in (most common — fix below)
+    2. The package was tampered with (rare; report it)
+
+  To refresh the trusted-key manifest:
+    mcpm trust refresh
+
+  Then retry:
+    mcpm install official/github-mcp
+
+  If the failure persists after `mcpm trust refresh`, do NOT install
+  with `--accept-unsigned`. Report it:
+    https://github.com/mcp-manager/mcp-manager/issues
+</code></pre>
+
+    <pre><code>$ cat invalid.toml | mcpm config put
+
+✗ Config validation failed  (E_CONFIG_INVALID)
+
+  Line 14, column 3:
+    isolation = "containerd"
+                ^^^^^^^^^^^^
+  Expected one of: "devenv" | "docker" | "podman" | "uvx-npx" | "none"
+
+  Your existing config was not modified.
+
+  To fix interactively:
+    mcpm config edit
+
+  To see the schema:
+    mcpm help config
+</code></pre>
+
+    <pre><code>$ mcpm secret set GITHUB_TOKEN
+Enter value for GITHUB_TOKEN: (input hidden)
+
+✗ Failed to store secret  (E_KEYCHAIN_UNAVAILABLE)
+
+  I couldn't reach your OS keychain.
+
+  On Linux, mcpm uses libsecret. The d-bus secret service wasn't
+  running or wasn't accessible. Most distros need one of:
+
+    sudo apt install gnome-keyring        (Debian/Ubuntu)
+    sudo dnf install gnome-keyring        (Fedora)
+    sudo pacman -S gnome-keyring          (Arch)
+
+  Then log out and back in, OR start it manually:
+    /usr/bin/gnome-keyring-daemon --start --components=secrets
+
+  Escape hatch (less secure; only for testing):
+    mcpm secret set GITHUB_TOKEN --from-env GITHUB_TOKEN
+    (reads the value from your shell env instead of keychain)
+</code></pre>
+
+    <p>
+      Pattern across all of these:
+    </p>
+
+    <ul>
+      <li><strong>Error code on the first line</strong>, in parentheses after the failure summary.</li>
+      <li><strong>"What I tried"</strong> — the literal URL, the literal arg, the literal line/column. The user shouldn't have to guess what mcpm did.</li>
+      <li><strong>"This usually means"</strong> with a numbered list of possibilities, ordered by frequency.</li>
+      <li><strong>"To fix"</strong> with literal copy-pasteable commands.</li>
+      <li><strong>"To retry"</strong> with the literal command to re-run after the fix.</li>
+      <li><strong>External links</strong> where helpful (token URL, GitHub issues URL).</li>
+      <li><strong>An escape hatch</strong> where one safely exists (<code>--from-env</code> for keychain failures).</li>
+      <li><strong>An anti-escape</strong> where one would be dangerous ("do NOT install with <code>--accept-unsigned</code>" on signature failure).</li>
+    </ul>
+
+    <h3>$EDITOR fallback for novices</h3>
+
+    <p>
+      The TUI's <code>e</code> key opens <code>$EDITOR</code>. cli-unix-purist insists this is correct. I agree. But novices on macOS often don't have <code>$EDITOR</code> set, in which case <code>$EDITOR</code> resolves to nothing and the user gets a cryptic shell error. My fix:
+    </p>
+
+    <ul>
+      <li>If <code>$EDITOR</code> is unset and we're on macOS, try in order: <code>code -w</code> (VS Code in wait mode, since most Claude Code users have VS Code), <code>cursor -w</code>, <code>nano</code>. Tell the user which fallback we used.</li>
+      <li>If <code>$EDITOR</code> is unset on Linux, try: <code>nano</code>, <code>vi</code>. Same disclosure.</li>
+      <li>On first use, after the editor closes successfully, print: "Tip: set <code>$EDITOR</code> in your shell rc to choose your preferred editor. Currently using: <code>code -w</code>."</li>
+      <li>Add a fallback config setting <code>[ui] preferred_editor = "code -w"</code> so the user can override in <code>config.toml</code> rather than environment, for the novices who don't know what a shell rc is.</li>
+    </ul>
+
+    <h3>Project-scope mental model</h3>
+
+    <p>
+      Novices struggle with the user/project inheritance model. My pitch: <strong>borrow Python's <code>venv</code> mental model</strong>, which most developers have already internalized. The three inherit modes map to:
+    </p>
+
+    <ul>
+      <li><code>inherit = "all"</code> ≈ a venv with <code>--system-site-packages</code></li>
+      <li><code>inherit = ["s1", "s2"]</code> ≈ a venv that only pulls in named packages from system</li>
+      <li><code>inherit = "none"</code> ≈ a vanilla venv (full isolation)</li>
+    </ul>
+
+    <p>
+      I want this analogy in <code>mcpm help project</code> verbatim, because explaining new concepts in terms of concepts the user already knows is the single highest-leverage move in technical writing. ("Like X, but for Y" — see citations.)
+    </p>
+
+    <h3>Summary of asks</h3>
+
+    <ol>
+      <li><strong>Bare <code>mcpm</code> with no args is an orientation page</strong>, not a usage error.</li>
+      <li><strong>Every <code>--help</code> ends with 3 real worked examples.</strong> PR rule.</li>
+      <li><strong>Every error has code · what · why · what-to-do-next.</strong> 12 errors, 12 copy-pasteable next commands.</li>
+      <li><strong><code>mcpm --help-me</code> launches a 5-lesson opt-in tutorial TUI.</strong> SPACE-paced, real commands, resumable state.</li>
+      <li><strong>First-launch TUI overlay</strong> with three callouts, dismissable, never shown again.</li>
+      <li><strong>Preview-before-commit on <code>mcpm init</code></strong>, with literal byte counts, before any disk write.</li>
+      <li><strong>Trust gate prompt has a <code>?</code> "explain" option</strong> that defines the trust model in 8 lines.</li>
+      <li><strong>20th subcommand: <code>mcpm doctor</code></strong> (or fold into <code>mcpm test --diagnostic</code>) that walks the failure chain and reports the first broken link.</li>
+      <li><strong>$EDITOR fallback chain</strong> with disclosure of which editor we used and how to set the env var.</li>
+      <li><strong>Project-scope mental model documented as "like venv"</strong> in <code>mcpm help project</code>.</li>
+    </ol>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+
+    <ol>
+      <li>Krug, Steve. <em>Don't Make Me Think, Revisited</em> (New Riders, 2014). The foundational text for "the user should never have to wonder what to do next." <a href="https://sensible.com/dont-make-me-think/">https://sensible.com/dont-make-me-think/</a></li>
+      <li>GitHub CLI design philosophy and onboarding patterns. The "empty-state principle" referenced above ("show what could be here") is implemented across <code>gh repo list</code>, <code>gh pr list</code>, <code>gh auth status</code>. <a href="https://primer.style/cli/">https://primer.style/cli/</a> (the CLI design language) and <a href="https://github.com/cli/cli/blob/trunk/docs/triage.md">https://github.com/cli/cli</a></li>
+      <li>Stripe CLI's worked-example help and inline link-to-docs pattern. Each subcommand's <code>--help</code> includes real arguments and links to the Stripe docs. <a href="https://docs.stripe.com/stripe-cli">https://docs.stripe.com/stripe-cli</a></li>
+      <li>Command Line Interface Guidelines (clig.dev) by Aanand Prasad, Ben Firshman, Carl Tashian, and Eva Parish. The de facto modern standard on CLI UX. Cited heavily here for "humans first, machines second," idempotency, error UX, and "use a TTY when you have one." <a href="https://clig.dev/">https://clig.dev/</a></li>
+      <li>Microsoft Command Line Guidelines — the .NET CLI design rules, with the explicit "task-oriented help, not feature-oriented help" mandate. <a href="https://learn.microsoft.com/en-us/dotnet/standard/commandline/syntax">https://learn.microsoft.com/en-us/dotnet/standard/commandline/syntax</a></li>
+      <li>"First Run Experience" essay collection — Nielsen Norman Group on onboarding flows. Particularly: "Onboarding for Mobile Apps" (2024 update). <a href="https://www.nngroup.com/articles/mobile-app-onboarding/">https://www.nngroup.com/articles/mobile-app-onboarding/</a></li>
+      <li>The "doctor command" pattern — original popularization by Homebrew. <code>brew doctor</code>'s output format and check-by-check structure has been copied by <code>flutter doctor</code>, <code>npm doctor</code>, <code>rustup check</code>, <code>nvm doctor</code>, and many more. <a href="https://docs.brew.sh/Manpage#doctor-dr-list-checks---audit-debug-diagnostic">https://docs.brew.sh/Manpage</a> and <a href="https://docs.flutter.dev/get-started/install">https://docs.flutter.dev/get-started/install</a></li>
+      <li>direnv's <code>direnv allow</code> trust model. The single best example of "explicit per-directory trust gate, hash-pinned, easy to revoke." <a href="https://direnv.net/docs/installation.html">https://direnv.net/docs/installation.html</a></li>
+      <li><code>vimtutor</code> as the prototypical opt-in CLI tutorial mode. Ships in every Vim install since the late 1990s; the model for <code>mcpm --help-me</code>. <a href="https://vimhelp.org/usr_01.txt.html#vimtutor">https://vimhelp.org/usr_01.txt.html#vimtutor</a></li>
+      <li>Gatsby's CLI starter templates and the <code>gatsby new</code> interactive flow — early reference design for "interactive scaffolders that give the user a working setup in &lt; 60 seconds." <a href="https://www.gatsbyjs.com/docs/reference/gatsby-cli/">https://www.gatsbyjs.com/docs/reference/gatsby-cli/</a></li>
+      <li>npm's <code>init -y</code> contract — "produces a working setup with no input on any supported machine." The exact precedent for <code>mcpm init --defaults -y</code>. <a href="https://docs.npmjs.com/cli/v10/commands/npm-init">https://docs.npmjs.com/cli/v10/commands/npm-init</a></li>
+      <li>create-next-app and create-react-app interactive prompts with bracketed defaults — the "press ENTER through everything" UX. <a href="https://nextjs.org/docs/app/api-reference/cli/create-next-app">https://nextjs.org/docs/app/api-reference/cli/create-next-app</a></li>
+      <li>Vercel CLI's preview-before-commit pattern on <code>vercel deploy</code> — shows you what would happen, asks for confirmation, then does it. <a href="https://vercel.com/docs/cli/deploy">https://vercel.com/docs/cli/deploy</a></li>
+      <li>Terraform's <code>terraform init</code> and <code>terraform plan</code> staged-output model — citing for the diff-before-apply pattern that the onboarding flow's idempotency contract is borrowed from. <a href="https://developer.hashicorp.com/terraform/tutorials/cli/init">https://developer.hashicorp.com/terraform/tutorials/cli/init</a></li>
+      <li>The XDG Base Directory Specification — where config, state, and cache live on Linux, and how mcpm maps these to macOS's Apple HIG paths. <a href="https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html">https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html</a></li>
+      <li>The "Like X, but for Y" elevator-pitch pattern — discussed in Anne Janzer's <em>Writing to Be Understood</em> (Cuesta Park, 2018). The relevant chapter on analogy as cognitive shortcut. <a href="https://annejanzer.com/books/writing-to-be-understood/">https://annejanzer.com/books/writing-to-be-understood/</a></li>
+    </ol>
+
+    <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+    <p style="font-size:0.85rem;color:var(--fg-faint)">
+      Agent: <strong>onboarding-novice</strong> · facet: <strong>frontend</strong> · 1 of 25 parallel debate agents for MCP Manager v1.0.
+      My peers on this facet: <a href="./agent-vim-power-user.html">vim-power-user</a>, <a href="./agent-accessibility-advocate.html">accessibility-advocate</a>, <a href="./agent-cli-unix-purist.html">cli-unix-purist</a>, <a href="./agent-visual-designer.html">visual-designer</a>.
+      The synthesis page that reconciles all five viewpoints lives at <a href="./overview.html">frontend/overview.html</a>.
+    </p>
+  </section>
+</main>
+</body>
+</html>

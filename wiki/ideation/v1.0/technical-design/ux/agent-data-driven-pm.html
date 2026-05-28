@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data-Driven PM — UX deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ux · data-driven-pm</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">ux overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Data-Driven PM's UX</h1>
+  <p class="lede">
+    "No telemetry" is not the same thing as "no measurement." It is the same thing as "measurement that the user owns." The locked v1.0 decision rules out anything leaving the user's machine, ever — and I agree with that decision; arguing against it would be a misread of the room. But the decision does not abolish my job. It re-targets it. The instrument I am building is not a dashboard in Amplitude; it is a single newline-delimited JSON file at <code>~/.local/state/mcpm/events.ndjson</code>, owned by the user, readable by the user, attachable to a bug report only if the user chooses. From that one file, every UX question my four peers are about to argue about becomes answerable — not from anecdote, not from "I think users feel," but from <code>jq</code>.
+  </p>
+
+  <p>
+    <span class="evidence-badge">No vendor telemetry — ever</span>
+    <span class="evidence-badge">Local NDJSON event log</span>
+    <span class="evidence-badge">User-readable, user-owned</span>
+    <span class="evidence-badge">Opt-in support bundles</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments with peers</a></li>
+      <li><a href="#design">Design — event schema, doctor analysis, support bundle</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      Let me say the uncomfortable thing first. Product management without measurement is just opinion theatre. Five UX agents (counting me) are about to argue for four days about whether <code>mcpm init</code> should auto-detect Claude Code first or ask for a name first; whether the trust gate should be three-key (<code>y/n/e</code>) or two-key; whether the per-server <code>idle_ttl_secs</code> default of 1800 is "fine" or "user-hostile." Every one of those debates is winnable with one week of <em>any</em> real user activity data. Without that data, the loudest agent wins. I refuse to be that agent, and I refuse to <em>let</em> the loudest agent win. So my contribution to this debate is not a louder voice. It is the infrastructure that makes the next debate quieter.
+    </p>
+
+    <p>
+      Here is what I have to internalize before I write a single line of design. The v1.0 locked decision is non-negotiable: <strong>no telemetry to vendor servers, ever.</strong> The product overview and technical design both state this in the strongest possible terms, repeated in the audience-facing docs. I will not relitigate it. The product overview is right — a developer tool for managing other developer tools, sitting in the trust path between editors and arbitrary MCP servers, cannot be the entity that exfiltrates anything. The moment <code>mcpmanagerd</code> opens a socket to <code>telemetry.mcp-manager.dev</code>, the entire trust story collapses, and rightly so. The right reference for the posture I want to occupy is Tailscale's: their data plane has never carried user content, and they make that promise legible — auditable, even — through architecture rather than through a checkbox<cite data-ref="tailscale-privacy"></cite>. We can do the same. We will do the same.
+    </p>
+
+    <p>
+      But "no telemetry" is a constraint, not a goal. The goal is: <em>the user's experience should improve over time, even if Anthropic never sees a single byte of usage data.</em> Those two things sound contradictory only if you have been working in the SaaS world too long. They are not contradictory. They are reconciled by the Local-First Software paper out of Ink &amp; Switch<cite data-ref="local-first"></cite>: data the user produces should live, by default, in a file the user owns, in a format the user can read, on the user's machine. The user gets the value; the vendor does not get the data. That essay is from 2019 and it is still the cleanest articulation of where I sit philosophically. The CLI/TUI surface MCP Manager is building is a local-first product almost by accident — the daemon is on localhost, the secrets are in the OS keychain, the configs are on disk in TOML. Adding a local event log is not a violation of that posture; it is a completion of it.
+    </p>
+
+    <p>
+      So my position is this. mcpm writes events — to <code>$XDG_STATE_HOME/mcp-manager/events.ndjson</code> on Linux, <code>~/Library/Application Support/mcp-manager/events.ndjson</code> on macOS — every time something interesting happens. "Interesting" means: command invoked (name only, never argv), command finished (duration, outcome enum), error raised (taxonomy code only, never message body), onboarding step entered, onboarding step completed, projection applied, secret operation outcome, TUI key pressed (key name only, never log content), follow-mode toggled. The file is newline-delimited JSON. The schema is documented, frozen at v1.0, and visible in <code>mcpm help events</code>. The user can <code>cat</code> it. The user can <code>jq</code> it. The user can <code>rm</code> it; it gets recreated empty and life goes on. The user can disable it entirely with <code>mcpmanagerd.events_disabled = true</code> in <code>~/.config/mcp-manager/config.toml</code>, and that flag is itself audit-logged because turning off your own measurement is a thing future-you might want to ask past-you about.
+    </p>
+
+    <p>
+      The litmus test I apply to every field in the schema is the one from the GDPR data-minimization principle<cite data-ref="gdpr-min"></cite>: <em>could a leak of this file embarrass the user?</em> Not the vendor — the user. If the answer is "maybe," the field does not get logged. That is why we hash command-shape (the command + its flag set, not its argv) but never log the argv itself; why we log <em>that</em> a secret operation happened but never the secret name; why we log error code <code>E_KEYCHAIN_UNAVAILABLE</code> but never the keychain backend's error string (which on Linux can occasionally include filesystem paths). Apple's privacy-by-design framing<cite data-ref="apple-privacy"></cite> calls this "on-device intelligence": the user's machine learns from the user's behavior; nothing leaves. That is precisely what I am proposing.
+    </p>
+
+    <p>
+      The killer feature this unlocks is <strong><code>mcpm doctor</code></strong>. Today, <code>mcpm doctor</code> as sketched in the technical design is a static system check — does the keychain exist, is the daemon running, is the trust manifest current. That is fine, and it is what every <code>doctor</code> command does (Homebrew, Flutter, rustup<cite data-ref="brew-doctor"></cite>). But static checks miss the most useful thing a doctor can tell a user, which is: <em>"based on your recent behavior, here is the pattern you keep hitting."</em> Example output I want to make possible: "You've hit <code>E_KEYCHAIN_UNAVAILABLE</code> 4 times in the last 7 days, all between 09:00 and 09:30 — your keychain is locked at login until you first interact with it. Consider running <code>security unlock-keychain login.keychain</code> in your shell profile, or move the affected secrets to env-var fallbacks." That is a real diagnosis. Without local events, there is no way to write it. With local events, it is a one-page Rust function over a streaming NDJSON reader.
+    </p>
+
+    <p>
+      The other killer feature is <strong><code>mcpm support-bundle</code></strong>. Today, when a user files a bug, the maintainer's first three replies are "what version are you on," "what command did you run," and "can you paste the logs." If we make a single command — <code>mcpm support-bundle</code> — package the user's events.ndjson (last 7 days, redacted to the schema), the daemon logs (already log-ring-buffered, redacted), the version, the OS, and the trust-manifest status into a single tarball, the user can attach that to the GitHub issue once and the maintainer has everything they need. Crucially, the user opens the tarball first and inspects it. Nothing leaves their machine until they choose to upload it. This is the pattern Sentry's CLI got right and that Datadog Agent's diagnose subcommand got right<cite data-ref="datadog-diagnose"></cite>: the support bundle is a file, not an HTTP POST. The user attaches it; the user controls it.
+    </p>
+
+    <p>
+      One concession. I would be lying if I said I never wished we had aggregated, anonymized, k-anonymous usage data from a real user population. There is a reason every product manager since the early 2010s has fallen in love with telemetry pipelines: they collapse a feedback loop that is otherwise weeks long into hours. The "Telemetry as a Tax" essays in the open-source community<cite data-ref="telemetry-tax"></cite> argue persuasively that this tradeoff is fundamentally exploitative when the user did not buy into it, and they are right; the Homebrew analytics fight in 2016<cite data-ref="brew-analytics"></cite> demonstrated that even <em>well-intentioned</em>, <em>aggregated</em>, <em>opt-out</em> telemetry generates a community trust crisis that takes years to repair. The locked decision in v1.0 is the right one because it is unambiguous and because it sets us up to never have that fight. Good. I will work inside it, and I will work hard inside it, because there is more leverage in <em>local</em> measurement than the team currently appreciates.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments with peers</h2>
+
+    <h3>Against <code>empathy-led-designer</code></h3>
+
+    <p>
+      We agree on more than we disagree on. Kind defaults, gentle tone, no shaming language in errors — yes to all of it. Where we will fight is over <em>verifiability</em>. The empathy-led designer's instinct is to say "we'll know it's kind when users tell us." That is a fine sentiment for a startup with a thousand users in a Slack community. It does not scale to an open-source distributable that we expect to ship to tens of thousands of developers most of whom we will never speak to. "Kindness" must be operationalized into something measurable, even if the only person measuring it is the user.
+    </p>
+
+    <p>
+      My specific ask of the empathy-led designer: every kind-default decision should generate an event the user can later inspect. The trust gate offers <code>y/n/e</code>; we log <code>trust.gate.choice</code> with outcome enum (<code>accept</code>, <code>reject</code>, <code>edit</code>, <code>esc</code>). The user, four months from now, can ask their own events file "have I ever rejected a project config? did I edit one before accepting?" and the answer is in the data. The kindness is not just in the prompt wording; it is also in the fact that the prompt's outcomes are recoverable. The empathy-led designer's tone audit becomes <em>their</em> tone audit, on <em>their</em> machine, with <em>their</em> history — not a panel of strangers' aggregated reactions. That is more empathetic, not less. The user's relationship with the tool becomes legible to the user themselves.
+    </p>
+
+    <p>
+      Where I push back: tone audits without instrumentation cannot detect drift. If a future contributor changes an error message from "the secret you wanted is missing" to "no secret found," the empathy-led designer cannot catch that in code review of every PR forever. But a local event with <code>error.code = E_SECRET_MISSING, abandon_rate</code> visible in <code>mcpm doctor</code> can flag a regression locally if the error suddenly correlates with an abort. Empathy with instrumentation is durable; empathy without it is brittle.
+    </p>
+
+    <h3>Against <code>onboarding-specialist</code></h3>
+
+    <p>
+      The onboarding-specialist's target is 60 seconds to value. I love the target. I will help them prove they hit it. Today, "60 seconds to value" is a number nobody measures because we cannot measure it. With the local event log, every <code>mcpm init</code> emits step-entered + step-completed events with timestamps. A user who runs the lucky-day flow can <code>jq</code> their own events and see exactly where their 60 seconds went. The onboarding-specialist gets to claim the number; the user gets to verify it.
+    </p>
+
+    <p>
+      The specific commitment I want from the onboarding-specialist's design: every prompt in <code>mcpm init</code> emits an event with a stable name. <code>onboarding.step.scope</code>, <code>onboarding.step.toolchain_detect</code>, <code>onboarding.step.docker_prompt</code>, <code>onboarding.step.service_register</code>, and the matching <code>.entered</code> / <code>.completed</code> pair. The funnel is then trivially reconstructable, locally, from the file. If a user gives up at <code>onboarding.step.docker_prompt</code> they will find the event with no matching completion and the user themselves can debug it. We expose <code>mcpm doctor --onboarding</code> which reads the events and reports: "your onboarding took 47 seconds; the slowest step was toolchain detection at 12 seconds."
+    </p>
+
+    <p>
+      Where we disagree: the onboarding-specialist will want to add a "did this help?" prompt at the end of the flow ("yes / no / kinda"). I will resist that aggressively. A satisfaction prompt that nobody ever reads is condescending; a satisfaction prompt whose data goes nowhere is worse. Instead, the post-init summary should print one literal sentence: "mcpm logged 7 events about your setup at <code>~/.local/state/mcpm/events.ndjson</code> — open it to see what was captured." That sets the precedent for the entire product. The user is not a research subject; the user is a co-author of their own observability.
+    </p>
+
+    <h3>Against <code>error-recovery-advocate</code></h3>
+
+    <p>
+      The 12-row error taxonomy in the current UX design is good. The error-recovery-advocate will want to grow it to 25 rows. I want to know, before they do, which of the original 12 rows actually fires in practice. Without data, error taxonomy bloat is the most insidious form of UX debt: every row added is a row maintained, translated, documented, and tested. Without local event counts, we cannot tell <code>E_REGISTRY_SIGFAIL</code> apart from <code>E_PROJECTION_DRIFT</code> on a frequency basis — and they probably differ by three orders of magnitude in real usage.
+    </p>
+
+    <p>
+      My specific ask: every error emission writes <code>error.code</code>, <code>error.recovered</code> (boolean: did the user run the suggested next command within 5 minutes?), and <code>error.recovery_attempt</code> (which command did they run after the error?). The user, four weeks in, can run <code>mcpm doctor --errors</code> and see: "you've hit <code>E_CONFIG_INVALID</code> 17 times; you recover via <code>mcpm config edit</code> 16 of those; in the one outlier you ran <code>mcpm uninstall --keep-config</code> — that's worth investigating." The recovery-advocate's taxonomy work becomes verifiable against the user's own behavior. They get to claim "my recovery paths work" and the user can confirm or deny it from their own machine.
+    </p>
+
+    <p>
+      Where we will fight: the recovery-advocate's natural instinct is to add even more sub-codes — <code>E_KEYCHAIN_UNAVAILABLE.libsecret</code>, <code>E_KEYCHAIN_UNAVAILABLE.kwallet</code>, <code>E_KEYCHAIN_UNAVAILABLE.macos_locked</code>. I will resist that without local count evidence. A taxonomy is a UX surface; a UX surface is a thing you can be wrong about; being wrong is fine if the data tells you and expensive if it does not.
+    </p>
+
+    <h3>Against <code>mental-model-coach</code></h3>
+
+    <p>
+      The mental-model-coach owns naming and jargon. I will ask them to operationalize one thing: <em>which commands actually get typed?</em> If 80% of users only ever invoke 4 of the 19 subcommands, the help-text screen needs to lead with those 4 and demote the other 15. We cannot know which 4 without measurement, and we cannot measure remotely. So the local events file has <code>command.invoked</code> with a name-only field (never argv), and <code>mcpm help</code> in some future v1.1 can sort its example list by the user's own most-used commands. The mental model is built by the user's behavior, in the help text the user sees, on the user's machine.
+    </p>
+
+    <p>
+      The mental-model-coach's specific naming choices — <code>projection</code> vs <code>sync</code>, <code>trust</code> vs <code>allow</code>, <code>idle_ttl_secs</code> vs <code>idle_timeout_seconds</code> — are all locally testable in a soft way: log <code>config.field_edited</code> events when a user edits a TOML field via <code>$EDITOR</code> integration (we know what changed because we already do the validation diff). If users edit <code>idle_ttl_secs</code> with anomalous frequency, that is a signal the default is wrong or the name is wrong. The user can see this in their own events. They can investigate it themselves.
+    </p>
+
+    <p>
+      Where we disagree: the mental-model-coach will want to rename things in v1.0. I will push back unless we have a precommitment to measure-then-rename in v1.1, because v1.0 is the moment we lock muscle memory and we should lock it once. Bad names with data beat good names without data.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design — event schema, doctor analysis, support bundle</h2>
+
+    <h3>The event log file</h3>
+
+    <p>
+      Path: <code>$XDG_STATE_HOME/mcp-manager/events.ndjson</code> on Linux, <code>~/Library/Application Support/mcp-manager/events.ndjson</code> on macOS. Rotation: 50&nbsp;MB cap, after which the oldest 25&nbsp;MB are deleted in place. The rotation point itself is logged as an event named <code>events.rotation</code>, because anything else creates a confusing gap. The file is owned by the user (mode 0600 on creation), written by <code>mcpmanagerd</code> through an append-only file handle that holds an advisory <code>flock</code> for each write. The CLI subcommands also write directly when invoked, using the same advisory lock; this avoids a daemon round-trip on every invocation and matches the architecture Tailscale uses for its local CLI bookkeeping<cite data-ref="tailscale-privacy"></cite>.
+    </p>
+
+    <h3>Schema (frozen for v1.0)</h3>
+
+    <p>One JSON object per line. Required fields on every event:</p>
+
+    <pre><code>{
+  "ts":           "2026-05-27T14:33:01.482Z",
+  "v":            1,
+  "event":        "command.completed",
+  "duration_ms":  142,
+  "outcome":      "ok"
+}</code></pre>
+
+    <p>Optional fields, by event family:</p>
+
+    <pre><code># command.* events
+"command":      "mcpm.install"           # name only, no argv
+"flag_shape":   "scope+runtime"          # SORTED flag-name set
+"outcome":      "ok" | "error" | "abort"
+"error_code":   "E_SECRET_MISSING"       # if outcome=error; taxonomy code only
+
+# onboarding.step.* events
+"step":         "toolchain_detect"
+"phase":        "entered" | "completed" | "aborted"
+
+# tui.key.* events
+"key":          "l"                      # raw key name; never the log content
+"pane":         "servers" | "logs" | "secrets" | "toolchains"
+
+# error.* events
+"error_code":   "E_KEYCHAIN_UNAVAILABLE"
+"recovered":    true                     # did user run suggested fix within 5 min?
+"recovery_cmd": "mcpm.secret.set"        # name only
+
+# secret.* events  (NEVER the secret name; only OUTCOME)
+"op":           "set" | "unset" | "list"
+"outcome":      "ok" | "keychain_unavailable" | "user_cancel"
+
+# projection.* events
+"tool":         "claude-code" | "cursor" | "zed"
+"action":       "sync" | "drift_detected" | "force"
+
+# trust.* events
+"choice":       "accept" | "reject" | "edit" | "esc"
+"config_hash":  "8a9f2d…"                # already a hash; same one in trust.toml</code></pre>
+
+    <h3>The privacy checklist (every event must pass)</h3>
+
+    <ol>
+      <li><strong>No filesystem paths.</strong> Not in any field, not in any error code. Paths leak project names, employer names, and personal directory structure.</li>
+      <li><strong>No argv.</strong> Ever. The command name (<code>mcpm.install</code>) is fine; the argument (<code>official/github-mcp@^0.4</code>) is not. The CLI surface decides what is identifying; the schema cannot.</li>
+      <li><strong>No secret names.</strong> "GITHUB_TOKEN" is identifying. "<code>secret.set</code> outcome=ok" is not.</li>
+      <li><strong>No error message bodies.</strong> Only taxonomy codes. The body of <code>E_KEYCHAIN_UNAVAILABLE</code> on Linux can include a libsecret path; the code does not.</li>
+      <li><strong>No content from log streams.</strong> The TUI emits <code>tui.key.f</code> when the user toggles follow mode; it does not emit anything about what was on screen.</li>
+      <li><strong>Hashes are deterministic but not reversible.</strong> <code>flag_shape</code> is the sorted, hyphen-joined list of flag names (e.g. <code>scope+runtime</code>) — a low-cardinality fingerprint, not a hash of the entire command line.</li>
+      <li><strong>The user can disable it entirely.</strong> One line of TOML: <code>events_disabled = true</code>. The fact of disabling is itself audit-logged, so future-you can see when past-you turned it off and why (the audit log records the editor invocation).</li>
+      <li><strong>The file is human-readable.</strong> Newline-delimited JSON, not Protocol Buffers, not SQLite, not Parquet. The user opens it in <code>less</code>. That is the entire point. The NDJSON convention is documented and widely supported<cite data-ref="ndjson"></cite>.</li>
+    </ol>
+
+    <h3>What we do NOT measure</h3>
+
+    <ul>
+      <li><strong>Anything about which MCP servers a user installs.</strong> Server names are identifying (org names, project names). We log <code>command=mcpm.install</code> but not the source.</li>
+      <li><strong>Per-server uptime, error counts, or invocation counts.</strong> Those are interesting to <em>us</em>; they would help us prioritize fixes. They are also a fingerprint. A user who runs <code>jira-mcp</code> and <code>internal-pr-mcp</code> together has a different fingerprint than one who runs <code>github-mcp</code> alone.</li>
+      <li><strong>Hostnames, IPs, network identifiers.</strong> Nothing about the machine's network position.</li>
+      <li><strong>Timing precise enough to fingerprint.</strong> We log <code>duration_ms</code> rounded to the nearest millisecond, not nanoseconds. Microbenchmarking is not the goal; UX is.</li>
+      <li><strong>Anything cross-session-correlatable.</strong> No install ID, no session ID, no machine ID. The events are an unkeyed stream of facts about <em>this</em> machine, joinable only by the user themselves.</li>
+    </ul>
+
+    <h3><code>mcpm doctor</code> as event-pattern analyzer</h3>
+
+    <p>
+      The doctor command grows a new mode. <code>mcpm doctor</code> with no flags runs the existing static checks (daemon up, keychain reachable, trust manifest valid). <code>mcpm doctor --history</code> additionally reads the events file and surfaces patterns. The patterns we look for in v1.0 (each a single <code>jq</code>-style pass over the file, no ML, no inference):
+    </p>
+
+    <ul>
+      <li><strong>Recurring error.</strong> Same <code>error_code</code> hit ≥ 3× in the last 7 days. Suggest the fix the taxonomy already documents.</li>
+      <li><strong>Recurring time-of-day error.</strong> Same <code>error_code</code> consistently within a 60-minute window of the day. Suggest a possible environment cause (keychain lock at login, VPN reconnect, scheduled job).</li>
+      <li><strong>Abandoned onboarding.</strong> An <code>onboarding.step.*.entered</code> event with no matching <code>.completed</code> or <code>.aborted</code> within 5 minutes. Offer to resume.</li>
+      <li><strong>Slow command.</strong> A <code>command.completed</code> with <code>duration_ms</code> &gt; 3× the median for that command. Suggest <code>mcpm logs --daemon</code>.</li>
+      <li><strong>Drift after edit.</strong> A <code>projection.drift_detected</code> within 24h of a <code>config.field_edited</code>. Suggest <code>mcpm projection diff</code>.</li>
+      <li><strong>Trust regret.</strong> A <code>trust.choice = accept</code> followed within 24h by an explicit revoke. (Useful UX learning for the user themselves.)</li>
+    </ul>
+
+    <p>Worked example output:</p>
+
+    <pre><code>$ mcpm doctor --history
+
+   ✓ daemon running (since 2 hours ago)
+   ✓ keychain reachable
+   ✓ trust manifest valid (refreshed 6h ago)
+
+   Patterns from your recent activity:
+
+   ⚠ E_KEYCHAIN_UNAVAILABLE hit 4× in the last 7 days.
+     All occurrences between 08:51 and 09:14 local time.
+     Possible cause: keychain is locked at login until first interactive use.
+     Try:  security unlock-keychain ~/Library/Keychains/login.keychain-db
+     Docs: https://docs.mcp-manager.dev/v1.0/errors/keychain-unavailable
+
+   ℹ onboarding.step.docker_prompt took 38s (median for this step: 9s).
+     If Docker isn't useful for you, set docker_enable = false in
+     ~/.config/mcp-manager/config.toml to skip the prompt on re-init.
+
+   ℹ projection drift detected on cursor 2 days ago, not resolved.
+     Run: mcpm projection diff cursor</code></pre>
+
+    <h3><code>mcpm support-bundle</code></h3>
+
+    <p>
+      The support-bundle subcommand packages the events log, the daemon log ring buffer, the trust manifest status, and the version into a single tarball. Nothing leaves the machine. The user attaches the tarball to a GitHub issue if they choose. The pattern is the one Datadog's <code>agent diagnose</code> codified<cite data-ref="datadog-diagnose"></cite> and that Sentry's CLI ships variations of: support data is a file the user inspects, not an HTTP POST the vendor intercepts.
+    </p>
+
+    <pre><code>$ mcpm support-bundle
+
+   This will package the following into a tarball you can attach to a bug report:
+
+     events.ndjson           ~/.local/state/mcp-manager/events.ndjson
+                             (last 7 days, 1,847 events, 240 KB)
+     daemon.log              ~/.local/state/mcp-manager/audit/daemon.log
+                             (last 24h, 1.2 MB)
+     servers/                last 24h of per-server ring buffers (4 files, 3.1 MB)
+     trust.status            registry pubkey trust status (no secrets)
+     version.txt             mcpm 1.0.0, mcpmanagerd 1.0.0
+
+   None of this leaves your machine. You attach the tarball yourself if you choose.
+
+   Inspect first?  [Y/n]: Y
+
+   $ less ~/Downloads/mcpm-support-bundle-20260527T143301.tar.gz
+
+   Looks fine? Open the GitHub issue tracker?  [y/N]:</code></pre>
+
+    <p>
+      The bundle contents are exactly the schema-restricted events; there is no separate "send more detail" mode. We do not have a bigger version of the data to give the maintainer. What the user sees is everything that exists. This is the property that distinguishes a privacy-preserving telemetry posture from a privacy-theatre one<cite data-ref="dp-survey"></cite>: the file the user inspects <em>is</em> the data, not a redacted view onto a richer dataset held elsewhere.
+    </p>
+
+    <h3>Component-by-component instrumentation map</h3>
+
+    <table class="compare">
+      <thead><tr><th>UX surface</th><th>Events emitted</th><th>What the user learns locally</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Onboarding flow (<code>mcpm init</code>)</td>
+          <td><code>onboarding.step.{name}.{entered|completed|aborted}</code></td>
+          <td>Time per step; abort points; total wall-clock to first usable state.</td>
+        </tr>
+        <tr>
+          <td>TUI experience</td>
+          <td><code>tui.key.{name}</code>, <code>tui.pane.focus</code>, <code>tui.follow.toggle</code></td>
+          <td>Which keys the user actually uses; whether the keymap matches their muscle memory.</td>
+        </tr>
+        <tr>
+          <td>CLI experience</td>
+          <td><code>command.{invoked|completed}</code> with <code>flag_shape</code></td>
+          <td>Top-5 commands by frequency; <code>--json</code> mode adoption; flag-combination patterns.</td>
+        </tr>
+        <tr>
+          <td>Config files</td>
+          <td><code>config.field_edited</code> with field name only</td>
+          <td>Which TOML fields the user touches via <code>$EDITOR</code> (defaults to question).</td>
+        </tr>
+        <tr>
+          <td>12-row error taxonomy</td>
+          <td><code>error.raised</code>, <code>error.recovered</code></td>
+          <td>Top errors; recovery success rate by code; time-of-day clustering.</td>
+        </tr>
+        <tr>
+          <td>4 first-launch transcripts</td>
+          <td>One <code>onboarding.flow</code> event per transcript (lucky/CI/project/cloned)</td>
+          <td>Which flow the user actually took; how it diverged from the documented script.</td>
+        </tr>
+        <tr>
+          <td>Trust gate UX</td>
+          <td><code>trust.gate.choice</code></td>
+          <td>Accept/edit/reject ratio over time; trust regret (accepts followed by revokes).</td>
+        </tr>
+        <tr>
+          <td>mcpm.toml inheritance</td>
+          <td><code>config.inherit.{all|allowlist|none}</code></td>
+          <td>Which inheritance mode they prefer in practice.</td>
+        </tr>
+        <tr>
+          <td>$EDITOR integration</td>
+          <td><code>editor.invoked</code>, <code>editor.saved.{valid|invalid}</code></td>
+          <td>Validation-failure rate after $EDITOR sessions; signals confusing field names.</td>
+        </tr>
+        <tr>
+          <td>Idle TTL</td>
+          <td><code>server.idle_stop</code>, <code>config.field_edited = idle_ttl_secs</code></td>
+          <td>Do users edit the TTL? At what cadence does it actually trigger?</td>
+        </tr>
+        <tr>
+          <td>Singleton vs per-client</td>
+          <td><code>server.spawn</code> with <code>mode=singleton|per-client</code></td>
+          <td>Which mode is dominant in their personal setup.</td>
+        </tr>
+        <tr>
+          <td>mdbook docs</td>
+          <td><code>help.docs_link_opened</code></td>
+          <td>Which doc pages they actually opened from inside the CLI.</td>
+        </tr>
+        <tr>
+          <td>Update notifications</td>
+          <td><code>update.notification.{shown|dismissed|accepted}</code></td>
+          <td>Notification fatigue signal; user's own opt-out rate.</td>
+        </tr>
+        <tr>
+          <td>Accessibility</td>
+          <td><code>tui.theme</code> on startup, <code>tui.no_color</code> presence</td>
+          <td>Which theme they run; whether NO_COLOR is in their env.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>What the user does with all this</h3>
+
+    <p>
+      The bet I am making is the same one k9s makes when it shows local-only counters in its status bar, and the same one Vim makes when it lets you grep <code>:history</code>. Most users will never open the file. That is fine. The 5% who do will be the people writing blog posts, opening high-quality bug reports, contributing PRs, and answering other users' questions on the issue tracker. Local-first measurement creates a high-signal subset of users who can answer their own questions and help others answer theirs. That subset compounds. It is worth more than aggregate dashboards a vendor controls but a user has never read.
+    </p>
+
+    <p>
+      My closing pitch to the four peers: every one of your UX claims becomes verifiable, locally, by the very user you are designing for. The empathy-led designer's tone choices are checkable by the user's own abandon rate. The onboarding-specialist's 60-second target is checkable by the user's own timestamps. The error-recovery-advocate's recovery paths are checkable by the user's own follow-up commands. The mental-model-coach's naming choices are checkable by the user's own edit frequency. None of this data leaves the machine. All of it leaves the user smarter about their own tools. That is the kind of product management I want to do — the kind I think we can <em>only</em> do, given the locked decision — and I think it is better than the one we would do with a vendor pipeline anyway.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li id="cite-local-first">
+        Kleppmann, M., Wiggins, A., van Hardenberg, P., McGranaghan, M. (2019). "Local-First Software: You own your data, in spite of the cloud." Onward! 2019 / Ink &amp; Switch. <a href="https://www.inkandswitch.com/local-first/">https://www.inkandswitch.com/local-first/</a>
+      </li>
+      <li id="cite-tailscale-privacy">
+        Tailscale. "Privacy policy &amp; data handling." <a href="https://tailscale.com/security">https://tailscale.com/security</a> and the company blog series on coordination-plane vs data-plane separation: <a href="https://tailscale.com/blog/how-tailscale-works">https://tailscale.com/blog/how-tailscale-works</a>
+      </li>
+      <li id="cite-gdpr-min">
+        Regulation (EU) 2016/679, Article 5(1)(c) — data minimization principle. <a href="https://gdpr-info.eu/art-5-gdpr/">https://gdpr-info.eu/art-5-gdpr/</a>
+      </li>
+      <li id="cite-apple-privacy">
+        Apple. "Apple Platform Security: On-device intelligence and Private Cloud Compute." <a href="https://support.apple.com/guide/security/welcome/web">https://support.apple.com/guide/security/welcome/web</a>
+      </li>
+      <li id="cite-brew-doctor">
+        Homebrew. <code>brew doctor</code> source and design. <a href="https://docs.brew.sh/Manpage#doctor-dr-list-checks-d-debug-audit-debug">https://docs.brew.sh/Manpage</a>
+      </li>
+      <li id="cite-datadog-diagnose">
+        Datadog Agent. "Send flare / agent diagnose." <a href="https://docs.datadoghq.com/agent/troubleshooting/send_a_flare/">https://docs.datadoghq.com/agent/troubleshooting/send_a_flare/</a>
+      </li>
+      <li id="cite-telemetry-tax">
+        "Telemetry as a Tax" — community essays on opt-out usage data in open-source tools. Representative discussion: Drew DeVault, "Open source telemetry is not respectful." <a href="https://drewdevault.com/2020/12/12/Free-software-and-telemetry.html">https://drewdevault.com/2020/12/12/Free-software-and-telemetry.html</a>
+      </li>
+      <li id="cite-brew-analytics">
+        Homebrew analytics — community discussion 2016. <a href="https://github.com/Homebrew/brew/issues/142">https://github.com/Homebrew/brew/issues/142</a> and the eventual opt-out documentation: <a href="https://docs.brew.sh/Analytics">https://docs.brew.sh/Analytics</a>
+      </li>
+      <li id="cite-ndjson">
+        NDJSON specification — newline-delimited JSON. <a href="https://github.com/ndjson/ndjson-spec">https://github.com/ndjson/ndjson-spec</a>
+      </li>
+      <li id="cite-dp-survey">
+        Dwork, C., Roth, A. (2014). "The Algorithmic Foundations of Differential Privacy" — particularly the framing of "the data the user inspects is the data" vs "redacted view onto a richer dataset." <a href="https://www.cis.upenn.edu/~aaroth/Papers/privacybook.pdf">https://www.cis.upenn.edu/~aaroth/Papers/privacybook.pdf</a>
+      </li>
+      <li id="cite-k9s-local">
+        k9s — local-only counters / state surface. <a href="https://k9scli.io/topics/keys/">https://k9scli.io/topics/keys/</a> and the source at <a href="https://github.com/derailed/k9s">https://github.com/derailed/k9s</a>
+      </li>
+      <li id="cite-mozilla-glean">
+        Mozilla. "Glean: Privacy-preserving telemetry SDK — categorical-data principles." <a href="https://mozilla.github.io/glean/book/user/adding-glean-to-your-project/index.html">https://mozilla.github.io/glean/book/user/</a> — useful comparison point even though our design avoids any send step.
+      </li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

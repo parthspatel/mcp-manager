@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Error Recovery Advocate — UX deep dive — MCP Manager v1.0</title>
+<meta name="description" content="Every error has code, what, why, what-to-do. Recovery is a product feature.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ux · error-recovery-advocate</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">ux overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Error Recovery Advocate's UX</h1>
+  <p class="lede">Every error has code, what-happened, why, what-to-do — and ends with the next command to run. The 12-row taxonomy is the contract; <code>--json</code> is the envelope; the mdbook is the runbook. Recovery is the product, not the apology.</p>
+
+  <p>
+    <span class="evidence-badge">12-row taxonomy = contract</span>
+    <span class="evidence-badge">RFC 7807-shaped JSON envelope</span>
+    <span class="evidence-badge">Suggested next command on every error</span>
+    <span class="evidence-badge">No silent failure</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Opening thoughts</a></li>
+      <li><a href="#arguments">Arguments against my four peers</a></li>
+      <li><a href="#design">Design — enriched taxonomy, JSON envelope, runbook, previews</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Opening thoughts</h2>
+
+    <p>Most developer tools treat errors as the place where the design ends — a stack trace, an exit code, maybe a sentence of apology, and then the user is on their own. MCP Manager cannot afford that posture. The whole point of the project is that <em>setting up MCP servers is currently a disaster of secrets, runtimes, projection files, and editor restarts</em>, and the failure modes of that disaster are exactly where users will form their opinion of <code>mcpm</code>. If we want the tool to feel kind and competent we have to design the unhappy path as carefully as the happy path. That means treating every error as a four-part artifact: a stable <strong>code</strong> (the <code>E_*</code> prefix that the docs and the JSON envelope agree on), a <strong>what-happened</strong> sentence in plain English, a <strong>why</strong> sentence that gives the user the mental model they need to not be confused next time, and a <strong>what-to-do</strong> line that names — or actually prints — the next command. Four fields, not three; the "why" is what separates an error message from a runbook.</p>
+
+    <p>The 12-row taxonomy already documented in <a href="../../ux-design.html#errors">ux-design.html</a> is the right contract, and I am not arguing to expand it. Twelve is the right number — it covers the entire surface a v1.0 user will hit (secrets, OOM, crashes, config, registry, projection, project-trust, keychain, daemon version, spec) without sprawling into the long tail of "could happen, never will". My argument is that the existing taxonomy still reads as a <em>list of meanings</em> rather than a <em>list of recoveries</em>, and that the gap between those two shapes is exactly the gap between an apology and a fix. Each row currently has "Code · Meaning · Typical fix". I want to lock the contract to <strong>five</strong> columns: <code>code</code>, <code>short_msg</code>, <code>what_happened</code>, <code>why</code>, <code>remedy + related_cmd</code>. Same twelve rows, four times the actionability. Each row also pins to a one-page mdbook runbook at <code>https://docs.mcp-manager.dev/errors/E_*</code>; that URL ships in the error envelope so the JSON consumers (CI, editor extensions, future GUI) can deep-link directly into the documentation.</p>
+
+    <p>The second non-negotiable: <strong>the error message ends with a command</strong>. Not a suggestion, not a verb ("try restarting"), but the actual literal command, in a monospace block, ready to copy. The <code>E_SECRET_MISSING</code> example in the existing UX doc already does this — <code>$ mcpm secret set GITHUB_TOKEN</code> — and every other row must match that pattern. Where the next command is parametric (e.g. <code>E_PROJECTION_DRIFT</code> needs a tool name), we interpolate from the failed call's context. The TUI exposes this with a <code>y</code> binding that copies the suggested command to the clipboard, matching <a href="https://k9scli.io/topics/commands/">k9s</a>'s muscle memory for "copy the thing the modal is showing me". The CLI prints it on the last line of stderr, deliberately separated by a blank line so it's easy to spot in a wall of log output. When users tell other users how to recover, they'll do it by pasting the line we suggested. That's success.</p>
+
+    <p>The third non-negotiable: <strong>preview before destruction</strong>. <code>mcpm update</code> already shows a diff before applying; that pattern must extend uniformly to every destructive call. <code>mcpm uninstall</code> must list the files it will touch <em>before</em> asking the <code>y/N</code>; <code>mcpm secret unset</code> must show which servers depend on that secret before purging; <code>mcpm registry remove</code> must show how many installed servers came from that registry. Preview-before-destruction is part of the error-recovery surface because most "errors" the user reports will actually be self-inflicted: they ran a destructive command and the system did exactly what they asked. The cure is to make "exactly what they asked" visible in advance. <a href="https://cli.github.com/manual/gh_repo_delete">GitHub CLI</a>'s paranoid <code>--confirm</code> flag — type the repo name back — is the right reference here for the truly irreversible cases (purge a secret, wipe state); the rest get a normal <code>y/N</code> with a list above it.</p>
+
+    <p>Fourth: <strong>no silent failure, ever</strong>. If we cannot do the thing, we refuse loudly and audit-log the refusal. If we successfully do the thing, we audit-log the success. The audit JSONL is the source of truth for "what happened, when" — and it must be readable by <code>mcpm logs --audit</code> with the same four-field shape as a live error (code, what, why, what-to-do-now-or-next-time). Stack traces stay in <code>mcpm logs --daemon</code>; the user-facing error UX is the curated subset. This is the <a href="https://datatracker.ietf.org/doc/html/rfc7807">RFC 7807</a> insight — separate the machine-readable problem details from the human-readable narrative, then make both available.</p>
+
+    <p>Fifth, and this is where my peers and I will fight the most: <strong>refusal is not an error</strong>. The trust gate refusing to load a cloned-elsewhere <code>.mcp-manager.toml</code> is a successful enforcement, not a failure — but the user-experience of that refusal must still be a four-field artifact. <code>E_PROJECT_UNTRUSTED</code> is a refusal, not a crash, and its recovery (<code>mcpm project allow</code>) is the user choosing to override. The empathy-led-designer is going to want gentler language for these; the mental-model-coach is going to want different names. I'll defend the structural pattern — refusal-with-recovery is still <code>E_*</code> shaped, still has a <code>related_cmd</code>, still ends with a next command — and yield on tone within that structure.</p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments against my four peers</h2>
+
+    <h3>Against <code>empathy-led-designer</code></h3>
+
+    <p>The empathy-led designer will read the existing error taxonomy, recoil at the <code>E_KEYCHAIN_UNAVAILABLE</code>-style codes, and propose softening every message into prose: "We couldn't reach your keychain — here's what you can try." She is right about tone, and wrong about structure. Tone is paint; structure is plumbing. The <code>E_*</code> code must remain in the output, because the moment a user pastes the error into a search engine or a GitHub issue, they need the canonical lookup key. <a href="https://stripe.com/docs/error-codes">Stripe's error codes</a> work for the same reason — <code>card_declined</code> is a contract between Stripe, the docs, support, and the developer. Strip it and you've broken the relationship. So my proposal to her: keep the code <em>and</em> rewrite the prose. The four-field shape is:</p>
+
+    <pre><code>✗ E_SECRET_MISSING — github needs a token that isn't set up yet.
+
+  What happened
+    github won't start because GITHUB_TOKEN isn't in your keychain or environment.
+
+  Why
+    MCP Manager refuses to spawn servers with missing secrets — silently
+    starting with a placeholder would leak into your editor as an
+    authenticated session that isn't authenticated.
+
+  What to do
+    $ mcpm secret set GITHUB_TOKEN
+    Then re-run:
+    $ mcpm start github
+
+  More:  https://docs.mcp-manager.dev/errors/E_SECRET_MISSING</code></pre>
+
+    <p>The empathy designer gets her prose voice in "What happened" and "Why"; I get my code, my command, and my doc link. She'll also push to soften <code>refuse</code> to <code>can't</code> — and she should win that on <code>E_KEYCHAIN_UNAVAILABLE</code> (truly an external failure) but lose it on <code>E_PROJECT_UNTRUSTED</code> (we are deliberately refusing). The verb has to match the agency. <a href="https://www.nngroup.com/articles/error-message-guidelines/">Nielsen Norman</a>'s error-message guidelines are clear on this: errors should be polite, precise, and constructive — never euphemistic. Euphemism erases the user's mental model of <em>what the system is doing</em>, which is the opposite of empathy.</p>
+
+    <p>Where I cede ground: the order of fields can be reordered for kindness ("What happened" first, "Why" second, "What to do" last with visual prominence). The <code>✗</code> glyph can soften to <code>•</code> for refusals-by-design (project untrusted) and stay sharp for crashes (server failed). The TUI modal title can be "github needs a token" rather than "ERROR: E_SECRET_MISSING" — but the code stays in the body, above the fold. Tone is paint.</p>
+
+    <h3>Against <code>data-driven-pm</code></h3>
+
+    <p>The data-driven PM will want a counter on each <code>E_*</code> code: how often does it fire, what's the recovery rate, what's the time-to-recovery. He will be tempted to add a network endpoint that ships this telemetry home. <strong>No.</strong> The product is local-first and privacy-respecting; the audit JSONL on the user's own disk is the only place this data exists. But within that constraint, his instinct is right, and we should harness it: <code>mcpm doctor</code> can read the user's own audit log and tell <em>them</em> what their top errors are over the last 30 days. That's a feature, not telemetry — the user gets to see their own pain points and we never know about it.</p>
+
+    <p>The audit-log entry shape I want for every error matches the four-field user-facing shape, so <code>doctor</code>'s aggregation is trivial:</p>
+
+    <pre><code>{"ts":"2026-05-27T14:33:12.118Z","level":"error","actor":"cli",
+ "code":"E_SECRET_MISSING","server":"github","secret":"GITHUB_TOKEN",
+ "what":"github won't start because GITHUB_TOKEN is not configured",
+ "why":"missing-secrets refuse policy",
+ "remedy_cmd":"mcpm secret set GITHUB_TOKEN",
+ "doc":"https://docs.mcp-manager.dev/errors/E_SECRET_MISSING"}</code></pre>
+
+    <p>This is RFC-7807-shaped (<code>type</code>, <code>title</code>, <code>detail</code>, <code>instance</code>) with concrete-recovery extension fields, which is exactly what RFC 7807 anticipates in its "extension members" section. Where the PM and I clash: he'll want a <code>severity</code> field with five levels (debug/info/warn/error/fatal); I'll push back to two (<code>error</code> and <code>refusal</code>) because the user doesn't care about our internal taxonomy of badness, only about whether they can move on. If <code>doctor</code> wants to compute trends, it can do so on the recovery latency (gap between the error line and the successful-retry line in the same actor's audit stream), not on a severity field we invented.</p>
+
+    <p>He'll also push for an <code>--exit-code-stable</code> contract so CI can branch on errors. That's a good fight to lose: each <code>E_*</code> maps to a stable exit code (the <a href="https://docs.rs/anyhow/latest/anyhow/">anyhow</a> / <a href="https://docs.rs/color-eyre/latest/color_eyre/">color-eyre</a> ecosystem makes this easy on the implementation side), and the <code>--json</code> envelope carries the code as a string so non-shell consumers don't need to memorize integers. The exit codes themselves are documented in the mdbook, alongside the error pages.</p>
+
+    <h3>Against <code>onboarding-specialist</code></h3>
+
+    <p>The onboarding specialist's 60-seconds-to-value mandate will tempt her to <em>swallow errors during onboarding</em> — to keep the flow moving by silently retrying, picking defaults, or deferring problems. That instinct is wrong by an order of magnitude. The errors that hit during the first 60 seconds are the most teachable moments in the entire lifecycle of the tool; if we paper over them, we rob the user of the model they need for every subsequent error. The right move is the opposite: errors during onboarding get the <em>most</em> hand-holding, not the least.</p>
+
+    <p>Concretely, the four first-launch transcripts in the worst-case branches should each end with a recovery, not a failure:</p>
+
+    <ul>
+      <li><strong>Transcript W1 — keychain missing on Linux.</strong> <code>mcpm init</code> detects no libsecret / no kwallet, emits <code>E_KEYCHAIN_UNAVAILABLE</code> with a remedy that names the user's distro's keychain package (we know the distro from <code>/etc/os-release</code>). Recovery: print <code>apt install gnome-keyring</code> or equivalent, then <code>mcpm init --resume</code>.</li>
+      <li><strong>Transcript W2 — registry unreachable on first sync.</strong> <code>mcpm init</code> hits <code>E_REGISTRY_UNREACHABLE</code>; the recovery is to offer offline mode (cached/baked-in registry index), audit-log the offline mode entry, and resume with a banner that the registry will refresh on next online use. Critically: do <em>not</em> hide the error. Onboarding tells the user: "we couldn't reach the registry; we'll proceed with the baked-in index. Run <code>mcpm registry refresh</code> when you're online."</li>
+      <li><strong>Transcript W3 — service-register fails (no systemd, no launchd permissions).</strong> Detected, audit-logged as <code>service.register.failed</code>, recovery is "we'll run the daemon foreground for this session; to set up auto-start later, run <code>mcpm doctor --fix-service</code>". The onboarding does not abort.</li>
+      <li><strong>Transcript W4 — project trust gate refuses a cloned <code>.mcp-manager.toml</code>.</strong> Not an error in the colloquial sense, but presented with the same four-field shape: <code>E_PROJECT_UNTRUSTED</code> + remedy + <code>mcpm project allow</code>.</li>
+    </ul>
+
+    <p>Where she and I align: every error during onboarding should suggest a <em>continuation</em>, not just a fix. "Run X, then re-run <code>mcpm init --resume</code>" — that <code>--resume</code> flag is non-negotiable. It picks up at the step that failed, not from scratch. Idempotency is the substrate; resume is the affordance.</p>
+
+    <h3>Against <code>mental-model-coach</code></h3>
+
+    <p>The mental-model coach will object to the <code>E_</code> prefix on the grounds that codes are jargon. He'll propose human names: <code>SecretMissing</code>, <code>ServerCrashed</code>, <code>RegistryUnreachable</code>. He's half right. The codes work because they're <em>greppable</em> — across docs, audit logs, GitHub issues, and stack traces — and PascalCase names work equally well as long as we're consistent. The deeper objection is real though: the codes need to be <strong>nameable</strong>, not just unique. <code>E_SPEC_UNSUPPORTED</code> is fine; <code>E_DAEMON_VERSION</code> is bad — what about the daemon version? Stale? Future? Mismatched? I'll concede a rename to <code>E_DAEMON_TOO_OLD</code> and audit the rest of the taxonomy for similar ambiguity. Names should be self-describing the first time you read them; the runbook is for the second time.</p>
+
+    <p>The bigger fight is about the mental model the codes establish. The coach wants to group errors into a small number of <em>kinds</em> — "external resource", "user input", "internal", "policy refusal" — so users can route them mentally. I agree, and I want that to be a field in the JSON envelope: <code>category: "external" | "input" | "internal" | "refusal"</code>. The taxonomy then teaches the user: "external" errors are the network's fault and retry is reasonable; "input" errors are yours and you should fix the input; "internal" errors are ours and you should file a bug; "refusal" errors are policy and you choose whether to override. That four-way split matches the four-part error structure (code/what/why/what-to-do) and gives the runbook a natural shelf taxonomy.</p>
+
+    <p>The coach will also push for the word <em>"error"</em> to disappear from refusals: a trust-gate refusal is not an error, it's a <em>decision</em>. I'll buy it: the TUI modal for <code>E_PROJECT_UNTRUSTED</code> should be styled distinctly (no red, no ✗) — a yellow gate icon, a clear "you can allow this" framing. The CLI can use a different glyph (<code>⊘</code> for refusal vs <code>✗</code> for failure). The JSON envelope still carries the code; the human surface adapts its voice.</p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3>Enriched 12-row error taxonomy</h3>
+
+    <p>Five columns, twelve rows, frozen. The <code>remedy</code> column is now a literal copy-pasteable command (with <code>&lt;NAME&gt;</code>-style placeholders only where context isn't known). The <code>related_cmd</code> column points at the deeper subcommand the user runs to investigate or recover. The <code>category</code> column groups by mental model (external / input / internal / refusal). Every row links into a runbook page at <code>docs.mcp-manager.dev/errors/E_*</code>.</p>
+
+    <table class="compare">
+      <thead><tr><th>Code · cat.</th><th>What happened</th><th>Why</th><th>Remedy (copy-pasteable)</th><th>Related cmd</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>E_SECRET_MISSING</code><br><em>input</em></td>
+          <td>Server requires a secret that isn't in the keychain or env.</td>
+          <td>We refuse to spawn with a missing-value fallback — that would leak into the editor as an unauthenticated session.</td>
+          <td><code>mcpm secret set &lt;NAME&gt;</code></td>
+          <td><code>mcpm secret list</code></td>
+        </tr>
+        <tr>
+          <td><code>E_SERVER_OOM</code><br><em>internal</em></td>
+          <td>Server was killed for OOM. Memory limit hit or system memory pressure.</td>
+          <td>cgroup or RLIMIT_AS killed it. May be a leak, may be a too-tight limit.</td>
+          <td><code>mcpm config put server.&lt;name&gt;.memory_max_mb 1024</code></td>
+          <td><code>mcpm logs &lt;name&gt; --since=10m</code></td>
+        </tr>
+        <tr>
+          <td><code>E_SERVER_FAILED</code><br><em>internal</em></td>
+          <td>Server crashed too many times in the restart window; mcpmanagerd stopped retrying.</td>
+          <td>5 crashes in 60s exceeded the backoff budget. State is now <em>failed</em>; restart is manual to avoid log-flooding.</td>
+          <td><code>mcpm restart &lt;name&gt;</code></td>
+          <td><code>mcpm logs &lt;name&gt; --since=5m</code></td>
+        </tr>
+        <tr>
+          <td><code>E_CONFIG_INVALID</code><br><em>input</em></td>
+          <td>Canonical config failed validation. TOML parse, schema, type, or constraint error.</td>
+          <td>Validator runs on every write; bad config never lands on disk.</td>
+          <td><code>mcpm config edit  # error at line N:M shown above</code></td>
+          <td><code>mcpm config validate</code></td>
+        </tr>
+        <tr>
+          <td><code>E_CONFIG_CONFLICT</code><br><em>internal</em></td>
+          <td>Canonical config changed on disk while a concurrent put was in flight.</td>
+          <td>CAS guard rejected your put because the file's hash moved (another tool, another shell, or $EDITOR raced).</td>
+          <td><code>mcpm config get &amp;&amp; # re-issue your change</code></td>
+          <td><code>mcpm logs --audit --grep config.put</code></td>
+        </tr>
+        <tr>
+          <td><code>E_REGISTRY_UNREACHABLE</code><br><em>external</em></td>
+          <td>Registry network fetch failed (DNS, TLS, 5xx, timeout).</td>
+          <td>Network or upstream registry is down. Cached index is still usable for <code>mcpm search</code>.</td>
+          <td><code>mcpm registry refresh --retry  # or wait; cache still works</code></td>
+          <td><code>mcpm registry list</code></td>
+        </tr>
+        <tr>
+          <td><code>E_REGISTRY_SIGFAIL</code><br><em>refusal</em></td>
+          <td>Registry index signature did not verify against the trusted pubkey.</td>
+          <td>Either the registry was compromised, the key was rotated upstream, or your trust manifest is stale.</td>
+          <td><code>mcpm trust refresh &amp;&amp; mcpm registry verify</code></td>
+          <td><code>mcpm trust status</code></td>
+        </tr>
+        <tr>
+          <td><code>E_SPEC_UNSUPPORTED</code><br><em>refusal</em></td>
+          <td>Server advertises an MCP spec version mcpmanagerd's allow-list doesn't accept.</td>
+          <td>Future or deprecated spec; refusing prevents undefined-behavior bugs.</td>
+          <td><code>mcpm config put server.&lt;name&gt;.spec "2026-03-15"  # if you trust it</code></td>
+          <td><code>mcpm test &lt;name&gt;</code></td>
+        </tr>
+        <tr>
+          <td><code>E_PROJECTION_DRIFT</code><br><em>refusal</em></td>
+          <td>An editor config's managed-block was hand-edited; projection refuses to overwrite blind.</td>
+          <td>You (or another tool) modified the block we own. Blind overwrite would lose your edit.</td>
+          <td><code>mcpm projection diff &lt;tool&gt; &amp;&amp; mcpm projection sync &lt;tool&gt; --force</code></td>
+          <td><code>mcpm projection diff &lt;tool&gt;</code></td>
+        </tr>
+        <tr>
+          <td><code>E_PROJECT_UNTRUSTED</code><br><em>refusal</em></td>
+          <td>Project config exists but wasn't trust-granted in this session.</td>
+          <td>Cloned-from-elsewhere project configs can ship hostile MCP servers; we require explicit allow.</td>
+          <td><code>mcpm project allow  # reviews the config first</code></td>
+          <td><code>mcpm project list</code></td>
+        </tr>
+        <tr>
+          <td><code>E_KEYCHAIN_UNAVAILABLE</code><br><em>external</em></td>
+          <td>OS keychain service (libsecret / Keychain Services) is not reachable.</td>
+          <td>The keyring daemon isn't running or isn't installed (common on minimal Linux installs).</td>
+          <td><code>sudo apt install gnome-keyring  # or use --from-env as escape hatch</code></td>
+          <td><code>mcpm doctor --check=keychain</code></td>
+        </tr>
+        <tr>
+          <td><code>E_DAEMON_TOO_OLD</code><br><em>input</em></td>
+          <td>mcpmanagerd version is older than the project's <code>min_mcpd_version</code>.</td>
+          <td>The project config pinned a daemon feature you don't yet have locally.</td>
+          <td><code>curl -fsSL https://mcp-manager.dev/install.sh | sh  # or nix flake update</code></td>
+          <td><code>mcpm --version</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>(Rename: <code>E_DAEMON_VERSION</code> → <code>E_DAEMON_TOO_OLD</code> for self-describingness, per the mental-model coach.)</p>
+
+    <h3><code>--json</code> error envelope schema</h3>
+
+    <p>RFC-7807-shaped with concrete-recovery extensions. Every CLI subcommand with <code>--json</code> emits this on stderr (one JSON object per line if multiple) and exits with the stable exit code. The same shape is what <code>mcpm logs --audit --json</code> emits for any error event.</p>
+
+    <pre><code>{
+  "type":        "https://docs.mcp-manager.dev/errors/E_SECRET_MISSING",
+  "title":       "github needs a token that isn't set up yet",
+  "code":        "E_SECRET_MISSING",
+  "category":    "input",
+  "status":      "refused",       // "refused" | "failed"
+  "exit_code":   13,
+  "instance":    "urn:mcpm:server:github",
+
+  "what":        "github won't start because GITHUB_TOKEN is not configured.",
+  "why":         "Missing-secret refuse policy: we never spawn with a placeholder.",
+  "remedy":      "Run `mcpm secret set GITHUB_TOKEN`, then `mcpm start github`.",
+  "remedy_cmd":  "mcpm secret set GITHUB_TOKEN",
+  "related_cmd": "mcpm secret list",
+  "doc":         "https://docs.mcp-manager.dev/errors/E_SECRET_MISSING",
+
+  "context": {
+    "server":  "github",
+    "secret":  "GITHUB_TOKEN",
+    "scope":   "user"
+  },
+  "trace_id":   "01HXP3V8K2..."   // links to mcpmanagerd's tracing log
+}</code></pre>
+
+    <p>Notes on the shape:</p>
+    <ul>
+      <li><code>type</code> is the doc URL — directly clickable in modern terminals (most emit OSC 8 hyperlinks for URLs).</li>
+      <li><code>title</code> is the human one-liner — also the TUI modal title.</li>
+      <li><code>code</code> is the canonical lookup key.</li>
+      <li><code>category</code> is the four-way split (external / input / internal / refusal).</li>
+      <li><code>status</code> distinguishes refusal (policy worked correctly) from failure (something broke).</li>
+      <li><code>what</code>, <code>why</code>, <code>remedy</code> are the human prose; <code>remedy_cmd</code> is the literal command (for clipboard).</li>
+      <li><code>context</code> is event-specific and may include keys that violate "values never appear in audit fields" — implementations must scrub secret-typed fields here.</li>
+      <li><code>trace_id</code> ties the user-visible error to the daemon's tracing logs for deep debugging.</li>
+    </ul>
+
+    <h3>Preview-before-destruction spec</h3>
+
+    <p>Every destructive command emits a preview <em>before</em> prompting for confirmation. The preview must list (a) what files will change, (b) which entities will be removed or modified, (c) what is irreversible. The confirmation paranoia level scales with reversibility:</p>
+
+    <table class="compare">
+      <thead><tr><th>Command</th><th>Preview shows</th><th>Confirm pattern</th></tr></thead>
+      <tbody>
+        <tr><td><code>mcpm stop &lt;server&gt;</code></td><td>(none — reversible)</td><td>None</td></tr>
+        <tr><td><code>mcpm restart &lt;server&gt;</code></td><td>(none — reversible)</td><td>None</td></tr>
+        <tr><td><code>mcpm update [--all]</code></td><td>Per-server diff: from version → to version, breaking-change flags, what tests will run</td><td>Enter to apply; <code>-y</code> skips; <code>--dry-run</code> never prompts</td></tr>
+        <tr><td><code>mcpm uninstall &lt;server&gt;</code></td><td>Which canonical config rows, which projection rows in which editor configs, which secrets become orphaned</td><td><code>y/N</code></td></tr>
+        <tr><td><code>mcpm uninstall</code> (the whole tool)</td><td>All files in config dir, all projection edits to be reverted, whether audit + keychain are preserved (default yes)</td><td>Type <code>UNINSTALL</code></td></tr>
+        <tr><td><code>mcpm secret unset &lt;NAME&gt;</code></td><td>Which servers depend on this secret (will start failing with <code>E_SECRET_MISSING</code>)</td><td>Type secret name</td></tr>
+        <tr><td><code>mcpm registry remove &lt;name&gt;</code></td><td>How many installed servers came from this registry (they'll lose update tracking)</td><td><code>y/N</code></td></tr>
+        <tr><td><code>mcpm project allow --force</code></td><td>SHA256 of the toml + diff against any known-trusted prior version</td><td><code>y/N</code></td></tr>
+        <tr><td><code>mcpm config wipe</code></td><td>Everything that will be deleted</td><td>Type <code>WIPE</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>The preview itself is rendered by the same diff-printing code as <code>mcpm update</code> (uses <code>git diff</code> if available, falls back to a built-in colorized diff). The TUI version renders the preview in a modal with the same <code>y</code>-to-copy affordance — copy the preview, paste it into a chat with a teammate, get a second opinion before confirming.</p>
+
+    <h3>mdbook runbook outline</h3>
+
+    <p>One page per <code>E_*</code> code at <code>docs.mcp-manager.dev/errors/E_*</code>. Each page has the same six sections — the structure is itself a teaching tool, because users learn to know where to look:</p>
+
+    <ol>
+      <li><strong>One-liner.</strong> The same <code>title</code> field from the JSON envelope. ("github needs a token that isn't set up yet.")</li>
+      <li><strong>When this fires.</strong> The precise conditions — what mcpmanagerd checked, what it found, what triggered the refusal/failure.</li>
+      <li><strong>Why we refuse / fail this way.</strong> The policy or fault model. ("We never silently fall back to a missing-value placeholder because…")</li>
+      <li><strong>Quick fix.</strong> The literal command, copy-pasteable. Same as <code>remedy_cmd</code>.</li>
+      <li><strong>If the quick fix doesn't work.</strong> The escalation path — related diagnostic commands, common gotchas, links to other <code>E_*</code> pages that often follow this one.</li>
+      <li><strong>Audit-log signature.</strong> The exact JSONL line shape the user will see in <code>mcpm logs --audit --grep E_*</code> — so they can write their own monitoring or scripts against it.</li>
+    </ol>
+
+    <p>The runbook is part of the binary's distribution promise: when we ship a new <code>E_*</code> code, we ship a new runbook page in the same release. CI enforces this with a check that <em>every</em> <code>E_*</code> string anywhere in the source has a matching page in <code>book/errors/</code>. No code lands without a doc.</p>
+
+    <h3>Component coverage</h3>
+
+    <h4>Onboarding flow</h4>
+    <p>Errors during onboarding get a <code>--resume</code> affordance on every step. The init flow is broken into named stages (<code>preflight</code>, <code>keychain</code>, <code>service-register</code>, <code>registry-sync</code>, <code>scaffold-config</code>), each idempotent, each resumable. If any stage emits an <code>E_*</code>, the user gets the four-field error and a literal <code>mcpm init --resume --from-stage=&lt;name&gt;</code> command. <strong>Crucially, onboarding errors are presented in the same shape as runtime errors</strong> — users learn the format once.</p>
+
+    <h4>TUI experience</h4>
+    <p>Error modal: code top-left in monospace; title centered; What/Why/What-to-do as a vertical stack; the remedy command in its own bordered box at the bottom; <code>y</code> copies the command, <code>Esc</code> dismisses, <code>l</code> jumps to relevant logs, <code>?</code> opens the runbook page in the system browser (falls back to <code>$PAGER</code> if no <code>open</code>/<code>xdg-open</code>). The <code>✗</code> badge persists in the left pane until the user takes an action — and clears on the next successful audit event for that entity. Refusals use <code>⊘</code> and a yellow accent; failures use <code>✗</code> and a red accent.</p>
+
+    <h4>CLI experience</h4>
+    <p>Stderr format follows the four-field template. Color is honored (NO_COLOR / <code>--no-color</code>). When stderr is not a TTY, ANSI codes are stripped automatically (matches <a href="https://no-color.org">no-color.org</a>). <code>--json</code> swaps the prose for the envelope above. Exit codes are stable per <code>E_*</code> and documented in the mdbook.</p>
+
+    <h4>Config files</h4>
+    <p><code>E_CONFIG_INVALID</code> is the showcase: validator emits line + column + the offending token, plus the closest valid alternative if it can guess one (typo-detection via Levenshtein distance against known keys). Error includes a <code>mcpm config edit</code> recommendation that opens <code>$EDITOR</code> with the cursor positioned at the offending line.</p>
+
+    <h4>$EDITOR integration</h4>
+    <p>If <code>$EDITOR</code> exits non-zero, that's <em>not</em> an error — the user just bailed. We preserve the temp file at a known path and tell them: "Your edits are in <code>~/.cache/mcpm/edit-XXXX.toml</code> if you want to retry." If <code>$EDITOR</code> writes a file that fails validation, we re-enter the editor with the validation error injected as a TOML comment at the offending line. The temp file is never lost without the user explicitly saying so.</p>
+
+    <h4>Idle TTL killings</h4>
+    <p>Idle TTL is <em>not</em> an error — it's a normal lifecycle event. The audit log records it as <code>server.idle_stop</code>, not <code>server.crash</code>. The TUI shows it as <code>idle</code> status (not <code>failed</code>). The user sees no error UX. If the user tries to use a server that's TTL-stopped, the next request transparently spawns it back up — and the audit-log entry for that spawn includes <code>reason: "wake-from-idle"</code> so debugging "why are there so many spawn events?" is easy.</p>
+
+    <h4>Singleton vs per-client collisions</h4>
+    <p>If two clients both want a server with conflicting singleton settings, we emit <code>E_SERVER_SINGLETON_CONFLICT</code> — but only if the conflict is structural (incompatible flags). If both clients want singleton mode, we share the existing process (the whole point of singleton). The error case is rare but the audit log records every spawn decision with the <code>client_id</code> field so the user can answer "why is server X running 3 copies?" with <code>mcpm logs --audit --grep server.spawn --server=X</code>.</p>
+
+    <h4>Update notifications</h4>
+    <p>If <code>mcpm update</code> fails partway, we roll back atomically — and the error envelope's <code>context</code> field lists which servers were updated, which were reverted, and which were untouched. The user is never left in a half-state without knowing it. The audit log carries the full pre-update lockfile hash so the rollback is verifiable.</p>
+
+    <h4>Accessibility commitments</h4>
+    <p>Errors do not rely on color alone — every error has a glyph (<code>✗</code> for failure, <code>⊘</code> for refusal) and a clear text label. Screen-reader-friendly: all four fields read in order, with semantic delimiters. The runbook URL is always available so users who prefer reading the docs to scanning a terminal modal have that option. <code>--no-color</code> + <code>--no-glyph</code> (for the rare terminal that mangles unicode) produces ASCII-only output that reads unambiguously.</p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li><a href="https://www.nngroup.com/articles/error-message-guidelines/">Nielsen Norman Group — Error-Message Guidelines</a>. Four traits of a good error message: human language, polite, precise, constructive. Foundational reference for the four-field shape.</li>
+      <li><a href="https://datatracker.ietf.org/doc/html/rfc7807">RFC 7807 — Problem Details for HTTP APIs</a>. The shape of <code>{type, title, status, detail, instance}</code> plus extension members; our <code>--json</code> envelope is a direct adaptation.</li>
+      <li><a href="https://stripe.com/docs/error-codes">Stripe — Error Codes Reference</a>. Canonical example of a stable string-keyed error vocabulary that doc, support, and developer ergonomics depend on.</li>
+      <li><a href="https://cli.github.com/manual/gh_repo_delete">GitHub CLI — <code>gh repo delete</code></a>. The paranoid <code>--confirm</code>-by-typing-the-name pattern we copy for irreversible operations (secret purge, full wipe).</li>
+      <li><a href="https://docs.rs/anyhow/latest/anyhow/">anyhow — Rust error handling library</a>. The pattern of "errors are context-rich, chainable, but the user-facing presentation is a curated subset" matches our split between <code>mcpm logs --daemon</code> (rich) and the user-facing modal (curated).</li>
+      <li><a href="https://docs.rs/color-eyre/latest/color_eyre/">color-eyre — pretty-printing error reports for Rust</a>. Reference for sectioned error output with help / suggestions / spans — directly informs the four-field template.</li>
+      <li><a href="https://no-color.org">no-color.org — the <code>NO_COLOR</code> standard</a>. Honored universally; informs how the CLI strips ANSI when stderr is not a TTY.</li>
+      <li><a href="https://k9scli.io/topics/commands/">k9s — terminal UI commands reference</a>. The hint-bar pattern, modal copy-to-clipboard (<code>y</code>) muscle memory, and "<code>?</code> opens help" are direct inspirations for the error modal UX.</li>
+      <li><a href="https://blog.danslimmon.com/2019/07/15/do-nothing-scripting-the-key-to-gradual-automation/">Dan Slimmon — Do-nothing scripting</a>. The "every step is named, idempotent, and resumable" pattern that justifies <code>mcpm init --resume --from-stage</code>.</li>
+      <li><a href="https://aws.amazon.com/blogs/developer/designing-for-failure-in-the-aws-sdk-for-ruby/">AWS — Designing for Failure in the SDK</a>. The principle that error UX is part of the SDK contract, not an implementation detail.</li>
+      <li><a href="https://clig.dev/#errors">Command Line Interface Guidelines — Errors</a>. The "tell the user what to do next" rule that our <code>remedy_cmd</code> field operationalizes.</li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

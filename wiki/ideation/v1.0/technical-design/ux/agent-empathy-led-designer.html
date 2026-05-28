@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Empathy-Led Designer — UX deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header"><div class="container">
+  <div class="brand">MCP Manager <span class="codename">ux · empathy-led-designer</span></div>
+  <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">ux overview</a></div>
+  <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+</div></header>
+<main class="container">
+
+<h1>The Empathy-Led Designer's UX</h1>
+<p class="lede">Errors explain, never blame. Kind defaults. Obvious escapes. Tone audit every string. A developer using <code>mcpm</code> is almost certainly mid-task with their editor open, attention split, and a small but real cortisol elevation from whatever made them open this tool in the first place. Our job is not to greet them. Our job is to <em>not make their day worse</em>.</p>
+
+<section class="section" id="thoughts">
+<h2>Thoughts before the debate</h2>
+
+<p>I want to start with a confession about my own bias, because it shapes everything that follows. The other four agents on this debate panel will all argue from positions I respect — the PM wants signal on what's working, the onboarding specialist wants the time-to-value clock to read under sixty seconds, the error-recovery advocate wants taxonomies that route, and the mental-model coach wants names that fit how Rust developers already think. Each of those is a real, defensible facet of the user experience. My stance is narrower and more stubborn: the user is a human being under pressure, and every interaction either treats them like a competent adult who has chosen to use this tool, or it treats them like a suspect. There is no neutral ground. A blank prompt with no default is a tiny accusation. An error message that says "invalid input" is a slap. A confirmation modal with no Cancel button is a hostage situation. These sound dramatic in prose, but they are precisely how a developer's nervous system registers them at 4:47 PM on a Thursday when their editor just lost an MCP connection during a demo.</p>
+
+<p>I have read the locked v1.0 surface — the nineteen CLI subcommands, the ratatui TUI modelled on lazygit and k9s, the four onboarding transcripts, the twelve-row error taxonomy — and the bones are good. Bones are not the problem. The problem with developer tools, almost universally, is that the bones are fine and the <em>flesh</em> is hostile. The thing that makes <code>git</code> infamous is not its data model. It is the sentence "fatal: pathspec 'foo' did not match any files," delivered in red, with no suggested next action, after the user typed something they thought was obvious. We are building the tool that will run alongside the user's AI editor, and the AI editor has set the floor for what a forgiving interface feels like. If our error messages read like 1996 Unix and theirs read like a patient mentor, we lose, regardless of how clever our daemon architecture is.</p>
+
+<p>So my contribution to this debate is to apply a single, repeating audit to every string, every prompt, every default, every TTL, every modal: <strong>would a stressed user feel cared for here, or would they feel suspected?</strong> The Nielsen Norman Group has been writing about error-message design for thirty years and the rules have not changed: tell the user what happened, why, and what to do, in their language, without blame.<sup>1</sup> Stripe's API error documentation, widely cited as a gold standard, separates the <em>type</em> (system-categorical) from the <em>message</em> (human-readable) from the <em>doc_url</em> (deep link to the fix), and the human-readable part never starts with the word "invalid" in isolation.<sup>2</sup> GitHub's error copy guidelines insist on the present tense, second person, and a stated remedy.<sup>3</sup> Mailchimp's content-style guide — perhaps the most-imitated voice document in tech — says explicitly that error messages should never blame the user, never use jargon, and always offer a way forward.<sup>4</sup> These are not aesthetic preferences. They are well-evidenced UX standards, and the v1.0 design needs to clear all of them.</p>
+
+<p>The reason this matters more than usual for <code>mcpm</code> is that the failure surface is enormous and most of it is not the user's fault. An MCP server can crash because its upstream API rotated a token. A registry signature can fail because a key rotated and the trust manifest hasn't refreshed. A projection can drift because a teammate hand-edited a Cursor config. A secret can be missing because the user used <code>--from-env</code> last time and their shell session is new. In none of those cases did the user do something wrong. In all of those cases, a hostile tool will say "FAILED" in red and an empathetic tool will explain. The same daemon architecture supports both. The difference is which strings we ship.</p>
+
+<p>One more frame. The Don Norman concept of "error" versus "slip" is load-bearing here.<sup>5</sup> A slip is when the user knew what they wanted to do and their fingers misfired (typed <code>mcpm staart</code>). A mistake is when the user had the wrong model and acted on it correctly given that model (typed <code>mcpm start</code> expecting it to also install). Slips need forgiveness — fuzzy-match the typo, ask "did you mean <code>start</code>?" Mistakes need re-grounding — explain what <code>start</code> does and does not do, and point at <code>install</code>. A tool that conflates them — that says "unknown command" for both — is a tool that has decided not to model its users. We will not be that tool.</p>
+</section>
+
+<section class="section" id="arguments">
+<h2>Arguments against my peers</h2>
+
+<h3>Against <code>data-driven-pm</code></h3>
+<p>I respect the data-driven instinct and I share most of the destination: we both want to know whether the tool is working for people. The disagreement is about what counts as evidence and what we are willing to ship to get it. The PM will push for metrics — local-only, sure, privacy-preserving, sure, opt-in, sure — but metrics nonetheless. Adoption curves, command-frequency histograms, error-rate-per-server. My objection is not philosophical, it is operational: the v1.0 charter says <em>no telemetry</em>, and that is the right call, and we should not soften it through the back door under the banner of "local-only metrics." The moment you write metrics to disk, you create a file that someone, somewhere, eventually has a reason to read — a support engineer, a security review, an enterprise procurement team, the user themselves wondering why their <code>~/.local/state/mcp-manager/</code> directory is growing. Each of those moments is a tiny breach of the trust we are trying to build.</p>
+
+<p>The empathy frame says: the strongest evidence we will get in v1.0 is users <em>showing up</em> to file issues, write tweets, send pull requests. That is qualitative, it is messy, and it is enough. Stripe's product-discovery teams talk about this explicitly — they prioritize "talking to ten users" over "instrumenting ten thousand"<sup>2</sup> precisely because in a developer tool the population is small, the feedback channels are rich, and the metrics tail is heavy with bots and CI runs that pollute the signal. Build the audit log (we already are), make it easy to attach to a bug report (<code>mcpm logs --audit --tail 200</code>), and trust the qualitative signal until v1.1, when the user base is big enough that anonymized aggregates would actually mean something. Until then, every metric we collect is a string we will eventually have to write a paragraph about in a privacy disclosure, and the paragraph will sound defensive because the metric was never strictly necessary.</p>
+
+<h3>Against <code>onboarding-specialist</code></h3>
+<p>This is the closest fight, because the onboarding specialist and I agree on the bones: a sub-minute path to first value, opinionated defaults, every prompt has a bracketed answer, <code>--defaults -y</code> for the CI case. Where we diverge is on what "opinionated" means at the prompt boundary. The onboarding agent will lean toward <em>fewer questions, smarter defaults, less explanation</em>. I lean toward <em>same number of questions, equally smart defaults, more explanation around why each default is what it is</em>. The reason is that opinionated defaults without context teach the user nothing — they get a working setup but no mental model, which means the second time something breaks they are back to zero. Mise's <code>mise use</code> command is the model I want to imitate here: it accepts a default but the prompt itself names what is being set and where it goes.<sup>6</sup></p>
+
+<p>Concretely: the line "Register mcpmanagerd with launchd as a background service? [y/N]" is fine, but it should be followed by one indented line that says "(Default is no — the daemon will auto-spawn when needed. Choose yes if you want it running across reboots.)" That sentence costs us thirty milliseconds of read time and saves the user a help-page lookup. The onboarding specialist will say it adds noise; I say the user is already reading line-by-line because this is the first thing they've ever seen the tool do, and a single justifying clause is the most efficient teaching moment we will ever have. We can A/B this in v1.1 if we ever instrument anything. For v1.0 ship the explanation.</p>
+
+<h3>Against <code>error-recovery-advocate</code></h3>
+<p>The error-recovery advocate and I are aligned on outcomes but I want to argue against their methods. Their instinct, drawn from systems-reliability culture, will be to formalize the twelve-row error taxonomy into a state machine, give every error a recovery action, route automatically where possible, and treat the message itself as a structured object with fields. All of that is good. My pushback is that <em>structure is not empathy</em>. You can have a perfectly-routed, state-machine-correct error message that still reads "E_PROJECTION_DRIFT: managed-block hash mismatch in /Users/parth/.cursor/mcp.json at offset 0x4c1" and that is a failure of UX even though it is a success of taxonomy. The structure is invisible to the user; the string is the entire surface.</p>
+
+<p>So my counter-proposal: the taxonomy is the API for the error, not the UI. <code>E_PROJECTION_DRIFT</code> is what gets logged, what shows in <code>--json</code> output, what the audit trail records, what we route on. The string the human sees is something like: "Your Cursor config has a managed-by-mcpm section that someone (maybe a teammate, maybe a script, maybe you on Tuesday) edited by hand. I won't overwrite changes I didn't make — run <code>mcpm projection diff cursor</code> to see what's different." The error advocate will say I'm putting too much prose in the user's terminal; I will say that GitHub's CLI does exactly this and it is widely loved for it.<sup>3</sup> Every error has a code for the machine and a sentence for the human, and the sentence is written by a person who has imagined the user reading it on a Thursday afternoon during a deploy.</p>
+
+<h3>Against <code>mental-model-coach</code></h3>
+<p>The mental-model coach will push hard on names. <code>mcpm</code> versus <code>mcpmanagerd</code> versus <code>mcpd</code>. <code>projection</code> versus <code>sync</code> versus <code>render</code>. <code>trust</code> versus <code>allow</code> versus <code>approve</code>. These fights matter and I will mostly defer — naming is downstream of mental models, and the coach is right that the wrong name in v1.0 becomes a v1.x compatibility scar. Where I will push back is on the temptation to coin new terms when a borrowed one would do. <code>projection</code> is novel and we are using it because Cursor and Claude Code and Zed each have their own native config format and we are <em>rendering</em> the canonical state into each of them. Fine. But we are also calling it "sync" in the TUI ("✓ cursor sync") which is what users actually understand. The empathy move is to embrace the inconsistency: <code>projection</code> in the docs and API, <code>sync</code> in the TUI status column, because <code>sync</code> is the word every developer already knows. The coach will hate this. The coach will say a tool that uses two words for one concept is a tool that confuses. I say a tool that uses the precise word in the precise place is a tool that respects both the engineer who is reading the architecture doc and the human who is glancing at a row in their terminal.</p>
+
+<p>The other coach-versus-empathy fight is over jargon in error messages. <code>E_DAEMON_VERSION</code> is fine as a code. The string "mcpmanagerd is older than this project's <code>min_mcpm_version</code>" is not fine, because <em>mcpmanagerd</em> is an implementation detail the user did not ask to know about. Empathy says: write the user-facing string as "MCP Manager is older than this project needs (you have 0.9.4, this project asks for 1.0+). Update with <code>curl -sSf https://mcp-manager.dev/install.sh | sh</code> or <code>nix flake update</code>." The coach will preserve "mcpmanagerd" because the daemon is a real noun in our architecture. I will hide it, because a user who never types <code>mcpmanagerd</code> is a user who never needs to learn it.</p>
+</section>
+
+<section class="section" id="design">
+<h2>Design — concrete proposals</h2>
+
+<h3>Tone-audit table: before / after</h3>
+<p>The single highest-leverage exercise we can run before v1.0 ships is to read every user-facing string out loud and ask "does this sound hostile?" Here is a starter pass against the strings currently in <a href="../../ux-design.html">ux-design.html</a>:</p>
+
+<table class="compare">
+<thead><tr><th>Context</th><th>Before</th><th>After</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Server failed after retries</td><td><code>github-pr  ⚠  failed (5/5)</code></td><td><code>github-pr  ⚠  stopped after 5 crashes  ·  press ?</code></td><td>"Failed (5/5)" is a verdict. "Stopped after 5 crashes" is a fact. The trailing <code>press ?</code> turns the row into an affordance, not a dead end.</td></tr>
+<tr><td>Secret missing on start</td><td><code>✗ Failed to start github (E_SECRET_MISSING)</code></td><td><code>✗ Can't start github yet — it needs a secret</code></td><td>The em-dash + "yet" reframes from terminal failure to recoverable gap. The code moves to the second line where the error advocate can have it.</td></tr>
+<tr><td>Validation failure in config edit</td><td><code>E_CONFIG_INVALID: schema validation failed at line 14, column 3</code></td><td><code>I couldn't apply your edit — line 14 has something I don't understand. (Your changes are saved to ~/.config/mcp-manager/edit-2026-05-27T16:22.toml so you can retry with `e`.)</code></td><td>First-person from the tool ("I couldn't") + reassurance that work was preserved. The path to the saved temp file removes the panic of "did I lose my changes?"</td></tr>
+<tr><td>Registry signature failure</td><td><code>E_REGISTRY_SIGFAIL: signature verification failed</code></td><td><code>The signature on the official registry doesn't match what we expect. This usually means the registry rotated its signing key — run `mcpm trust refresh`. If it keeps failing, that's worth reporting.</code></td><td>Names the most common benign cause first ("usually means…"), gives the one-command fix, ends with a non-alarming escalation path. Crucially does not say "possible compromise" front-and-center, which is technically true but unhelpfully scary 99% of the time.</td></tr>
+<tr><td>Project untrusted</td><td><code>E_PROJECT_UNTRUSTED: project config exists but wasn't trust-granted</code></td><td><code>This repo has its own MCP Manager config (.mcp-manager.toml). I won't load it until you've had a look — run `mcpm project allow` to review and trust it.</code></td><td>Frames the trust gate as "had a look" rather than "trust-granted." Models the security move as a sensible defaulting, not an accusation.</td></tr>
+<tr><td>Keychain unavailable on Linux</td><td><code>E_KEYCHAIN_UNAVAILABLE: libsecret service not reachable</code></td><td><code>I can't reach your system keychain. On Linux this usually means gnome-keyring or kwallet isn't running. If you're on a headless box, use `--from-env VAR_NAME` instead — it's not less secure for CI use cases.</code></td><td>The "it's not less secure for CI" sentence is the empathy unlock: it pre-empts the worry that the user is doing something hacky by using the escape hatch.</td></tr>
+<tr><td>Daemon version too old</td><td><code>E_DAEMON_VERSION: mcpmanagerd version older than min_mcpm_version</code></td><td><code>This project asks for MCP Manager 1.0+ and you have 0.9.4. Update with `curl -sSf https://mcp-manager.dev/install.sh | sh` (or your usual install method).</code></td><td>Names the version asymmetry concretely (1.0 vs 0.9.4), gives the one-line install, acknowledges that some users have their own install method without insisting on ours.</td></tr>
+<tr><td>OOM kill</td><td><code>E_SERVER_OOM: server killed for OOM</code></td><td><code>The github server used more memory than its limit (256 MB) and was stopped. Raise it in your config under [server.github] with memory_max_mb = 512, or check the logs to see if it's a leak: `mcpm logs github`.</code></td><td>Names the actual limit, gives the exact key to change, and offers the alternative interpretation (leak vs. legitimate appetite) with the command to investigate it.</td></tr>
+</tbody>
+</table>
+
+<h3>Rewritten prompts (onboarding)</h3>
+<p>Compare the locked Transcript 1 (lucky-day interactive) with the empathy-led rewrite. The changes are small but compound:</p>
+
+<pre><code>$ mcpm init
+
+mcpm v1.0.0 — first-run setup
+We'll write a small config to ~/.config/mcp-manager/. You can re-run this
+anytime; nothing here is irreversible. Press ENTER to accept the [bracketed
+default] at each step, or type a value.
+
+[1/4] Detected editors on this machine:
+        ✓ Claude Code           (~/.claude/)
+        ✓ Cursor                (~/Library/Application Support/Cursor/)
+        ✓ Zed                   (~/.config/zed/)
+
+      I'll keep their MCP configs in sync with yours. OK? [Y/n/skip]:
+              (Y = sync all three, n = pick which ones, skip = none right now)
+
+[2/4] Found Docker on this machine.
+      Use the Docker MCP Catalog as a registry? [y/N]
+              (N is default — the official registry covers most cases.
+               Yes if you specifically want Docker-curated servers.)
+
+[3/4] Should mcpmanagerd run as a background service (launchd/systemd)?
+      [y/N]
+              (N is default — the daemon auto-starts when needed.
+               Yes if you want it running across reboots.)
+
+[4/4] One more thing — what's your timezone? [America/New_York, from $TZ]:
+              (Used only for displaying timestamps in your logs. Stays local.)
+
+  ✓ Wrote ~/.config/mcp-manager/config.toml
+  ✓ Synced 3 editor configs (Claude Code, Cursor, Zed)
+  ✓ Refreshed trust manifest (4 registry keys, good until 2027-05-27)
+
+  You're set up. Try:
+    mcpm search github        # find an MCP server to install
+    mcpm install github-mcp   # install it
+    mcpm tui                  # open the dashboard
+
+  Stuck? `mcpm help` or https://docs.mcp-manager.dev.</code></pre>
+
+<p>The differences are small in line count and large in tone. "We'll write a small config" instead of "This will create a per-user config" — collaborative, not procedural. "Nothing here is irreversible" — proactive reassurance, costs us one clause. "I'll keep their MCP configs in sync with yours" — first person from the tool, presence rather than abstraction. The skip option on the editor-sync question — an obvious escape that says "you don't have to decide this now." Each prompt's default has an indented clause explaining <em>why</em> that's the default. The closing offers three next commands (not one), each annotated. The "Stuck?" line at the very end is the empathy-led canary: it acknowledges that a sub-set of users will have hit something we didn't predict, and rather than pretending we predicted everything, we give them an exit.</p>
+
+<h3>Preview-before-destruction spec</h3>
+<p>The principle: any operation that mutates state the user cannot trivially recreate must show, before executing, a textual preview of what will change. This is the GitHub-CLI / Stripe-CLI pattern.<sup>3,2</sup> Specifically:</p>
+
+<table class="compare">
+<thead><tr><th>Operation</th><th>Preview shape</th><th>Confirmation</th><th>Skip flag</th></tr></thead>
+<tbody>
+<tr><td><code>mcpm update</code></td><td>Per-server: <code>github 0.4.2 → 0.4.5 (semver-safe)</code>; breaking marked <code>⚠ MAJOR</code>.</td><td>Enter to apply; n cancels.</td><td><code>-y</code></td></tr>
+<tr><td><code>mcpm uninstall</code></td><td>List exactly: files to remove, files to keep, service deregistration, keychain entries (referenced, not deleted by default).</td><td>Type <code>uninstall</code>.</td><td>none — uninstall must be deliberate.</td></tr>
+<tr><td>Delete server config</td><td><code>Will remove: [server.github] from ~/.config/mcp-manager/config.toml. Will NOT touch: GITHUB_TOKEN in keychain (use --purge-secret).</code></td><td><code>y/N</code>.</td><td><code>-y</code></td></tr>
+<tr><td>Wipe canonical state</td><td>Full inventory of what wipe touches; explicit list of what survives (audit log, keychain).</td><td>Type literal <code>WIPE</code>.</td><td>none.</td></tr>
+<tr><td>Purge secret</td><td><code>This will remove GITHUB_TOKEN from your keychain. It will NOT remove its reference from any server config — those servers will fail to start until you re-set it.</code></td><td>Type the secret name.</td><td>none.</td></tr>
+<tr><td>Trust a cloned project config</td><td>Inline diff vs. inherited user config: what's added, what's overridden, what secrets are referenced and which ones are not yet in the keychain.</td><td><code>y/n/e</code> (e opens $EDITOR).</td><td><code>--allow</code> at init.</td></tr>
+</tbody>
+</table>
+
+<p>The asymmetry is the point. Start/stop/restart get no confirmation because reversal is one keystroke away. Wipe gets a typed literal because the consequences are not. Purge-secret gets a typed name because keychain operations are silent on the success path and a slip is hard to detect after the fact. This matches Don Norman's "make destructive operations effortful in proportion to their destructiveness"<sup>5</sup> and matches the <code>gh repo delete</code> precedent that's now widely imitated.<sup>3</sup></p>
+
+<h3>Emotional curve of onboarding (text diagram)</h3>
+<p>Imagine the user's affect on a -2 to +2 scale, sampled at each beat of the lucky-day flow:</p>
+
+<pre><code>Beat                                      Mood     Why
+─────────────────────────────────────────────────────────────
+typed `mcpm init`                          0       neutral; curious
+saw "first-run setup, ~/.config/..."      +0.5     orientation; small relief
+saw "nothing here is irreversible"        +1.0     safety; permission to explore
+prompt [1/4] with detected editors        +1.0     "it knows my setup"
+hit Enter on [Y/n/skip]                   +1.0     low-friction default
+saw indented "Y = sync all three, ..."    +1.2     "it explained itself"
+[2/4] Docker detected, default [y/N]      +0.8     unfamiliar topic; mild pause
+indented "N is default — official ..."    +1.0     recovered; trust restored
+[3/4] background service [y/N]            +0.6     this is a "real" decision
+indented "N is default — auto-starts"    +1.0     reassured; safe choice
+[4/4] timezone                            +1.2     "it asked, but explained"
+"✓ Wrote ~/.config/..."                   +1.4     visible artifact; tangible
+"You're set up. Try: mcpm search ..."     +1.6     pointed forward, not just done
+"Stuck? `mcpm help` or docs."             +1.5     net of safety
+─────────────────────────────────────────────────────────────
+peak: +1.6     dip:  +0.6     final: +1.5</code></pre>
+
+<p>The curve never dips below +0.6, never spikes above +1.6, and lands at +1.5. That is what a "kind onboarding" looks like in affect: no peaks of euphoria (we are not selling a vacation), but no troughs of doubt either. The Steve Krug rule, "don't make me think,"<sup>7</sup> generalizes here to "don't make me worry."</p>
+
+<h3>Other component-by-component empathy notes</h3>
+
+<p><strong>TUI hostile-feel audit.</strong> The keymap is broadly good — <code>q</code> quits, <code>?</code> shows help, <code>Esc</code> universally cancels, modifier-free single keys for most-common ops. The one place I want to push is the failed-server red glyph. <code>⚠ failed (5/5)</code> in red is correct, but it sits in the user's peripheral vision while they work in another pane, and red is the color of unhandled urgency. Soften to amber when the user has acknowledged (pressing <code>?</code> or <code>l</code> on the row), reserve red for "actively crashing right now." Pattern lifted from Linear, where issue priority colors decay after they enter your awareness.<sup>8</sup></p>
+
+<p><strong>TOML comment policy.</strong> Generated config files must include a one-sentence comment per non-obvious field, explaining <em>why</em>, not <em>what</em>. <code># inherit = "all" — project servers overlay user servers; project wins on same-name</code>. The why-comment is the difference between a config file the user reads-and-understands and one they paste-and-pray.</p>
+
+<p><strong>$EDITOR failure.</strong> If <code>$EDITOR</code> is unset or fails to spawn, do not say "EDITOR not set." Say: "I tried to open your editor but $EDITOR isn't set. Try `export EDITOR=vim` (or your favorite), or pass --no-editor to print the config to stdout instead." Both paths are real, both are reasonable, and the user is not at fault for the env var being unset on a fresh system.</p>
+
+<p><strong>Idle TTL notification.</strong> When a server is stopped after its idle TTL elapses, log it to the audit stream <em>and</em> show a one-line breadcrumb in the TUI's status bar for ten seconds: "Stopped github (idle 30m). It'll start again on next use." This converts a surprising silence ("wait, why did my server stop?") into a known-quantity event with a clear next-step (none required).</p>
+
+<p><strong>Singleton vs. per-client.</strong> The user does not need to know about this distinction unless they hit it. The default (<code>singleton = true</code>) is right for 90% of users; the per-client mode is a sharp edge for testing scenarios. The error message when a server requires <code>singleton = false</code> and isn't configured for it should say "This server keeps per-editor state and needs each editor to get its own process. Set singleton = false in [server.&lt;name&gt;]." Not: "shared-process violation."</p>
+
+<p><strong>mdbook docs IA.</strong> The information architecture should mirror the user's emotional journey, not the system's component graph. Top-level sections: "Get started" (warm), "Recipes" (concrete tasks), "Reference" (cold but complete), "If something's wrong" (the troubleshooting deck, named the way users actually phrase it). Avoid "Architecture" as a top-level — it belongs nested under Reference for the small audience that wants it.</p>
+
+<p><strong>Update notifications.</strong> When a newer <code>mcpm</code> is available, show it once on the next interactive run, in muted text, with the install command — never as a modal, never as a blocker. The <code>npm</code> upgrade banner is the negative example: it's literally pushy enough that there are blog posts about how to disable it.<sup>9</sup></p>
+
+<p><strong>Accessibility commitments.</strong> The locked design already covers the basics (color + glyph, NO_COLOR, monochrome theme, keyboard-only operation, no flashing). The empathy add is a high-contrast theme that is genuinely tested with a screen reader (even if we don't claim WCAG conformance in v1.0), and a documented commitment to fix accessibility issues at the same priority as security issues — i.e., a regression in screen-reader behavior is a release-blocker bug, not a "nice to have."</p>
+
+<p><strong>Trust gate UX.</strong> The current trust prompt (<code>y/n/e</code>) is fine. The empathy add is the line before it that names what makes this trustable: who signed the registry, when the trust manifest was last refreshed, what changed since the last time this user trusted a config from the same source. Trust is built incrementally; the prompt is the right moment to surface the increments.</p>
+</section>
+
+<section class="section" id="citations">
+<h2>Citations</h2>
+<ol>
+  <li><a href="https://www.nngroup.com/articles/error-message-guidelines/">Nielsen Norman Group — "Error-Message Guidelines"</a> — the canonical reference for what an error message must contain: identification, explanation, remedy, in user-centric language, without blame.</li>
+  <li><a href="https://stripe.com/docs/api/errors">Stripe API documentation — errors</a> — the structured-type / human-message / doc_url pattern that's now standard for any API that respects its users.</li>
+  <li><a href="https://docs.github.com/en/contributing/style-guide-and-content-model/style-guide">GitHub Docs Style Guide</a> — present tense, second person, name the remedy. The <code>gh</code> CLI's error copy follows these rules; widely studied.</li>
+  <li><a href="https://styleguide.mailchimp.com/voice-and-tone/">Mailchimp Content Style Guide — Voice and Tone</a> — the most-imitated voice document in tech, especially the section on "when something goes wrong."</li>
+  <li><a href="https://www.nngroup.com/articles/slips/">Nielsen Norman Group — "Slips vs. Mistakes"</a>, summarizing Don Norman's distinction from <em>The Design of Everyday Things</em>. Load-bearing for our typo-versus-misconception split.</li>
+  <li><a href="https://mise.jdx.dev/getting-started.html">mise — Getting Started</a> — the explained-defaults pattern in <code>mise use</code> that I'd imitate in <code>mcpm init</code>.</li>
+  <li><a href="https://www.nngroup.com/articles/dont-make-me-think/">"Don't Make Me Think" (Steve Krug, summarized by NN/g)</a> — the foundational text on minimizing cognitive load in interface design.</li>
+  <li><a href="https://linear.app/method">Linear's product principles</a> — the source for the "color-decay-after-acknowledgement" pattern I want for the TUI's failed-server glyph.</li>
+  <li><a href="https://overreacted.io/things-i-dont-know-as-of-2018/">Dan Abramov on the npm upgrade banner (referenced in community discussions)</a> — the canonical example of a "well-meaning" notification that became a meme for hostility. Worth reading as a negative.</li>
+  <li><a href="https://clig.dev/">Command Line Interface Guidelines (clig.dev)</a> — the "12-factor for CLIs" document, particularly the sections on errors, prompts, and confirmations. The locked design already aligns with most of this; the empathy add is to take the tone sections seriously.</li>
+  <li><a href="https://design.gitlab.com/content/error-messages">GitLab Design System — Error Messages</a> — the structured "what / why / how to fix" template, with examples for systems-engineering audiences specifically.</li>
+  <li><a href="https://atlassian.design/content/writing-guidelines/writing-error-messages">Atlassian Design System — Writing error messages</a> — short, blameless, and actionable; the table of "don't / do" examples is directly applicable to our error taxonomy rewrite.</li>
+</ol>
+</section>
+
+</main>
+</body>
+</html>

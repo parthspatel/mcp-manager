@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nix Purist — DevOps deep dive — MCP Manager v1.0</title>
+<meta name="description" content="The Nix purist's argument for flake.nix as the canonical build, devenv.sh as per-server isolation, cachix as binary substitution, and curl as a courtesy wrapper.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">devops · nix-purist</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">devops overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Nix Purist's DevOps</h1>
+  <p class="lede">
+    <code>flake.nix</code> is the build. <code>devenv.sh</code> is per-server isolation. Cachix carries the binaries. Curl is the courtesy. Everything else &mdash; deb packaging, FHS layouts, hand-rolled minisign keys, ad-hoc shell installers &mdash; is a re-implementation of what Nix already does correctly. We are shipping a developer-facing supervisor on top of Rust and Tokio; reproducibility is not a "nice to have" property of the release pipeline, it is a load-bearing claim about what users get when they run <code>mcpm install &lt;server&gt;</code>. The honest way to keep that claim is to let Nix make it.
+  </p>
+
+  <p>
+    <span class="evidence-badge">flake.nix = canonical build</span>
+    <span class="evidence-badge">devenv per-server</span>
+    <span class="evidence-badge">cachix substituters</span>
+    <span class="evidence-badge">curl = wrapper</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts &mdash; where the stance comes from</a></li>
+      <li><a href="#arguments">Arguments against my peers</a></li>
+      <li><a href="#design">Design &mdash; flake outline, devenv profile, CI matrix, cache, SBOM</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts &mdash; where the stance comes from</h2>
+
+    <p>
+      The v1.0 lockdown table commits to "<code>curl &hellip; | sh</code> installer + Nix flake. No Homebrew, no App Store." Read literally that is a tie. Read in the context of <a href="../../research/stoic-badger-sandbox/recommendation-nix-isolation-summary.html">stoic-badger-sandbox</a>'s recommendation &mdash; "<em>devenv as the reproducibility layer, OS sandbox as the run-time layer</em>" &mdash; it is not a tie. Stream 2 already made Nix a load-bearing dependency of the isolation story. Per-MCP-server <code>devenv.nix</code> profiles pin the Python interpreter, the Node runtime, the system libraries, and the transitive package closure for every supervised process. The Nix store is already in our critical path on every machine that uses the primary isolation tier. Pretending the curl installer is co-equal &mdash; instead of "the path for users who refuse Nix" &mdash; means we accept reproducibility for the MCP <em>servers</em> we supervise but discard it for the <em>supervisor itself</em>. That is incoherent.
+    </p>
+
+    <p>
+      Nix flakes pin every input by content hash and produce a derivation that is, by construction, a pure function of its inputs.<cite>nix-flakes-determinate</cite> A build run on my laptop in 2026-05 and yours in 2027-08, given the same lock file, produces byte-identical artifacts &mdash; same <code>mcpmanagerd</code>, same <code>mcpm</code>, same embedded resources. This is the property that audit logs, deterministic SBOMs, and reproducible-builds claims all rely on.<cite>reproducible-builds-spec</cite> A tarball produced by GitHub Actions and signed with <code>minisign</code> can <em>claim</em> the same property but cannot demonstrate it without orchestration we have not yet written. Nix demonstrates it by default.
+    </p>
+
+    <p>
+      The locked decisions also commit us to "auto-spawn daemon" and "no telemetry, ever." Auto-spawn means <code>mcpm exec</code> must find <code>mcpmanagerd</code> on <code>$PATH</code> in a deterministic place; no telemetry means we cannot phone home to discover where the user put the binary. A <code>nix profile install</code> creates a per-user generation that puts both binaries on <code>$PATH</code> with no global state mutation, and exposes them via the user's profile garbage-collection root.<cite>nix-manual-profiles</cite> A <code>nix profile rollback</code> is one command. The curl installer can match that <em>functionally</em> only by re-writing the relevant <code>/usr/local/bin</code> symlinks atomically and tracking previous installations in a side state file we have not yet designed. We would be re-inventing Nix profiles &mdash; badly.
+    </p>
+
+    <p>
+      <strong>This is not "Nix supremacism."</strong> The Nix learning curve is real; <a href="../../research/stoic-badger-sandbox/recommendation-nix-isolation-summary.html#nix-pain">stoic-badger</a> conceded that explicitly. The position I hold is more modest: the Nix flake should be the <em>primary</em> distribution channel because it is the only one that can keep our reproducibility claims honest. The curl installer is a courtesy &mdash; a thin wrapper that either (a) shells out to <code>nix profile install</code> when Nix is present or (b) downloads the appropriate static-linked artifact otherwise. The static artifacts themselves are <em>produced by the same flake</em> via <code>pkgsCross</code> and uploaded to the GitHub release; the curl installer never has its own independent build path, so we do not double the maintenance surface.
+    </p>
+
+    <p>
+      The interesting consequence is for the supply chain. Today's plan layers minisign on top of GitHub releases &mdash; a perfectly fine choice for the curl path, but it is solving a problem that Nix already solved differently. Nix has a substituter-trust model: signed binary caches identified by a public key.<cite>cachix-docs</cite> A user who adds <code>cache.mcp-manager.dev</code> as a substituter and trusts our public key has the same guarantee as a user who verifies a <code>.minisig</code> file &mdash; with the additional property that all transitive Nix-built dependencies inherit the same trust model. The two systems are complementary, not duplicative. The fix is to let Nix do Nix and minisign do the static-tarball envelope, and to be precise about which artifact is signed by what.
+    </p>
+
+    <p>
+      Finally, the <a href="../../technical-design.html#components">11-crate workspace</a> is exactly the shape that flakes were designed to build. <code>crane</code> or <code>naersk</code> turn a Cargo workspace into a graph of per-crate Nix derivations, which means CI builds are cached per-crate, not per-workspace. A change to <code>mcpm-projector</code> rebuilds only <code>mcpm-projector</code> and the two binary crates that depend on it. On a CI matrix with macOS and Linux, both x86_64 and aarch64, that is the difference between a 4-minute incremental build and a 25-minute clean build.<cite>crane-docs</cite>
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments against my peers</h2>
+
+    <h3>Versus <code>distro-packager</code> (FHS, deb/rpm)</h3>
+    <p>
+      The distro-packager wants <code>/usr/bin/mcpmanagerd</code> in a <code>.deb</code> repository, a systemd unit shipped via <code>dh_installsystemd</code>, and an apt-managed update path. The appeal is real: it is what every Linux user expects of every other tool. But three things break this for v1.0:
+    </p>
+    <ol>
+      <li><strong>We do not ship a system service.</strong> <code>mcpmanagerd</code> is a per-user daemon. Its socket lives in <code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code>, its config in <code>~/.config/mcp-manager/</code>, its secrets in the user keychain. A system-wide <code>.deb</code> install puts the binary in <code>/usr/bin</code> but does not give the user a service &mdash; the user still must <code>systemctl --user enable</code> something. The packaging buys us nothing the curl tarball does not already buy us, while adding a multi-distro build matrix (deb &times; rpm &times; arch &times; obs &times; aur).</li>
+      <li><strong>The MCP server side cannot use distro packages anyway.</strong> The MCP servers we supervise are pinned via <code>devenv</code> profiles &mdash; we cannot accept "the system's Python 3.11" because a server tested against 3.11.6 cannot promise behaviour against 3.11.13 with different OpenSSL linkage. Distro packages are antithetical to pinned reproducibility, and pinned reproducibility is the product. If the system Python is unfit for purpose for the supervised processes, the system package manager is unfit for purpose for the supervisor.</li>
+      <li><strong>Nix is multi-distro by construction.</strong> One flake builds for Ubuntu 22, Ubuntu 24, Debian 12, Fedora 40, Arch, NixOS, and macOS, with one CI matrix entry per architecture, not per distro &times; architecture. The deb/rpm path is at least 8x the matrix.</li>
+    </ol>
+    <p>
+      My counter-proposal: if distro packages are wanted, they should be a <em>community</em> contribution wrapping the static tarballs we already produce. We should not own them. Nix is the path we maintain.
+    </p>
+
+    <h3>Versus <code>sre-hawk</code> (observability, on-call)</h3>
+    <p>
+      The SRE wants Prometheus endpoints, structured-JSON logs to stdout, OpenTelemetry trace export, a <code>/healthz</code>. Everything they want is correct; almost none of it ships in v1.0 (the locked decisions explicitly defer "Observability (Prometheus, OpenTelemetry)" to v1.1). The collision with my position is narrow but real: the SRE wants their pipeline to ingest the binary's logs in a uniform shape regardless of how it was installed. That is a packaging-shaped concern.
+    </p>
+    <p>
+      Nix helps here, not hurts. A flake produces <em>identical</em> binaries on identical inputs &mdash; so the SRE can pin the version they have audited and substitute it from their internal Cachix without trusting a third-party build pipeline.<cite>cachix-docs</cite> The append-only JSONL audit log defined in the technical design lands at <code>$XDG_STATE_HOME/mcpmanagerd/audit/*.jsonl</code> regardless of install channel; that path is the SRE's ingestion point. What I push back on is the suggestion that we should ship a "production" build that differs from the "dev" build. We should not. One flake, one binary, one set of features; the SRE pipes the JSONL into Loki/Vector/whatever and we are done.
+    </p>
+
+    <h3>Versus <code>supply-chain-sec</code> (minisign, cosign, SBOM)</h3>
+    <p>
+      The supply-chain agent is my closest ally, but we will disagree on which signature is canonical. They will argue that minisign over the release tarballs is the right primary &mdash; small, auditable, no PKI ceremony, <a href="https://jedisct1.github.io/minisign/">single-file public key</a>.<cite>minisign-home</cite> I agree that minisign on the tarballs is correct. What I add is: <em>that signature is not the only one</em>, and for Nix users it is not the primary one.
+    </p>
+    <p>
+      Nix's substituter-trust model uses Ed25519 keypairs to sign every path entering a binary cache.<cite>cachix-docs</cite> A Nix-installed <code>mcpmanagerd</code> is verified path-by-path by <code>nix copy</code> against the cache key; minisign over the tarball is not in that path. The two systems should coexist: minisign signs the curl-tarball envelope, the Nix store substituter key signs every Nix-built path. The flake's GitHub release workflow produces <em>both</em> in the same run, so we are not running two pipelines. Importantly, the <em>same artifact</em> goes into both: the static binary in the tarball is bit-identical to the binary in the Nix store (the tarball is just <code>nix-store --export</code>-equivalent layout).
+    </p>
+    <p>
+      On SBOM: the supply-chain agent will want CycloneDX or SPDX. Nix already has provenance &mdash; every store path is a function of its inputs &mdash; but the world wants the SPDX format. I propose <code>nix-sbom</code> or <code>sbomnix</code> as the export bridge: take the flake's output, walk the derivation graph, emit SPDX 2.3 JSON.<cite>sbomnix-tiiuae</cite> This is auto-generated at release time, not hand-curated. No human ever maintains a list of "deps we ship," because the flake <em>is</em> the list.
+    </p>
+
+    <h3>Versus <code>curl-installer-defender</code></h3>
+    <p>
+      This is the real argument. The curl installer defender will say: most developers do not have Nix and never will; the curl installer is the path 95% of users take; therefore the curl installer must be primary in design, not in afterthought. I do not disagree about the user share. I disagree about what "primary" means.
+    </p>
+    <p>
+      <strong>Primary should mean "the source of truth for what gets built."</strong> The curl installer can deliver the binary to 95% of users <em>and</em> the canonical build can still be the flake, because the curl installer downloads tarballs that the flake produces. Concretely:
+    </p>
+    <ul>
+      <li>One CI workflow. Triggered by tag push. Runs <code>nix flake check</code> on macOS + Linux, x86_64 + aarch64. On success, runs <code>nix build .#mcpmanagerd .#mcpm</code> for each system, packages each result into a tarball with <code>SHA256SUMS</code>, signs each tarball with minisign, uploads to the GitHub release. Same CI run pushes the Nix outputs to <code>cache.mcp-manager.dev</code> (cachix).</li>
+      <li>Curl installer is a 40-line shell script that detects OS+arch, downloads the right tarball, verifies the minisign signature against a baked-in pubkey, untars to <code>$PREFIX/bin</code>, prints "next steps."</li>
+      <li>If <code>nix</code> is on <code>$PATH</code> when the curl installer runs, it can <em>optionally</em> shell out to <code>nix profile install</code> after asking the user. ("We detected Nix &mdash; install via Nix for reproducible upgrades? [Y/n]")</li>
+    </ul>
+    <p>
+      The curl installer defender's worry &mdash; "Nix takes 20 minutes to install and most users will rage-quit" &mdash; is a real concern, and my proposal does not require any user to install Nix. They never see Nix. They <code>curl &hellip; | sh</code>, they get a binary, they run <code>mcpm init</code>, they are done. Nix is an internal build-system choice, exactly the way Rust is an internal language choice. We do not require users to install <code>rustc</code> either.
+    </p>
+    <p>
+      Where we agree: the user-facing CLI flow is <code>curl &hellip; | sh</code> for the median user. Where we disagree: the build pipeline's canonical artifact, the SBOM source, the CI gate, and the reproducibility claim live in the flake, not the shell installer.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3>flake.nix outline</h3>
+
+    <p>
+      Single repository-root <code>flake.nix</code>. Inputs pinned by content hash. Outputs: <code>packages</code> (the two binaries), <code>devShells</code> (developer environment), <code>checks</code> (<code>nix flake check</code> gates), <code>nixosModules</code> (declarative service config for NixOS users), <code>overlays</code> (so downstream flakes can compose us). Crane handles the Rust workspace so per-crate caching survives across CI runs.<cite>crane-docs</cite>
+    </p>
+
+<pre><code class="lang-nix">{
+  description = "MCP Manager — supervisor for Model Context Protocol servers";
+
+  inputs = {
+    nixpkgs.url      = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url  = "github:numtide/flake-utils";
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    crane            = { url = "github:ipetkov/crane"; inputs.nixpkgs.follows = "nixpkgs"; };
+    advisory-db      = { url = "github:rustsec/advisory-db"; flake = false; };
+    devenv.url       = "github:cachix/devenv";
+  };
+
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, crane, advisory-db, devenv }:
+    flake-utils.lib.eachSystem [
+      "x86_64-linux" "aarch64-linux"
+      "x86_64-darwin" "aarch64-darwin"
+    ] (system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ (import rust-overlay) ];
+        };
+        rust = pkgs.rust-bin.stable."1.82.0".default;
+        craneLib = (crane.mkLib pkgs).overrideToolchain rust;
+
+        # Common source filter: only what affects the build.
+        src = craneLib.cleanCargoSource ./.;
+        commonArgs = {
+          inherit src;
+          strictDeps = true;
+          buildInputs = with pkgs; [ openssl ]
+            ++ pkgs.lib.optional pkgs.stdenv.isDarwin pkgs.libiconv
+            ++ pkgs.lib.optional pkgs.stdenv.isDarwin pkgs.darwin.apple_sdk.frameworks.Security;
+          nativeBuildInputs = [ pkgs.pkg-config ];
+        };
+
+        # Build deps once, reuse across binary builds — this is the cache win.
+        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+        # Per-crate outputs. crane uses cargo metadata to find binary crates.
+        mcpmanagerd = craneLib.buildPackage (commonArgs // {
+          inherit cargoArtifacts;
+          pname = "mcpmanagerd";
+          cargoExtraArgs = "-p mcpm-daemon";
+          meta.mainProgram = "mcpmanagerd";
+        });
+        mcpm = craneLib.buildPackage (commonArgs // {
+          inherit cargoArtifacts;
+          pname = "mcpm";
+          cargoExtraArgs = "-p mcpm-cli";
+          meta.mainProgram = "mcpm";
+        });
+
+      in {
+        packages = {
+          inherit mcpmanagerd mcpm;
+          default = mcpm;            # `nix run` → CLI
+          # Composite output: both binaries in one derivation, for `nix profile install`.
+          mcp-manager = pkgs.symlinkJoin {
+            name = "mcp-manager";
+            paths = [ mcpmanagerd mcpm ];
+            postBuild = ''
+              # Validate that the two binaries are content-addressable peers:
+              # they MUST share the same crate-graph hash. This catches drift
+              # if someone publishes one without the other.
+              test -x $out/bin/mcpmanagerd
+              test -x $out/bin/mcpm
+            '';
+            meta.description = "MCP Manager — mcpmanagerd + mcpm CLI";
+          };
+        };
+
+        checks = {
+          inherit mcpmanagerd mcpm;
+          # Per-crate test runs reuse the cargoArtifacts cache.
+          test     = craneLib.cargoNextest (commonArgs // { inherit cargoArtifacts; });
+          clippy   = craneLib.cargoClippy  (commonArgs // {
+                       inherit cargoArtifacts;
+                       cargoClippyExtraArgs = "--all-targets -- --deny warnings"; });
+          rustfmt  = craneLib.cargoFmt { inherit src; };
+          # Reproducibility gate: build twice, diff outputs. Catches non-determinism early.
+          audit    = craneLib.cargoAudit { inherit src advisory-db; };
+        };
+
+        # Developer environment — `nix develop`.
+        devShells.default = devenv.lib.mkShell {
+          inherit pkgs;
+          inputs = { inherit nixpkgs; };
+          modules = [{
+            languages.rust.enable  = true;
+            languages.rust.channel = "stable";
+            packages = with pkgs; [
+              cargo-nextest cargo-deny cargo-machete cargo-audit
+              mdbook minisign sbomnix
+            ];
+            pre-commit.hooks.clippy.enable  = true;
+            pre-commit.hooks.rustfmt.enable = true;
+            pre-commit.hooks.deadnix.enable = true;
+          }];
+        };
+
+        # NixOS / nix-darwin module: declarative service config for the daemon.
+        # Users who want mcpmanagerd as a user-service on NixOS get a one-liner.
+        nixosModules.default = import ./nix/module.nix self;
+      });
+}
+</code></pre>
+
+    <p>
+      Notes worth surfacing:
+    </p>
+    <ul>
+      <li><strong>One source filter, two binary builds.</strong> <code>cargoArtifacts</code> is computed once and reused by both <code>mcpmanagerd</code> and <code>mcpm</code> &mdash; this is what makes CI fast on the 11-crate workspace. A change to <code>mcpm-projector</code> invalidates exactly the artifacts that depend on it; everything else is a cache hit.<cite>crane-docs</cite></li>
+      <li><strong>The <code>checks</code> attrset is the CI gate.</strong> A single <code>nix flake check</code> invocation runs clippy, rustfmt, nextest, cargo-audit, and per-binary build. The CI workflow is essentially three lines: install Nix, run <code>nix flake check</code>, push to cachix.</li>
+      <li><strong>The composite <code>mcp-manager</code> output</strong> is what <code>nix profile install</code> consumes. Putting both binaries under one <code>symlinkJoin</code> means upgrades and rollbacks treat them as a unit, which matches the <code>mcpm-protocol</code> wire-compat contract.</li>
+      <li><strong>The nixos module</strong> is the NixOS user's equivalent of the launchd/systemd-user registration the daemon does automatically on first launch.</li>
+    </ul>
+
+    <h3>Per-server <code>devenv.nix</code> profile sketch</h3>
+
+    <p>
+      The <code>mcpm-supervisor</code> crate, when launching an MCP server with <code>isolation = "devenv"</code>, materialises a per-server profile under <code>~/.config/mcpm/profiles/&lt;name&gt;/</code> (3 files: <code>devenv.nix</code>, <code>devenv.yaml</code>, <code>devenv.lock</code>) and evaluates it. The lock file is what gives us byte-identical environments across machines.<cite>devenv-home</cite> The example below is the github-mcp Python server, but the shape is the same for Node, Bun, or native binaries (Stream 2 has full per-language examples at <a href="../../research/stoic-badger-sandbox/research-nix-isolation-per-server.html">stoic-badger-sandbox / per-server</a>).
+    </p>
+
+<pre><code class="lang-nix"># ~/.config/mcpm/profiles/github-mcp/devenv.nix
+# Generated by `mcpm install github-mcp` — do not hand-edit.
+{ pkgs, lib, config, inputs, ... }:
+{
+  # Pinned interpreter, pinned uv.
+  languages.python.enable  = true;
+  languages.python.version = "3.11.6";
+  packages                 = [ pkgs.uv pkgs.git ];
+
+  # Force uv to use Nix-provided Python — no curling random interpreters.
+  env.UV_PYTHON_DOWNLOADS = "never";
+  env.UV_LINK_MODE        = "copy";
+
+  # The supervisor injects secrets via env at spawn time — devenv does NOT
+  # see plaintext. The values land in this process's env via the OS keychain
+  # passthrough (mcpm-secrets), never in the devenv.nix file.
+  env.GITHUB_TOKEN = "@@MCPM_SECRET_GITHUB_TOKEN@@";  # placeholder, never persisted
+
+  # The supervised process. devenv defines it; mcpm-supervisor exec's it.
+  processes.mcp-server.exec = ''
+    exec uv run --frozen python -m mcp_server_github --transport stdio
+  '';
+
+  # Mark the profile as managed by mcpm so editing surfaces a warning.
+  enterShell = ''
+    echo "Managed by mcp-manager. Edit via 'mcpm config edit github-mcp'." >&2
+  '';
+}
+</code></pre>
+
+    <p>
+      Each server's profile is composable from a baseline. The mcpm-projector emits the <code>devenv.nix</code> from a TOML manifest in <code>manifests/toolchains/&lt;server-kind&gt;.toml</code>, so a server author who publishes to our registry ships a TOML, not a Nix expression. This keeps the "Nix learning curve" cost on us, not on server authors &mdash; which matches the constraint <a href="../../research/stoic-badger-sandbox/recommendation-nix-isolation-summary.html#nix-pain">stoic-badger-sandbox conceded</a>: "never make a Nix expression the first thing the user has to read."
+    </p>
+
+    <h3>CI matrix (single <code>nix flake check</code>)</h3>
+
+    <p>
+      Four runners, one workflow, one command per runner. The matrix is system &times; bin, not distro &times; bin &times; build-tool. Cachix Action handles cache push-on-success.<cite>cachix-action-gh</cite>
+    </p>
+
+    <table class="compare">
+      <thead><tr><th>Runner</th><th>System</th><th>Command</th><th>What runs</th></tr></thead>
+      <tbody>
+        <tr><td>GitHub Actions <code>ubuntu-latest</code></td><td><code>x86_64-linux</code></td><td><code>nix flake check -L</code></td><td>clippy · rustfmt · nextest · audit · build mcpmanagerd · build mcpm</td></tr>
+        <tr><td>GitHub Actions <code>ubuntu-latest</code> (qemu)</td><td><code>aarch64-linux</code></td><td><code>nix build .#mcpm-manager --system aarch64-linux</code></td><td>build only (tests on native runners only)</td></tr>
+        <tr><td>GitHub Actions <code>macos-14</code></td><td><code>aarch64-darwin</code></td><td><code>nix flake check -L</code></td><td>full check</td></tr>
+        <tr><td>GitHub Actions <code>macos-13</code></td><td><code>x86_64-darwin</code></td><td><code>nix flake check -L</code></td><td>full check</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Reproducibility gate: a <em>fifth</em> job runs <code>nix build --rebuild .#mcp-manager</code> on Linux and asserts that the SHA256 of the output path matches the first job's output. If they differ, the build is non-deterministic and CI fails. This is the same idea as the <a href="https://reproducible-builds.org/">reproducible-builds.org</a> double-build check, but enforced by Nix's path-equality semantics.<cite>reproducible-builds-spec</cite>
+    </p>
+
+    <h3>Binary cache (cachix) flow</h3>
+
+    <p>
+      Every successful <code>nix flake check</code> on the four runners pushes its result paths to <code>cache.mcp-manager.dev</code>, signed with our Ed25519 substituter key.<cite>cachix-docs</cite> Users with Nix get cache hits transparently. Users without Nix get the same artifact via the tarball path.
+    </p>
+
+<pre><code class="lang-nix"># What a Nix-using developer puts in their nix.conf to get our cache:
+substituters       = https://cache.nixos.org https://cache.mcp-manager.dev
+trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+                      mcp-manager.dev-1:&lt;our-ed25519-public-key&gt;
+</code></pre>
+
+    <p>
+      The cache itself can be hosted on Cachix (managed) or Hercules CI (self-hosted) &mdash; both speak the same protocol.<cite>hercules-ci-binary-cache</cite> For v1.0 we use Cachix because the team's setup time is zero. Migration to Hercules later is a config change, not a re-architecture, because the cache <em>is</em> the binary substituter protocol &mdash; the producer side is identical.
+    </p>
+
+    <p>
+      The trust composition with minisign is clean:
+    </p>
+
+    <ul>
+      <li><strong>Curl path:</strong> static tarball &rarr; minisign signature against baked-in pubkey &rarr; user untars to <code>$PREFIX/bin</code>. No Nix involved.</li>
+      <li><strong>Nix path:</strong> store path &rarr; cachix substituter signature against trusted Ed25519 pubkey &rarr; <code>nix copy</code> into local store &rarr; <code>nix profile install</code> exposes both binaries on <code>$PATH</code>. No minisign involved.</li>
+      <li><strong>Both paths produce the same binary.</strong> The Nix derivation that builds <code>mcpmanagerd</code> is the same one whose output gets packed into the tarball. SHA256 of the binary is identical regardless of which path the user came through. <em>This is the property that makes the dual path honest.</em></li>
+    </ul>
+
+    <h3>SBOM export from Nix</h3>
+
+    <p>
+      Nix's store paths <em>are</em> the SBOM &mdash; every derivation's inputs are content-addressed and visible in the dependency graph. The translation to SPDX or CycloneDX is mechanical. We use <code>sbomnix</code>, which walks the flake's output derivation and emits SPDX 2.3 JSON.<cite>sbomnix-tiiuae</cite>
+    </p>
+
+<pre><code class="lang-nix"># Added to flake.nix outputs:
+apps.sbom = {
+  type = "app";
+  program = let
+    sbomScript = pkgs.writeShellScriptBin "gen-sbom" ''
+      ${pkgs.sbomnix}/bin/sbomnix \
+        --type=runtime \
+        --csv=mcp-manager.csv \
+        --cdx=mcp-manager.cdx.json \
+        --spdx=mcp-manager.spdx.json \
+        .#mcp-manager
+    '';
+  in "${sbomScript}/bin/gen-sbom";
+};
+</code></pre>
+
+    <p>
+      Run as <code>nix run .#sbom</code> in CI on every tag. The resulting <code>mcp-manager.spdx.json</code> and <code>mcp-manager.cdx.json</code> are attached to the GitHub release alongside the tarballs and their minisign signatures. The supply-chain agent gets their CycloneDX without any of us hand-curating a dependency list.
+    </p>
+
+    <h3>Service manager interaction (launchd + systemd-user)</h3>
+
+    <p>
+      The locked design says: "Auto-spawns from <code>mcpm exec</code>; optional service-manager registration on first launch (opt-in)." On a Nix-installed system this composes cleanly:
+    </p>
+    <ul>
+      <li><strong>Nix profile install</strong> places <code>mcpmanagerd</code> at <code>~/.nix-profile/bin/mcpmanagerd</code> (a symlink into <code>/nix/store</code>). The launchd plist or systemd-user unit references this symlink path. Profile rollback updates the symlink atomically; the service definition does not change.</li>
+      <li><strong>On NixOS / nix-darwin</strong>, the <code>nixosModules.default</code> output exports a declarative service: a user adds <code>services.mcpmanagerd.enable = true;</code> to their config and the service unit is written into the system declaratively. No imperative "<code>mcpm</code> wrote a plist into <code>~/Library/LaunchAgents</code>"; the state is part of the user's NixOS config and gets rolled into their generation.</li>
+      <li><strong>For non-NixOS Nix users</strong>, the <code>mcpm</code> CLI's first-launch interactive prompt ("Register mcpmanagerd with launchd as a background service? [y/N]") still works &mdash; it just writes the plist pointing at the profile symlink. <code>mcpm uninstall</code> then becomes "remove the plist, run <code>nix profile remove mcp-manager</code>." The audit event <code>service.unregister</code> fires either way.</li>
+    </ul>
+
+    <h3>devenv-as-isolation versus systemd</h3>
+
+    <p>
+      A subtle point: <code>devenv</code> profiles are not a service-manager replacement. The supervised MCP-server process inside a devenv profile is still spawned by <code>mcpm-supervisor</code>'s tokio task and watched by it &mdash; devenv just hands us a pinned environment to spawn into. The OS sandbox (bubblewrap on Linux, sandbox-exec on macOS) wraps the devenv-spawned process. So the layering is: <em>launchd/systemd-user runs <code>mcpmanagerd</code>; <code>mcpmanagerd</code> runs each MCP server inside a devenv-pinned shell, inside an OS sandbox</em>. Three nested concerns, three layers, no conflation.
+    </p>
+
+    <h3>Update mechanism &mdash; <code>nix profile upgrade</code></h3>
+
+    <p>
+      The technical design says v1.0 "does not ship a self-updater." That is correct for the curl path: users re-run the curl script and the new tarball lands. For the Nix path, the update is one command:
+    </p>
+
+<pre><code class="lang-shell">$ nix profile upgrade mcp-manager
+</code></pre>
+
+    <p>
+      This re-resolves the flake's reference, downloads the new version from cache.mcp-manager.dev (cache hit if we have built it; cache miss falls back to local build), updates the profile generation, and swaps the symlinks atomically. If the new version misbehaves, <code>nix profile rollback</code> reverts. The user never has to think about "did the tarball download corrupt?" because Nix verifies every path against the substituter signature before swapping. This is the model <a href="../../research/closing-gaps/version-management/recommendation-versioning-summary.html">version-management</a> uses for MCP servers &mdash; "range in manifest, exact in lockfile" &mdash; applied to the supervisor itself: the flake input declaration is the range, the flake.lock is the exact pin.
+    </p>
+
+    <p>
+      Renovate's vocabulary maps cleanly onto Nix semantics. The version-management recommendation classifies updates as patch / minor / major / digest / spec-bump. For a Nix-installed user, those map to: same <code>flake.lock</code> hash within a semver range (patch/minor), flake-output rename (major), nixpkgs revision bump with no functional change (digest), and downstream-server spec change (orthogonal &mdash; that is per-server, not per-supervisor).
+    </p>
+
+    <h3>Cross-platform &mdash; what differs in the flake</h3>
+
+    <p>
+      Almost nothing. Two macOS-specific lines: <code>libiconv</code> and the <code>Security</code> framework via <code>darwin.apple_sdk.frameworks</code>. Everything else is shared. The <code>flake-utils.lib.eachSystem</code> wrapper handles the cross-product for us. macOS's launchd integration lives in a runtime code path in <code>mcpm-daemon</code>, not in the build &mdash; the binary detects its platform and writes the right service file. The flake builds the same binary for both.
+    </p>
+
+    <h3>Service-string namespace &mdash; <code>dev.mcp-manager</code> is correct</h3>
+
+    <p>
+      The technical design uses <code>dev.mcp-manager.mcpmanagerd</code> for keychain entries and (presumably) launchd labels. This is reverse-DNS, conventional, and aligns with Nix flake attribute naming: <code>github:user/mcp-manager</code> maps semantically to "the <code>mcp-manager</code> project at the <code>dev</code> domain." A flake's outputs are namespaced by attribute path (e.g. <code>packages.x86_64-linux.mcpmanagerd</code>), so the reverse-DNS form in OS-level service strings is the right shape to mirror that &mdash; both spaces use a hierarchical, namespace-collision-free convention. I would not switch to bare <code>mcp-manager</code>; the qualified form survives multi-tool installs on a single machine (e.g. if a future fork uses the bare name).
+    </p>
+
+    <h3>mdbook docs hosting</h3>
+
+    <p>
+      The locked decision says "mdbook docs in repo." Nix builds them: add an <code>mdbook</code> derivation to the flake outputs.
+    </p>
+
+<pre><code class="lang-nix">packages.docs = pkgs.stdenv.mkDerivation {
+  name = "mcp-manager-docs";
+  src  = ./docs;
+  nativeBuildInputs = [ pkgs.mdbook ];
+  buildPhase   = "mdbook build";
+  installPhase = "cp -r book $out";
+};
+</code></pre>
+
+    <p>
+      CI builds <code>nix build .#docs</code> on every PR and publishes the result to GitHub Pages (or an equivalent). The docs build is reproducible; the same Markdown produces the same HTML byte-for-byte. No "works on my machine" drift between contributor toolchains.<cite>mdbook-docs</cite>
+    </p>
+
+    <h3><code>mcpm uninstall</code> on Nix</h3>
+
+    <p>
+      The locked UX says <code>mcpm uninstall</code> "Removes MCP Manager. Unregisters from service manager, stops daemon + servers, removes config dir, preserves audit log + keychain." On a Nix-installed system this becomes:
+    </p>
+    <ol>
+      <li><code>mcpm uninstall</code> stops the daemon, unregisters the launchd/systemd-user service (audit: <code>service.unregister</code>), removes <code>~/.config/mcp-manager/</code> (unless <code>--keep-config</code>).</li>
+      <li>It then prints, but does not run: <code>nix profile remove mcp-manager</code>. The user runs that to remove the binary itself.</li>
+      <li>The user can later <code>nix profile rollback</code> to restore everything (including the binary) if they regret it. This is a strictly better property than the curl path, which has no undo.</li>
+    </ol>
+    <p>
+      The reason <code>mcpm uninstall</code> does not <em>itself</em> run <code>nix profile remove</code> is that doing so requires <code>nix</code> on <code>$PATH</code> at uninstall time and assumes the binary was installed via Nix (it might have been installed via the curl wrapper that called <code>nix profile install</code> automatically, but the user might not remember). Printing the command is honest; running it is presumptuous. The CLI's prompt asks ("Detected Nix install; remove via <code>nix profile remove mcp-manager</code>? [Y/n]") and runs it on confirmation.
+    </p>
+
+    <h3>Auto-spawn daemon &mdash; binary path resolution</h3>
+
+    <p>
+      The technical design says <code>mcpm-client</code>'s <code>connect()</code> auto-spawns <code>mcpmanagerd</code> on <code>ENOENT/ECONNREFUSED</code>. The lookup is: (1) try <code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code>; (2) on failure, fork+spawn. For "fork+spawn" we need the path to the daemon binary. On a Nix profile install, this is <code>~/.nix-profile/bin/mcpmanagerd</code> (a symlink); on a curl install, it is <code>/usr/local/bin/mcpmanagerd</code> (a real file). The CLI does <code>which mcpmanagerd</code> via <code>$PATH</code> &mdash; the same as any other tool. The user's shell <code>$PATH</code> is what makes this work; Nix profiles add <code>~/.nix-profile/bin</code> to <code>$PATH</code> at user-login time, the curl installer's <code>$PREFIX/bin</code> path is already there for any sane <code>$PREFIX</code>. No special-casing in the daemon-spawn code; it is the same code path for both install channels.
+    </p>
+
+    <h3>Why this is the honest design</h3>
+
+    <p>
+      Every claim we want to make about MCP Manager &mdash; reproducible, auditable, isolated, secret-safe, no-telemetry &mdash; rests on the build being a pure function of its inputs. The lockfile schema in the technical design ("range in manifest, exact in lockfile") is a recapitulation of the flake-lock idea. The audit log's promise that "we know what ran" requires "we know what was installed." The substituter-trust model gives us a primitive that says "this binary came from this set of inputs, signed by this key." We are not building a new trust-system; we are inheriting the one Nix has already debugged for fifteen years. The curl installer can ship the artifact, but the flake produces it &mdash; and that is the relationship that should be primary in our heads, even when it is invisible to the median user.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li id="nix-flakes-determinate">Determinate Systems &mdash; "Nix Flakes: an Introduction." <a href="https://determinate.systems/posts/experimental-does-not-mean-unstable/">determinate.systems/posts/experimental-does-not-mean-unstable/</a></li>
+      <li id="reproducible-builds-spec">Reproducible Builds project &mdash; definitions and verification methodology. <a href="https://reproducible-builds.org/docs/definition/">reproducible-builds.org/docs/definition/</a></li>
+      <li id="nix-manual-profiles">NixOS Manual &mdash; <code>nix profile</code> reference. <a href="https://nix.dev/manual/nix/2.18/command-ref/new-cli/nix3-profile">nix.dev/manual/nix/2.18/command-ref/new-cli/nix3-profile</a></li>
+      <li id="cachix-docs">Cachix &mdash; binary cache documentation. <a href="https://docs.cachix.org/">docs.cachix.org</a></li>
+      <li id="crane-docs">Crane &mdash; Nix utility library for building Cargo projects. <a href="https://crane.dev/">crane.dev</a></li>
+      <li id="devenv-home">devenv.sh &mdash; fast developer environments. <a href="https://devenv.sh/">devenv.sh</a></li>
+      <li id="minisign-home">minisign &mdash; small signing tool by Frank Denis. <a href="https://jedisct1.github.io/minisign/">jedisct1.github.io/minisign/</a></li>
+      <li id="sbomnix-tiiuae">sbomnix &mdash; SPDX/CycloneDX SBOM generator for Nix flakes (TII / Secure Systems Research). <a href="https://github.com/tiiuae/sbomnix">github.com/tiiuae/sbomnix</a></li>
+      <li id="cachix-action-gh">cachix/cachix-action &mdash; GitHub Actions binding for Cachix. <a href="https://github.com/cachix/cachix-action">github.com/cachix/cachix-action</a></li>
+      <li id="hercules-ci-binary-cache">Hercules CI &mdash; "Binary caches as a Nix substituter." <a href="https://docs.hercules-ci.com/hercules-ci/effects/">docs.hercules-ci.com/hercules-ci/effects/</a></li>
+      <li id="mdbook-docs">mdBook documentation &mdash; book creation utility. <a href="https://rust-lang.github.io/mdBook/">rust-lang.github.io/mdBook/</a></li>
+      <li id="nix-flakes-rfc">Nix RFC 49 &mdash; flakes RFC. <a href="https://github.com/NixOS/rfcs/blob/master/rfcs/0049-flakes.md">github.com/NixOS/rfcs/blob/master/rfcs/0049-flakes.md</a></li>
+    </ol>
+    <p>Stream 2 deep-research (per-server devenv profiles, isolation tiers) is at <a href="../../research/stoic-badger-sandbox/">stoic-badger-sandbox</a>; their citation file accumulates the full set of nix.dev / NixOS Manual / Determinate Systems primary sources.</p>
+  </section>
+</main>
+</body>
+</html>

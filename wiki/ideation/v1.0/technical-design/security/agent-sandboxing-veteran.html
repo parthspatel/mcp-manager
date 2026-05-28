@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sandboxing Veteran — Security deep dive — MCP Manager v1.0</title>
+<meta name="description" content="Sandboxing-veteran agent stance: the five v1.0 isolation modes are a gradient, not a menu of equivalents. Per-mode escape paths, sandbox-exec profile template, bubblewrap argv, Docker run flags, and how secrets cross the boundary.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">security · sandboxing-veteran</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">security overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+<main class="container">
+
+  <h1>The Sandboxing Veteran's Security</h1>
+  <p class="lede">
+    Sandboxing is a gradient, not a checkbox. <code>devenv</code> is reproducibility, not isolation. <code>docker</code> and <code>podman</code> are <em>real</em> sandboxes. <code>uvx</code> and <code>npx</code> are convenience — they isolate <em>packages</em>, not <em>processes</em>. The locked v1.0 modes (<code>devenv | docker | podman | uvx-npx | none</code>) are correct as a set; what matters now is how we wire each mode end-to-end so the user understands what they are buying, and so an attacker can't slip out the side of the weak ones.
+  </p>
+
+  <p>
+    I've shipped bubblewrap in distro-managed flatpaks, written SBPL profiles by reading sandboxd reject logs, debugged user-namespace mount loops in nsjail, run gVisor under k8s, and watched a Docker rootless install fail because <code>/etc/subuid</code> didn't have a row for the daemon UID. The instinct that pays off in every one of those: <strong>don't trust the label, trust the surface</strong>. A mode is only as strong as its weakest invariant — the one nobody documents.
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts: where I'm coming from</a></li>
+      <li><a href="#arguments">Arguments with my four peers</a></li>
+      <li><a href="#design">Design: the five-mode gradient, end to end</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts: where I'm coming from</h2>
+
+    <h3>The gradient nobody draws</h3>
+    <p>
+      Every sandboxing conversation I've been in eventually devolves into the same equivocation: "we sandbox the server, so it's safe." That sentence is meaningless without the gradient. Here is the gradient I carry around in my head, in plain language:
+    </p>
+    <ol>
+      <li><strong>Convenience</strong> — different packages don't trample each other's <em>files</em>, but they share the user's process, FS, and network. <code>uvx</code>, <code>npx</code>, <code>pipx</code>. The Python venv is the canonical example. <cite>uv docs</cite> are explicit that <code>uvx</code> "isolates" by venv, not by sandbox.</li>
+      <li><strong>Reproducible</strong> — the package's <em>build inputs</em> are pinned by hash, so two invocations produce the same binary, but the running process still has the user's full ambient authority. <code>devenv</code>/Nix lives here. Don't confuse build hermeticity with run-time confinement.</li>
+      <li><strong>Isolated (process-level)</strong> — the process is in its own PID/mount/net/IPC namespace or under a Mach-level sandbox profile. <code>bubblewrap</code> on Linux, <code>sandbox-exec</code> on macOS. The kernel mediates every syscall the process makes.</li>
+      <li><strong>Hardened (container-level)</strong> — the above, plus an explicit image layer with its own root FS, an OCI runtime mediating cgroups/capabilities/seccomp, and a per-container network namespace by default. Docker / Podman rootless.</li>
+      <li><strong>Microvm / kernel-divorced</strong> — gVisor (intercepting syscall layer), Kata (full kernel-per-container), Firecracker. Out of scope for v1.0 but worth naming so we know what we're <em>not</em> claiming.</li>
+    </ol>
+    <p>
+      In v1.0, modes are: <code>none</code> (level 1 at best, often level 0), <code>uvx-npx</code> (level 1), <code>devenv</code> (level 2), <code>docker</code> / <code>podman</code> (level 4). <strong>The user must see which level each server runs at.</strong> A badge in the TUI. A column in <code>mcpm list</code>. Anything less is misleading.
+    </p>
+
+    <h3>devenv is not a sandbox. Say it twice.</h3>
+    <p>
+      The Nix store is read-only by virtue of being declared so by convention and by file permissions; a malicious MCP server <em>running inside</em> a devenv shell still has full access to <code>$HOME</code>, can fork, can call <code>connect(2)</code> to anywhere, can read <code>~/.ssh/id_ed25519</code>. The escape-hatch research page makes this point explicitly — <em>"devenv naked: strong build reproducibility, weak run-time scoping. Acceptable on trusted dev machines but not a default"</em> — and the recommendation summary echoes it: ship devenv-plus-sandbox, not devenv alone. <cite>stoic-badger recommendation</cite>. I want the v1.0 documentation to repeat this in plain English at the top of the isolation picker.
+    </p>
+
+    <h3>Modes have priors. Lean on them.</h3>
+    <p>
+      Each mode comes with sensible defaults that v1.0 should bake in instead of asking the user. <code>docker</code>: drop all capabilities, <code>--read-only</code> rootfs, <code>--cap-drop=ALL --security-opt=no-new-privileges</code>, the default seccomp profile, <code>--network=none</code> unless the manifest declares egress, and a tmpfs <code>/tmp</code>. <code>podman</code>: same flags, plus rootless by default. <code>bubblewrap</code> (when we ship it as the wrapper for <code>devenv</code> on Linux): <code>--unshare-all</code>, <code>--die-with-parent</code>, <code>--new-session</code>, <code>PR_SET_NO_NEW_PRIVS</code>, seccomp filter from <code>fd</code>. <code>sandbox-exec</code>: <code>deny default</code>, no exception. Defaults pay rent — they remove an attack surface even when the user accepts every other default.
+    </p>
+
+    <h3>Verify before launch, not during.</h3>
+    <p>
+      The trust gate fires <em>before</em> the sandbox starts. Signature verification on the package, sha256 pin on the project config, capability declaration check on the manifest — all of those happen in <code>mcpmanagerd</code>'s own address space, against material it pulled into its own memory. Once we hand argv to <code>execve</code>, the sandbox is the boundary. There is no "verify inside the sandbox"; the sandbox cannot meaningfully self-verify. This ordering is non-negotiable: TUF verify → manifest schema validate → trust-gate check → derive sandbox policy → fork → drop privileges → exec. Any step out of order is a hole.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments with my four peers</h2>
+
+    <h3 id="arg-red-team">vs. red-team (default-deny, attacker mindset)</h3>
+    <p>
+      Red-team and I agree on the destination — deny by default, allow narrowly — but they keep wanting to push the gradient up one rung universally. "Why is <code>uvx-npx</code> even allowed? It's a level-1 sandbox. Ban it." I push back: a tool that <em>refuses</em> to support how 90% of MCP servers ship today gets uninstalled. The v1.0 isolation picker has to include uvx-npx; what we owe red-team is that <strong>the picker label says exactly what they're getting</strong>. Mine says: <code>uvx-npx</code> → "package isolation only — full host access". If a user picks that after reading that, we've shifted the responsibility correctly.
+    </p>
+    <p>
+      Where red-team wins outright: <strong>no <code>none</code> mode without an explicit confirmation prompt</strong>. <code>none</code> means the manager isn't even wrapping the process — the MCP server runs with the user's full ambient authority. <code>mcpm install</code> for a server whose manifest declares <code>isolation = "none"</code> must show a one-time confirm-by-typing-the-name dialog, not just <kbd>y/N</kbd>. And the TUI must badge that server red.
+    </p>
+    <p>
+      Where we still disagree: red-team wants <code>--network=none</code> as the universal default for <code>docker</code>/<code>podman</code>. I want <code>--network=none</code> unless the manifest declares <code>network = ["api.github.com:443", …]</code>, in which case we either run with <code>slirp4netns</code> + nftables egress filter (Linux) or accept that Docker Desktop's bridge gives us host-list-only filtering (macOS). The middle ground is the right place: forcing <code>--network=none</code> would break every server that needs the internet, but the manifest must declare egress before we open it.
+    </p>
+
+    <h3 id="arg-crypto-pedant">vs. crypto-pedant (TUF, ed25519, SHA-256)</h3>
+    <p>
+      Crypto-pedant cares about <em>what</em> we verify. I care about <em>when</em>. They want minisign on registry index, cosign on container images, sha256-pin on project config. Yes, all of it. My only addition: <strong>the verification result must be reified into the audit log with the key id and the digest</strong>, not just "ok." When a CVE-2025-style supply-chain incident lands on a registry, we need to be able to grep an installed user's audit log for "what version of <code>foo</code> did we actually ship and what key signed it on what date" without re-running the verifier (which by then may be using a rotated trust root).
+    </p>
+    <p>
+      Where we genuinely disagree: crypto-pedant wants binary code signing on the MCP server <em>binary</em> as well (Apple Developer ID notarization on macOS, gpg-signed Debian packages on Linux). I think that's the wrong layer for v1.0. We sign <em>our</em> binaries (<code>mcpm</code>, <code>mcpmanagerd</code>) because we ship them. The MCP server binaries come from registries we already verified at the index level (minisign + sha256 pin in the lockfile). Layering another signature on the server binary adds operational burden without adding trust — the index already pinned the artifact's sha256 and we already verified that on download. <em>For mode <code>docker</code>/<code>podman</code></em>, cosign on the image is non-redundant because container registries are a separate trust domain from the MCP index; for <code>uvx-npx</code>, the registry-level signature is what's available and is sufficient.
+    </p>
+
+    <h3 id="arg-secrets-architect">vs. secrets-architect (keyring, env passthrough)</h3>
+    <p>
+      Secrets-architect and I have to coordinate. They own where the value lives; I own how it crosses the sandbox boundary. The technical-design doc already locks in <em>"secrets never cross a process boundary except via env injection at spawn time"</em> and <em>"mcpmanagerd reads from the keychain and writes to the child server process's env when launching it. The wrapper <code>mcpm exec</code> never sees the value"</em>. <cite>technical-design.html invariants</cite>. That's right, but the mechanism differs per mode and we should write it down per mode:
+    </p>
+    <table class="compare">
+      <thead><tr><th>Mode</th><th>Secret-injection mechanism</th><th>Why this is the cheapest safe option</th></tr></thead>
+      <tbody>
+        <tr><td><code>none</code></td><td><code>env</code> on the child via <code>tokio::process::Command::env()</code> directly.</td><td>No wrapper; secret values live in the parent's memory until <code>execve</code>, never written to disk.</td></tr>
+        <tr><td><code>uvx-npx</code></td><td>Same as <code>none</code>; the runner inherits env. Manager scrubs <code>PATH</code> to a pinned-runner path.</td><td>uvx/npx pass env unchanged. Don't write secrets into the <code>uv.lock</code> or <code>npx</code> command line.</td></tr>
+        <tr><td><code>devenv</code></td><td><code>devenv shell --quiet -- env -i PATH=…  &lt;named-vars&gt;=… &lt;binary&gt;</code>. Inject via <code>env -i</code> to wipe ambient, then add only the declared list.</td><td>devenv's own guidance is to load secrets at run-time, not bake them into the shell. <cite>devenv secrets guidance</cite>.</td></tr>
+        <tr><td><code>docker</code> / <code>podman</code></td><td><code>--env-file &lt;path-to-fifo&gt;</code> or repeated <code>--env NAME</code> on the run command. Do <em>not</em> pass <code>-e NAME=VALUE</code>: it shows up in <code>ps</code> on the host. Prefer <code>--env-file /dev/fd/&lt;n&gt;</code> with mcpmanagerd writing once and closing.</td><td>Container env-file via fd never hits disk; <code>--env NAME</code> (no value) reads from the manager's env, which we control.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      One specific disagreement: secrets-architect proposed mounting a tmpfs <code>secrets/</code> directory into the container with each secret as a file. I reject that for v1.0. Files in a tmpfs are still <em>in the container's view of the FS</em>, so any code in the server that walks <code>/secrets</code> sees the full set; env injection scopes the leak per-var. Use a file-secret mount only when the server can't read env (a small subset).
+    </p>
+
+    <h3 id="arg-audit-compliance">vs. audit-compliance (log integrity, tamper-evident)</h3>
+    <p>
+      Audit-compliance wants every spawn, every secret read, every sandbox-policy mutation in the audit log with a hash chain. Yes — and the technical-design already commits to JSONL audit at <code>$XDG_STATE_HOME/mcpmanagerd/audit/*.jsonl</code> with daily rotation. <cite>technical-design.html state</cite>. My only addition for sandboxing: <strong>the audit record for <code>server.spawn</code> must include the materialized sandbox policy</strong> — the bwrap argv, the SBPL profile sha256, the Docker run flags — not just "spawned <code>foo</code>". A spawn line that says "<code>foo, isolation=docker</code>" is unauditable; one that says "<code>foo, isolation=docker, args=[--cap-drop=ALL, --network=none, --read-only, --tmpfs=/tmp, --env-file=…]</code>" lets a reviewer six months later answer "was this server constrained?". For <code>sandbox-exec</code>, log the profile sha256 and include the resolved <code>-D</code> parameter bindings — those are the actual policy at that moment.
+    </p>
+    <p>
+      Where we'll fight: audit-compliance wants tamper-evident hash-chained logs (each line includes prev-line-hash). I'm fine with that for v1.0 as long as the chain is <em>append-only and verified at start-up</em>, not as long as we're hashing inside the spawn hot-path. Single-user dev tool, not a SOC — the threat model is "user accidentally <code>rm -rf</code>s the audit log", not "nation-state edits jsonl files in place".
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design: the five-mode gradient, end to end</h2>
+
+    <h3 id="design-table">Comparison table — isolation / egress / FS / escape paths</h3>
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Mode</th>
+          <th>Isolation level</th>
+          <th>Default network</th>
+          <th>Default FS</th>
+          <th>Escape paths to expect</th>
+          <th>When v1.0 picks this by default</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>none</code></td>
+          <td>0 — process runs as user; no wrapper</td>
+          <td>full host network</td>
+          <td>full <code>$HOME</code>, full FS read</td>
+          <td>any syscall; reads <code>~/.ssh</code>, <code>~/.aws</code>; writes anywhere user can; can fork-bomb</td>
+          <td>never — requires explicit user opt-in with confirm-by-name</td>
+        </tr>
+        <tr>
+          <td><code>uvx-npx</code></td>
+          <td>1 — venv/package isolation only; runs as user</td>
+          <td>full host network</td>
+          <td>full <code>$HOME</code>, full FS read</td>
+          <td>same as <code>none</code>; venv only stops <em>package</em> collisions, not the running process; <strong>CVE-2025-6514-class RCE</strong> if version not pinned</td>
+          <td>when no Docker/Podman and no Nix; manifest must declare <code>version = "&lt;exact pin&gt;"</code> or install refuses</td>
+        </tr>
+        <tr>
+          <td><code>devenv</code></td>
+          <td>2 — reproducible build; <strong>plus bubblewrap on Linux / sandbox-exec on macOS as v1.0 default wrapper</strong></td>
+          <td>shared by default; manifest can declare <code>--unshare-net</code> on Linux or <code>(deny network*)</code> on macOS</td>
+          <td>read-only <code>/nix/store</code>, project dir bind-mounted, <code>tmpfs /tmp</code>, <code>$HOME</code> mostly hidden</td>
+          <td>shared <code>/proc</code>, <code>/dev</code> if we don't unshare carefully; user namespace + setuid binary tricks if we forget <code>--die-with-parent</code> and <code>PR_SET_NO_NEW_PRIVS</code></td>
+          <td>when user has Nix installed and the package has a profile in our curated library</td>
+        </tr>
+        <tr>
+          <td><code>docker</code></td>
+          <td>4 — full OCI: image, rootfs, namespaces, cgroups, capabilities, seccomp</td>
+          <td><code>--network=none</code> unless manifest declares egress; then bridge + outbound allow-list</td>
+          <td>image rootfs read-only; explicit <code>--mount</code>s only; tmpfs <code>/tmp</code></td>
+          <td>kernel exploits (gVisor mitigates; we don't ship gVisor); Docker socket exposure (never mount <code>/var/run/docker.sock</code>); CVE in container runtime</td>
+          <td>v1.0 default for new servers <em>if Docker daemon detected</em></td>
+        </tr>
+        <tr>
+          <td><code>podman</code></td>
+          <td>4+ — same as Docker but rootless by default; user namespace always on</td>
+          <td>same defaults as Docker; <code>slirp4netns</code> for user-mode networking</td>
+          <td>same as Docker</td>
+          <td>same as Docker plus rootless-specific (subuid/subgid misconfig, fuse-overlayfs perf cliff); no <code>docker.sock</code> equivalent</td>
+          <td>v1.0 default for new servers <em>if Podman detected and Docker not detected</em></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="design-defaults">Default-mode selection algorithm</h3>
+    <p>
+      For a server whose manifest does <em>not</em> pin <code>isolation</code>, mcpmanagerd picks at install time, deterministically:
+    </p>
+    <pre><code>fn pick_default_isolation(detected: &Detected, manifest: &Manifest) -> IsolationMode {
+    // 1. If the manifest declares it (registry author opinion), respect it.
+    if let Some(m) = &manifest.isolation { return *m; }
+
+    // 2. Prefer real sandboxes.
+    if detected.docker_running && !detected.docker_desktop_blocked_by_org {
+        return IsolationMode::Docker;
+    }
+    if detected.podman_rootless_ok {
+        return IsolationMode::Podman;
+    }
+
+    // 3. Fall back to devenv if the user already has Nix.
+    if detected.nix_installed && manifest.has_devenv_profile() {
+        return IsolationMode::Devenv;  // wrapped in bubblewrap/sandbox-exec
+    }
+
+    // 4. Last resort: uvx-npx, but ONLY if version is exact-pinned.
+    if manifest.version_is_exact_pin() {
+        return IsolationMode::UvxNpx;
+    }
+
+    // 5. Refuse to install. Print actionable error.
+    panic!("no sandbox available and version not pinned — refusing");
+}</code></pre>
+    <p>
+      This algorithm is the difference between "we shipped a tool that defaults to safe" and "we shipped a tool that defaults to whatever's on the path". The fall-through to refuse-to-install at step 5 is the load-bearing line.
+    </p>
+
+    <h3 id="design-bwrap">bubblewrap option set (Linux, used inside <code>devenv</code> mode)</h3>
+    <p>
+      The argv mcpmanagerd assembles before spawning a Nix-built MCP server. Comments inline; this is the literal default.
+    </p>
+    <pre><code>bwrap \
+  # rootfs: tmpfs, then bind only what we need
+  --tmpfs / \
+  --proc /proc \
+  --dev /dev \
+  --ro-bind /nix/store /nix/store        \  # Nix store, read-only
+  --ro-bind /etc/resolv.conf /etc/resolv.conf \
+  --ro-bind /etc/ssl /etc/ssl            \  # TLS roots
+  --ro-bind /etc/hosts /etc/hosts        \
+  --tmpfs /tmp                           \  # writable scratch
+  --tmpfs /var                           \
+  --setenv HOME /tmp/home                \
+  --dir /tmp/home                        \  # fake $HOME inside
+
+  # project: read-write bind, single path (from manifest.work_dir)
+  --bind "$PROJECT_ROOT" /work           \
+
+  # namespaces: unshare everything by default
+  --unshare-all                          \
+  --share-net=no                         \  # net off unless manifest says yes
+  --new-session                          \  # detach from terminal session
+  --die-with-parent                      \  # exit when mcpmanagerd does
+  --cap-drop ALL                         \
+  --seccomp 3                            \  # filter fd 3 (we pass via dup2)
+
+  --                                     \
+  /nix/store/&lt;hash&gt;-mcp-server-foo/bin/mcp-server-foo
+</code></pre>
+    <p>
+      <code>--die-with-parent</code> is non-optional — without it, an orphaned sandboxed process survives mcpmanagerd crash and we have no UDS path to talk to it. <code>--share-net=no</code> uses the user namespace to drop net; if the manifest declares egress, we add a paired <code>slirp4netns</code> sidecar pinhole instead of <code>--share-net=yes</code>.
+    </p>
+
+    <h3 id="design-sandbox-exec">sandbox-exec profile template (macOS, used inside <code>devenv</code> mode)</h3>
+    <p>
+      One curated profile per server-shape (filesystem-only, network-only, mixed). mcpmanagerd resolves the profile path from the manifest and binds parameters at launch.
+    </p>
+    <pre><code>; /etc/mcp-manager/profiles/mcp-server-default.sb
+; Default deny-all, then allow narrowly. Apple deprecated sandbox-exec ~2016
+; but it remains functional through current macOS. We carry a contingency
+; plan to fall back to Docker on macOS if a future release removes it.
+(version 1)
+(deny default)
+(debug deny)                          ; log denies to sandboxd
+
+; --- execution
+(allow process-exec
+  (subpath (param "RUNNER_DIR")))     ; e.g. /nix/store/&lt;hash&gt;-mcp-server-foo
+(allow process-fork)
+(allow signal (target self))
+(allow sysctl-read)
+
+; --- filesystem
+(allow file-read*
+  (subpath "/usr/lib")
+  (subpath "/usr/share")
+  (subpath "/System/Library")
+  (subpath "/Library/Apple")
+  (subpath "/private/var/db/dyld")
+  (subpath "/dev")
+  (literal "/etc/resolv.conf")
+  (literal "/etc/hosts")
+  (subpath "/private/etc/ssl")
+  (subpath (param "RUNNER_DIR")))     ; Nix store path
+
+(allow file-read* file-write*
+  (subpath (param "PROJECT_ROOT"))    ; manifest-declared work dir
+  (subpath (param "STATE_DIR")))      ; per-server state dir under $XDG_STATE
+
+; --- network: closed unless manifest opens it
+; (allow network* (remote tcp "api.github.com:443"))  ; opt-in per manifest
+
+; --- mach IPC: blocked except for log delivery
+(allow mach-lookup
+  (global-name "com.apple.system.notification_center")
+  (global-name "com.apple.system.opendirectoryd.libinfo"))
+
+; --- explicitly deny dangerous niches
+(deny mach-priv-task-port)
+(deny system-info)
+(deny user-preference-read user-preference-write)
+</code></pre>
+    <p>
+      Invocation:
+    </p>
+    <pre><code>sandbox-exec \
+  -f /etc/mcp-manager/profiles/mcp-server-default.sb \
+  -D RUNNER_DIR=/nix/store/&lt;hash&gt;-mcp-server-foo \
+  -D PROJECT_ROOT=/Users/me/projects/foo \
+  -D STATE_DIR=/Users/me/Library/Application\ Support/mcp-manager/state/foo \
+  /nix/store/&lt;hash&gt;-mcp-server-foo/bin/mcp-server-foo
+</code></pre>
+    <p>
+      A deprecation warning prints to stderr on each invocation. mcpmanagerd swallows that line and emits a single audit-log entry at start-up noting the API status; no warning per spawn. If a future macOS removes <code>sandbox-exec</code> we degrade to Docker (with an alert), per the stoic-badger contingency. <cite>stoic-badger recommendation, sandbox-exec contingency</cite>.
+    </p>
+
+    <h3 id="design-docker">Docker / Podman run flag template</h3>
+    <p>
+      The exact flags mcpmanagerd composes for <code>isolation = "docker"</code>. Podman accepts the same set verbatim. The manifest can override individual flags but cannot weaken the security defaults below without an explicit <code>allow_dangerous = true</code> in the manifest (audit-logged).
+    </p>
+    <pre><code>docker run \
+  --rm \
+  --read-only \                          # rootfs read-only
+  --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+  --tmpfs /run:rw,nosuid,nodev,size=8m  \
+  --cap-drop ALL \                       # no capabilities by default
+  --security-opt no-new-privileges:true \
+  --security-opt seccomp=default \       # Docker's default seccomp filter
+  --pids-limit 256 \
+  --cpus 1 \                             # mirrors Docker MCP Toolkit defaults
+  --memory 2g \
+  --user "$(id -u):$(id -g)" \           # never root inside
+  --network none \                       # default; opened only if manifest declares
+  --env-file /dev/fd/3 \                 # secrets via fd, never in argv or ps
+  --mount type=bind,src="$PROJECT_ROOT",dst=/work,readonly=false \
+  --label "mcp-manager.server=$NAME" \
+  --label "mcp-manager.spec=$SPEC" \
+  --name "mcpm-$NAME-$EPHEMERAL_ID" \
+  "$IMAGE@$SHA256_DIGEST"                # always pinned by digest, never tag
+</code></pre>
+    <p>
+      Critical lines: <code>--user $(id -u)</code> (never run as root in the container, even rootless Docker), <code>--mount</code> instead of <code>-v</code> (explicit dst, type, ro flag), digest pin instead of tag (tag is mutable, digest isn't), <code>--env-file /dev/fd/3</code> (the manager writes secrets to fd 3 and closes; the value never appears in <code>docker inspect</code>, never in <code>ps</code>, never on disk).
+    </p>
+    <p>
+      For Podman, replace <code>docker</code> with <code>podman</code>; on Linux this gives us <code>slirp4netns</code> user-mode networking automatically. Capability set is 11 default (vs Docker's 14) — we drop ALL anyway so this only matters if the manifest adds back specific caps. <cite>Podman rootless</cite>.
+    </p>
+
+    <h3 id="design-network">Network egress per mode</h3>
+    <table class="compare">
+      <thead><tr><th>Mode</th><th>Default</th><th>How to declare egress</th><th>How egress is enforced</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>none</code></td>
+          <td>full host network</td>
+          <td>n/a</td>
+          <td>not enforced (level 0)</td>
+        </tr>
+        <tr>
+          <td><code>uvx-npx</code></td>
+          <td>full host network</td>
+          <td>n/a — runner doesn't sandbox</td>
+          <td>not enforced; mitigated by version-pin requirement</td>
+        </tr>
+        <tr>
+          <td><code>devenv</code> (Linux)</td>
+          <td><code>--unshare-net</code></td>
+          <td>manifest <code>network = ["api.github.com:443", "*:443"]</code></td>
+          <td><code>slirp4netns</code> user-mode net inside the bwrap netns + nftables on the slirp interface for the allow-list. <cite>slirp4netns</cite>.</td>
+        </tr>
+        <tr>
+          <td><code>devenv</code> (macOS)</td>
+          <td>SBPL <code>(deny network*)</code></td>
+          <td>manifest <code>network = [...]</code></td>
+          <td>SBPL <code>(allow network* (remote tcp "host:port"))</code>. SBPL host/port patterns are best we can do; no per-connection rate limit.</td>
+        </tr>
+        <tr>
+          <td><code>docker</code></td>
+          <td><code>--network=none</code></td>
+          <td>manifest <code>network = [...]</code></td>
+          <td>bridge network, plus an outbound nftables filter on the bridge interface (Linux). On Docker Desktop macOS we accept that Linux-VM-level filtering is the best we can do; document this limitation. <cite>Docker rootless / network</cite>.</td>
+        </tr>
+        <tr>
+          <td><code>podman</code></td>
+          <td><code>--network=none</code></td>
+          <td>manifest <code>network = [...]</code></td>
+          <td>slirp4netns + nftables on the rootless-network. Same enforcement model as bubblewrap. <cite>slirp4netns</cite>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="design-fs">Filesystem scoping per mode</h3>
+    <table class="compare">
+      <thead><tr><th>Mode</th><th>Read-only paths</th><th>Read-write paths</th><th>What's hidden</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>none</code></td>
+          <td>everything user can read</td>
+          <td>everything user can write</td>
+          <td>nothing — same UID, same scope</td>
+        </tr>
+        <tr>
+          <td><code>uvx-npx</code></td>
+          <td>everything user can read</td>
+          <td>everything user can write</td>
+          <td>nothing</td>
+        </tr>
+        <tr>
+          <td><code>devenv</code> (Linux)</td>
+          <td><code>/nix/store</code>, <code>/etc/resolv.conf</code>, <code>/etc/ssl</code>, <code>/etc/hosts</code></td>
+          <td>manifest <code>work_dir</code> bound at <code>/work</code>; tmpfs <code>/tmp</code> and <code>/var</code></td>
+          <td><code>$HOME</code>, <code>~/.ssh</code>, <code>~/.aws</code>, <code>~/.config</code>, every other user dir</td>
+        </tr>
+        <tr>
+          <td><code>devenv</code> (macOS)</td>
+          <td><code>/usr/lib</code>, <code>/System</code>, <code>RUNNER_DIR</code>, <code>/etc/resolv.conf</code></td>
+          <td><code>PROJECT_ROOT</code>, per-server <code>STATE_DIR</code></td>
+          <td>everything outside the SBPL allow-list — including <code>~/Library/Keychains</code></td>
+        </tr>
+        <tr>
+          <td><code>docker</code></td>
+          <td>image rootfs (<code>--read-only</code>)</td>
+          <td><code>--mount</code>s only; tmpfs <code>/tmp</code></td>
+          <td>everything host except declared mounts</td>
+        </tr>
+        <tr>
+          <td><code>podman</code></td>
+          <td>image rootfs (<code>--read-only</code>)</td>
+          <td><code>--mount</code>s only; tmpfs <code>/tmp</code></td>
+          <td>everything host except declared mounts</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="design-ipc">IPC auth across the sandbox boundary</h3>
+    <p>
+      The technical-design locks in UDS at <code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code> with <code>SO_PEERCRED</code> auth. <cite>technical-design.html wire protocol</cite>. The question for sandboxing: <strong>does <code>SO_PEERCRED</code> work across the sandbox boundary?</strong>
+    </p>
+    <ul>
+      <li><strong><code>none</code> / <code>uvx-npx</code></strong>: same UID, same kernel, <code>SO_PEERCRED</code> returns the real UID. Works.</li>
+      <li><strong><code>devenv</code></strong> (bubblewrap or sandbox-exec): same UID — bubblewrap inherits the user namespace by default, and sandbox-exec doesn't change credentials. <code>SO_PEERCRED</code> works. We just need to bind-mount the socket path into the sandbox (Linux: <code>--bind $XDG_RUNTIME_DIR/mcpmanagerd.sock /run/mcpmanagerd.sock</code>; macOS: SBPL <code>(allow file-read* file-write* (literal "&lt;sock-path&gt;"))</code>).</li>
+      <li><strong><code>docker</code> / <code>podman</code></strong>: the container has its <em>own</em> UID namespace by default. Inside the container, <code>id -u</code> may be 1000 (mapped); outside, the kernel sees the host UID mapping. <code>SO_PEERCRED</code> on the host side returns the <em>host UID</em>, which we control because we set <code>--user $(id -u)</code>. ✓ But: the socket must be mounted into the container. Mount it at a stable in-container path (<code>/run/mcpmanagerd.sock</code>) and tell the in-container MCP server to connect there.</li>
+    </ul>
+    <p>
+      Failure mode to handle: if a user runs <code>--user root</code> in the container (overriding our default), the host kernel sees host UID 0 over the bind-mounted socket, which doesn't match the manager's real UID, and we (correctly) reject. Audit: <code>auth.failed</code>.
+    </p>
+
+    <h3 id="design-trust">Trust model end-to-end</h3>
+    <p>
+      Sequence diagram in prose, because the ordering is the whole point. For an <code>mcpm install foo</code>:
+    </p>
+    <ol>
+      <li><strong>Fetch index</strong>. mcpmanagerd downloads the registry index. <code>mcpm-trust</code> verifies the minisign signature against the baked-in root pubkey. <cite>technical-design.html mcpm-trust</cite>. Failure → abort, no sandbox launched yet.</li>
+      <li><strong>Resolve version</strong>. Manifest range (<code>"^0.4"</code>) → exact version + sha256 from the lockfile. Both stored in lockfile.</li>
+      <li><strong>Download artifact</strong>. For <code>uvx-npx</code>: pin <code>foo@1.2.3</code>; PyPI/npm sha256 checked. For <code>docker</code>: pull by digest, not tag; <code>cosign verify-blob</code> against the publisher's pubkey if declared. For <code>devenv</code>: Nix store path is content-addressed by hash — sha256 verification is intrinsic.</li>
+      <li><strong>Validate manifest</strong>. Schema check (<code>isolation</code> ∈ five known modes; declared egress is well-formed; mounted paths are absolute and under <code>$HOME</code>).</li>
+      <li><strong>Project trust gate</strong>. If launching from a project scope, mcpmanagerd reads <code>~/.config/mcp-manager/trust.toml</code> and compares <code>sha256(.mcp-manager.toml)</code>. Mismatch → prompt user. <cite>technical-design.html trust file</cite>.</li>
+      <li><strong>Derive sandbox policy</strong>. From manifest + mode-default → bwrap argv / SBPL profile / docker flags.</li>
+      <li><strong>Audit-log decision</strong>. Single JSONL entry: <code>server.spawn</code> with <code>{name, version, sha256, isolation, sandbox_policy_digest, secrets:[names], egress:[...]}</code>.</li>
+      <li><strong>Spawn</strong>. <code>execve</code> after dropping privileges. Secrets injected via env at this moment, after the fork.</li>
+    </ol>
+    <p>
+      Step 5 is the trust gate for project configs. Step 1 is the trust gate for packages. Step 6 turns the validated material into a policy. <strong>Steps 1–6 must complete before step 8.</strong> No exceptions, no "run unsandboxed and verify in the background." The sandbox is the boundary; the boundary is set before <code>execve</code> or it isn't a boundary.
+    </p>
+
+    <h3 id="design-first-launch">First-launch security prompts</h3>
+    <p>
+      The UX of sandboxing is half the security. Three prompts I want, exactly:
+    </p>
+    <ol>
+      <li><strong>On first <code>mcpm install</code> ever</strong>: a one-time onboarding screen explains the gradient (level 1 → level 4), shows what <code>mcpm</code> detected on the user's machine (Docker yes/no, Podman yes/no, Nix yes/no), and asks "default mode for new servers when manifest doesn't specify?". Default selection is the highest level we detected. The user can change this later via <code>mcpm config set default_isolation</code>.</li>
+      <li><strong>On installing a server with <code>isolation = "none"</code> or <code>"uvx-npx"</code> when stronger is available</strong>: warning panel showing "this server has full host access. If you wanted Docker, install Docker and re-run". Confirm by typing the server name. Logged.</li>
+      <li><strong>On <code>--docker-enable=true</code> for a previously non-Docker server</strong>: nothing scary — moving up the gradient is always fine. Just re-pull the image, re-derive the sandbox policy, re-spawn.</li>
+    </ol>
+
+    <h3 id="design-binary-signing">Binary code signing of our own binaries</h3>
+    <p>
+      Crypto-pedant covers the per-package side; my side is the <code>mcpm</code> and <code>mcpmanagerd</code> binaries themselves. On macOS: Developer ID signed + notarized, hardened runtime, library validation. On Linux: detached minisign signature next to the release tarball, sha256 in the release notes. Reproducible builds on Linux (Nix builds the binary) so any user can verify the sha256 themselves.
+    </p>
+
+    <h3 id="design-supply-chain">Supply-chain pinning</h3>
+    <ul>
+      <li><strong>Cargo</strong>: <code>Cargo.lock</code> committed; <code>cargo audit</code> in CI on every push.</li>
+      <li><strong>Container images</strong>: digest pin in the lockfile (never tag). <code>cosign verify-blob</code> in the install path. <cite>Docker rootless</cite>.</li>
+      <li><strong>npm/PyPI for <code>uvx-npx</code></strong>: registry index signature (minisign) over the index of (name, version, sha256); per-package sha256 verified after download. Refuse install if version is not exact-pinned. This is the single biggest delta from the status-quo "<code>npx latest</code>" anti-pattern (CVE-2025-6514 class). <cite>mcp supply-chain</cite>.</li>
+      <li><strong>Nix store</strong>: content-addressed by definition; no extra signature layer required.</li>
+      <li><strong>Our own deps</strong>: <code>cargo deny</code> for license + advisory checks; pinned <code>rust-toolchain.toml</code>; reproducible release builds.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li>bubblewrap — sandbox launcher (Flatpak project) — <a href="https://github.com/containers/bubblewrap">https://github.com/containers/bubblewrap</a></li>
+      <li>firejail — security sandbox for Linux — <a href="https://github.com/netblue30/firejail">https://github.com/netblue30/firejail</a></li>
+      <li>nsjail — process isolation tool (Google) — <a href="https://github.com/google/nsjail">https://github.com/google/nsjail</a></li>
+      <li>macOS <code>sandbox-exec</code> notes &amp; SBPL primer (Julio Merino) — <a href="https://jmmv.dev/2019/11/macos-sandbox-exec.html">https://jmmv.dev/2019/11/macos-sandbox-exec.html</a></li>
+      <li>Apple Seatbelt overview &amp; sandbox-exec deprecation history — <a href="https://developer.apple.com/library/archive/documentation/Security/Conceptual/AppSandboxDesignGuide/AboutAppSandbox/AboutAppSandbox.html">https://developer.apple.com/library/archive/documentation/Security/Conceptual/AppSandboxDesignGuide/AboutAppSandbox/AboutAppSandbox.html</a></li>
+      <li>Docker rootless mode — <a href="https://docs.docker.com/engine/security/rootless/">https://docs.docker.com/engine/security/rootless/</a></li>
+      <li>Docker MCP Toolkit (signed catalog, default limits) — <a href="https://www.docker.com/products/mcp-catalog-and-toolkit/">https://www.docker.com/products/mcp-catalog-and-toolkit/</a></li>
+      <li>Podman rootless containers — <a href="https://docs.podman.io/en/latest/markdown/podman.1.html#rootless-mode">https://docs.podman.io/en/latest/markdown/podman.1.html#rootless-mode</a></li>
+      <li>slirp4netns — user-mode networking for unprivileged network namespaces — <a href="https://github.com/rootless-containers/slirp4netns">https://github.com/rootless-containers/slirp4netns</a></li>
+      <li>gVisor — sandboxed container runtime — <a href="https://gvisor.dev/docs/">https://gvisor.dev/docs/</a></li>
+      <li>uv / uvx documentation (ephemeral isolated runner) — <a href="https://docs.astral.sh/uv/guides/tools/">https://docs.astral.sh/uv/guides/tools/</a></li>
+      <li>npm/npx supply-chain risk &amp; CVE-2025-6514 — <a href="https://www.docker.com/blog/the-model-context-protocol-mcp-supply-chain-vulnerabilities/">https://www.docker.com/blog/the-model-context-protocol-mcp-supply-chain-vulnerabilities/</a></li>
+      <li>cosign — container image signing (sigstore) — <a href="https://docs.sigstore.dev/cosign/overview/">https://docs.sigstore.dev/cosign/overview/</a></li>
+      <li>Linux <code>SO_PEERCRED</code> &amp; UDS peer credentials — <a href="https://man7.org/linux/man-pages/man7/unix.7.html">https://man7.org/linux/man-pages/man7/unix.7.html</a></li>
+      <li>MCP specification — security &amp; trust principles — <a href="https://modelcontextprotocol.io/specification">https://modelcontextprotocol.io/specification</a></li>
+      <li>stoic-badger-sandbox recommendation (sibling research) — <a href="../../research/stoic-badger-sandbox/recommendation-nix-isolation-summary.html">recommendation-nix-isolation-summary.html</a></li>
+    </ol>
+  </section>
+
+</main>
+</body>
+</html>

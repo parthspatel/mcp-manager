@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Master Synthesis — Detailed Technical Design — MCP Manager v1.0</title>
+<meta name="description" content="Consolidated detailed technical design across backend, frontend, devops, security, and UX. Per-crate deep dives, end-to-end flows, and explicit diffs against the v1.0 spec — the handoff to implementation.">
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">deep-dive synthesis · v1.0</span></div>
+    <div class="crumbs"><a href="./index.html">← deep dive</a> · <a href="../technical-design.html">v1.0 breadth spec</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Master Synthesis — Detailed Technical Design</h1>
+
+  <p class="lede">
+    Consolidated detailed design across all five facets. The
+    <a href="../technical-design.html">v1.0 spec</a> remains the canonical surface contract;
+    this document is the implementation-ready elaboration of it. Where this doc and the v1.0
+    spec say different things, the <a href="#diffs">Diffs section</a> records the change
+    explicitly so the implementation team has one place to look.
+  </p>
+
+  <p>
+    <span class="evidence-badge">25 stance essays distilled</span>
+    <span class="evidence-badge">5 facet overviews reconciled</span>
+    <span class="evidence-badge">11 crates · 5 flows</span>
+    <span class="evidence-badge">honors all locked v1.0 decisions</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#preamble">Preamble — how to read this</a></li>
+      <li><a href="#crates">Per-crate deep dive</a>
+        <ul>
+          <li><a href="#crate-core">mcpm-core</a></li>
+          <li><a href="#crate-daemon">mcpm-daemon</a></li>
+          <li><a href="#crate-protocol">mcpm-protocol</a></li>
+          <li><a href="#crate-client">mcpm-client</a></li>
+          <li><a href="#crate-supervisor">mcpm-supervisor</a></li>
+          <li><a href="#crate-registry">mcpm-registry</a></li>
+          <li><a href="#crate-secrets">mcpm-secrets</a></li>
+          <li><a href="#crate-projector">mcpm-projector</a></li>
+          <li><a href="#crate-logs">mcpm-logs</a></li>
+          <li><a href="#crate-trust">mcpm-trust</a></li>
+          <li><a href="#crate-cli">mcpm-cli</a></li>
+        </ul>
+      </li>
+      <li><a href="#flows">Per-flow deep dive</a></li>
+      <li><a href="#facets">Per-facet pull-ups</a></li>
+      <li><a href="#open">Consolidated open questions</a></li>
+      <li><a href="#diffs">Diffs against the v1.0 spec</a></li>
+    </ul>
+  </nav>
+
+  <!-- ================================================================ -->
+  <section class="section" id="preamble">
+    <h2>Preamble — how to read this</h2>
+
+    <p>
+      MCP Manager v1.0 was specified in three layers of increasing detail:
+    </p>
+
+    <ol>
+      <li>
+        The <a href="../index.html">v1.0 hub</a> — a 20-row locked-decisions table and the in/out/never
+        scope.
+      </li>
+      <li>
+        The audience-facing <a href="../product-overview.html">product overview</a>,
+        <a href="../technical-design.html">technical design</a>, and
+        <a href="../ux-design.html">UX design</a> — engineer-facing source of truth.
+      </li>
+      <li>
+        This sub-wiki — five facets (backend, frontend, devops, security, UX), five stances per facet
+        debating, five facet overviews picking winners, and this document consolidating everything
+        across facet boundaries.
+      </li>
+    </ol>
+
+    <p>
+      The v1.0 spec said <em>what</em>. The facet overviews said <em>how</em>. This synthesis says
+      <em>how</em> across facet boundaries, where one facet's choice constrains another's. It is the
+      document the implementation team should read after the v1.0 spec — and the document that
+      will be cross-checked against the eventual Cargo workspace at every milestone.
+    </p>
+
+    <p>
+      Where you see a citation like
+      <code>backend/overview.html#decisions</code>, that is the per-facet synthesis. Where you see
+      <code>backend/agent-tokio-pragmatist.html#design</code>, that is the underlying stance essay
+      whose argument carried that decision. Anchors point to specific reasoning, not whole pages.
+    </p>
+
+    <p>
+      Locked v1.0 inputs were treated as inputs by all 25 agents and remain inputs here. No
+      decision in this synthesis re-opens the lockdown. Where the synthesis recommends a
+      change to a v1.0 detail (never a v1.0 lock), it shows up in the
+      <a href="#diffs">Diffs section</a>.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="section" id="crates">
+    <h2>Per-crate deep dive</h2>
+
+    <p>
+      Eleven crates in the <code>mcpm-*</code> workspace, in dependency order. Each section gives a
+      responsibility statement, a public-API sketch, internal modules, dependencies, test strategy,
+      and any crate-local open questions. Crate-by-crate, this is the implementation contract.
+    </p>
+
+    <!-- mcpm-core -->
+    <h3 id="crate-core">mcpm-core</h3>
+    <p>
+      <strong>Responsibility:</strong> Config schemas, validation, CAS guard, canonical-JSON
+      hashing, the sans-I/O slices of the supervisor's and projector's state machines.
+      <code>mcpm-core</code> never opens a socket and never spawns a process; it manipulates bytes.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong> <code>UserConfig</code>, <code>ProjectConfig</code>,
+      <code>LockfileEntry</code>, <code>TrustFile</code>, <code>AuditRecord</code>,
+      <code>ServerSpec</code>, <code>ProcessKey</code>, plus the supervisor's
+      <code>ServerState</code> / <code>Event</code> / <code>Action</code> trio, plus the projector's
+      <code>compute_managed_block</code> pure function. Validation methods return
+      <code>Result&lt;Validated&lt;T&gt;, ValidationError&gt;</code> using <code>thiserror</code>.
+    </p>
+    <p>
+      <strong>Internal modules:</strong> <code>config</code> (TOML schemas + parsers),
+      <code>canonical</code> (RFC 8785 canonical-JSON for hashing — used by CAS,
+      <code>trust.toml</code> pinning, and audit-log hash chain), <code>cas</code> (the
+      <code>prior_hash</code> guard), <code>state</code> (supervisor state machine),
+      <code>projection</code> (managed-block compute).
+    </p>
+    <p>
+      <strong>Dependencies:</strong> <code>serde</code>, <code>serde_json</code>, <code>toml</code>,
+      <code>sha2</code>, <code>thiserror</code>. No tokio. No I/O.
+    </p>
+    <p>
+      <strong>Test strategy:</strong> property-tested with <code>proptest</code> on the supervisor
+      <code>step()</code>, <code>classify_exit()</code>, and <code>next_delay()</code> functions
+      (<a href="./backend/overview.html#decisions">backend synthesis ratified this</a>); golden-file
+      tests on TOML serialization round-trips; canonical-JSON conformance vectors against the
+      RFC&nbsp;8785 test suite.
+    </p>
+
+    <!-- mcpm-daemon -->
+    <h3 id="crate-daemon">mcpm-daemon</h3>
+    <p>
+      <strong>Responsibility:</strong> The <code>mcpmanagerd</code> binary's main; the JSON-RPC
+      server over UDS; the tower middleware stack; lifecycle (boot, auto-spawn race, graceful
+      drain); the per-process signal handlers; the dedicated OS thread that owns the cgroup-v2
+      <code>memory.events</code> reactor.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong> Binary crate. Internal-only types
+      (<code>HandlerCtx</code>, <code>PeerCred</code>, layer types). The wire surface is
+      <code>mcpm-protocol</code>.
+    </p>
+    <p>
+      <strong>Middleware stack</strong> (in order, per the
+      <a href="./backend/overview.html#decisions">backend synthesis</a>):
+      <code>PeerCredAuthLayer</code> → <code>TraceLayer</code> → <code>AuditLayer</code> →
+      <code>ConcurrencyLimitLayer</code> → handler. Four layers, deliberately capped; future
+      "free middleware" is rejected by default.
+    </p>
+    <p>
+      <strong>Lifecycle:</strong>
+    </p>
+    <ol>
+      <li>Parse argv (almost none); read user config; validate.</li>
+      <li>Bind UDS at <code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code> (Linux) or
+        <code>~/Library/Application Support/mcp-manager/mcpmanagerd.sock</code> (macOS);
+        <code>O_EXCL</code> bind plus sibling <code>flock(2)</code> to detect stale sockets.</li>
+      <li>If running under systemd-user with socket activation, accept the listen fd from
+        <code>sd_listen_fds()</code> instead; same for launchd via
+        <code>launch_activate_socket()</code>.</li>
+      <li>Spawn the OOM-watch OS thread (Linux only; macOS path is different — see
+        <a href="#crate-supervisor">supervisor</a>).</li>
+      <li>Install signal handlers (<code>SIGTERM</code>, <code>SIGINT</code>, <code>SIGHUP</code>,
+        <code>SIGCHLD</code>) — tokio's <code>signal::unix</code> where it suffices; raw signalfd
+        only for <code>SIGCHLD</code> draining per the
+        <a href="./backend/agent-kernel-hacker.html#design-signals">kernel-hacker</a>.</li>
+      <li>Call <code>sd_notify(READY=1)</code> (systemd-user) or no-op (launchd); enter the accept
+        loop wrapped in the tower stack.</li>
+      <li>On shutdown signal, root <code>CancellationToken</code> fires; graceful drain with 5s
+        deadline; SIGTERM children, SIGKILL on overrun.</li>
+    </ol>
+    <p>
+      <strong>Auto-spawn race:</strong> documented under
+      <a href="#flow-tui-startup">TUI startup flow</a>. <code>flock(2)</code> on a sibling lockfile;
+      5-second timeout; stale-socket recovery treats <code>ECONNREFUSED</code> the same as
+      <code>ENOENT</code> but audit-logs at higher severity.
+    </p>
+    <p>
+      <strong>Dependencies:</strong> <code>tokio</code> (rt-multi-thread + macros + signal + fs +
+      io + net + process + sync + time), <code>tower</code>, <code>tracing</code>,
+      <code>tracing-subscriber</code>, <code>serde_json</code>, <code>nix</code>,
+      <code>mcpm-core</code>, <code>mcpm-protocol</code>, <code>mcpm-supervisor</code>,
+      <code>mcpm-registry</code>, <code>mcpm-secrets</code>, <code>mcpm-projector</code>,
+      <code>mcpm-logs</code>, <code>mcpm-trust</code>.
+    </p>
+    <p>
+      <strong>Test strategy:</strong> integration tests spawn the daemon in a tmpdir under a
+      tokio test runtime; the
+      <a href="./backend/agent-library-author.html#design">library-author's spawn-in-tmpdir
+      pattern</a> is canonical. Tower stack also testable directly without UDS (call
+      <code>Service::call</code> on the constructed stack).
+    </p>
+
+    <!-- mcpm-protocol -->
+    <h3 id="crate-protocol">mcpm-protocol</h3>
+    <p>
+      <strong>Responsibility:</strong> Wire types and method constants. The smallest, most stable
+      crate in the workspace. No business logic; no I/O; ideally no tokio.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong> Per-method request/response types (e.g.,
+      <code>ServerListRequest</code> / <code>ServerListResponse</code>); the streaming method
+      sentinel (<code>LogLine::lagged(n)</code>); the <code>method</code> module with
+      <code>pub const SERVER_LIST: &amp;str = "server.list"</code> for each of the ~30 methods; a
+      <code>WIRE_VERSION</code> constant.
+    </p>
+    <p>
+      <strong>Discipline</strong> (per the
+      <a href="./backend/overview.html#decisions">backend synthesis</a> adopting the
+      <a href="./backend/agent-library-author.html#design">library-author's</a> rules verbatim):
+    </p>
+    <ul>
+      <li><code>#[non_exhaustive]</code> on every public enum and struct.</li>
+      <li><code>#[serde(default)]</code> on optional params; do NOT use
+        <code>deny_unknown_fields</code> (forward-compat asymmetry from the
+        <a href="./backend/agent-tokio-pragmatist.html#vs-library-author">pragmatist</a>).</li>
+      <li>Sealed traits for things only the daemon should implement (reserved but unused in v1.0).</li>
+      <li><code>cargo-semver-checks</code> is a hard CI gate on this crate only.</li>
+      <li>Crate version starts at <strong>0.1.0</strong> and stays 0.x through v1.2-ish of the
+        binary, then graduates to 1.0.0 when the surface stabilizes.</li>
+    </ul>
+    <p>
+      <strong>no_std + alloc profile:</strong> ship from v1.0 per
+      <a href="./backend/overview.html#open">open question OQ-B-5 leaning yes</a>. One feature
+      flag (<code>std</code>, default-on); a <code>cargo hack check --each-feature</code> CI job.
+      Cost is small; protects future FFI/PyO3/WASM consumers.
+    </p>
+    <p>
+      <strong>Dependencies:</strong> <code>serde</code>, <code>serde_json</code> only. No tokio.
+    </p>
+    <p>
+      <strong>Test strategy:</strong> JSON conformance vectors (parse and re-emit); semver-check
+      gate; check that <code>std::collections</code> doesn't accidentally appear in any public
+      type when the <code>std</code> feature is off.
+    </p>
+
+    <!-- mcpm-client -->
+    <h3 id="crate-client">mcpm-client</h3>
+    <p>
+      <strong>Responsibility:</strong> In-tree Rust client library over <code>mcpm-protocol</code>.
+      Provides <code>Client::connect()</code>, the auto-spawn dance, streaming method helpers, and
+      thin retry wrappers. Used by <code>mcpm-cli</code>, the TUI app, and (eventually)
+      third-party integrations.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong> One <code>Client</code> struct with one method per RPC.
+      Streaming methods return <code>impl futures::Stream&lt;Item = Result&lt;LogLine&gt;&gt;</code>.
+      Re-exports <code>mcpm_protocol as wire</code> for ergonomics.
+    </p>
+    <p>
+      <strong>Stability disclaimer:</strong> Crate-level rustdoc says "not stable across minor
+      versions; third parties wanting a stable surface depend on <code>mcpm-protocol</code>."
+      <code>publish = true</code> at <code>0.x</code> so docs.rs renders, but the README banner
+      and the doc warning are prominent. (Per
+      <a href="./backend/overview.html#open">OQ-B-1 leaning publish-with-disclaimer</a>.)
+    </p>
+    <p>
+      <strong>Auto-spawn dance:</strong> <code>flock(2)</code> on
+      <code>$XDG_RUNTIME_DIR/mcpmanagerd.spawn.lock</code> with
+      <code>LOCK_EX | LOCK_NB</code> to prevent thundering-herd; <code>fork</code>+
+      <code>exec</code> the daemon if we win the lock; poll UDS for up to 5s with 50ms sleeps;
+      give up with <code>E_DAEMON_UNREACHABLE</code> if the daemon never appears. Daemon binary
+      lookup is <code>which mcpmanagerd</code> via <code>$PATH</code> — no Nix-vs-curl branching
+      (<a href="./devops/overview.html#decisions">devops synthesis</a>).
+    </p>
+    <p>
+      <strong>Dependencies:</strong> <code>tokio</code>, <code>serde_json</code>,
+      <code>thiserror</code>, <code>mcpm-protocol</code>, <code>nix</code>.
+    </p>
+    <p>
+      <strong>Test strategy:</strong> integration tests; mocks via constructing a tower service
+      and calling it directly without UDS (faster, more granular).
+    </p>
+
+    <!-- mcpm-supervisor -->
+    <h3 id="crate-supervisor">mcpm-supervisor</h3>
+    <p>
+      <strong>Responsibility:</strong> Process lifecycle. Spawning, supervising, restarting,
+      OOM-classifying, idle-stopping, singleton-refcounting, descendant-lifetime-guaranteeing.
+      The single most complex crate.
+    </p>
+    <p>
+      <strong>Architecture:</strong>
+      <a href="./backend/agent-systems-veteran.html#design">veteran's sans-I/O core</a> +
+      <a href="./backend/agent-tokio-pragmatist.html#design">pragmatist's JoinSet/CancellationToken
+      shell</a> +
+      <a href="./backend/agent-kernel-hacker.html#design">kernel-hacker's platform module</a>.
+      Sans-I/O core lives in <code>mcpm-core::state</code>; the supervisor crate is the I/O shell.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong>
+      <code>Supervisor::new(config) -&gt; Self</code>,
+      <code>Supervisor::start(&amp;mut self, key: ProcessKey) -&gt; Result&lt;()&gt;</code>,
+      <code>Supervisor::stop(&amp;mut self, key, grace: Duration)</code>,
+      <code>Supervisor::status(&amp;self, key) -&gt; ServerStatus</code>,
+      <code>Supervisor::events(&amp;self) -&gt; broadcast::Receiver&lt;SupervisorEvent&gt;</code>.
+    </p>
+    <p>
+      <strong>The sub-decisions table</strong> (verbatim from
+      <a href="./backend/overview.html#decisions">backend synthesis</a>, summarized):
+    </p>
+    <table class="compare">
+      <thead><tr><th>Concern</th><th>Mechanism</th></tr></thead>
+      <tbody>
+        <tr><td>State machine</td><td>Pure <code>step(state, event, policy) -&gt; (NewState, Vec&lt;Action&gt;)</code> in <code>mcpm-core</code>; proptest-covered</td></tr>
+        <tr><td>Concurrency</td><td>One <code>JoinSet&lt;ChildOutcome&gt;</code>; per-child task <code>tokio::select!</code> (cancel, oom-mpsc, <code>child.wait()</code>)</td></tr>
+        <tr><td>Cancellation</td><td><code>tokio_util::sync::CancellationToken</code> tree; root from signal handler; child tokens per managed process</td></tr>
+        <tr><td>Restart backoff</td><td>Pure <code>next_delay(attempt, base, cap, jitter)</code> — base 200ms, cap 60s, ±30% jitter</td></tr>
+        <tr><td>Max attempts</td><td><code>attempts_max=3</code> in <code>window_secs=60</code>; on exceed → <code>Failed</code> (surfaced as <code>Crashed</code> in user-facing UI)</td></tr>
+        <tr><td>cgroup v2 OOM</td><td>Dedicated OS thread; <code>epoll</code> registers <code>memory.events</code> with <code>EPOLLPRI</code>; deltas forwarded via mpsc to the supervisor — <em>not</em> a tokio task</td></tr>
+        <tr><td>cgroup library</td><td>Raw <code>std::fs::write</code> on the pseudo-FS; <code>clone3(CLONE_INTO_CGROUP)</code> from <code>nix</code></td></tr>
+        <tr><td>cgroup v1 fallback</td><td><code>RLIMIT_AS</code> in <code>pre_exec</code>; three-signal heuristic on SIGKILL classification</td></tr>
+        <tr><td>macOS jetsam</td><td>Three-conjunction heuristic: SIGKILL w/o core + <code>DISPATCH_SOURCE_TYPE_MEMORYPRESSURE</code> CRITICAL within 30s + RSS &gt; 80% of limit; <code>CrashOrOom::Oom { reason: "jetsam-inferred" }</code></td></tr>
+        <tr><td>Idle TTL</td><td>One <code>tokio::time::Sleep</code> per <code>ProcessKey</code>; refcount→0 sets <code>idle_until</code>; graceful stop on expiry (SIGTERM + 5s grace + SIGKILL)</td></tr>
+        <tr><td>Singleton vs per-client</td><td><code>ProcessKey = Singleton(ServerName) | PerClient { server, client_id }</code>; <code>client_id</code> is a monotonic per-connection counter, never a PID</td></tr>
+        <tr><td>Descendant lifetime</td><td>Linux: <code>prctl(PR_SET_PDEATHSIG, SIGKILL)</code> in <code>pre_exec</code>. macOS: sentinel pipe with daemon-held write end; child wrapper kills self on EOF</td></tr>
+        <tr><td>Audit-log replay on boot</td><td><strong>No.</strong> Canonical state is <code>config.toml</code>; re-derive on boot. Reopen at v1.1 if telemetry shows it's needed</td></tr>
+        <tr><td>Per-spawn instance token</td><td><strong>Yes (new).</strong> 32-byte nonce in spawned env as <code>MCPM_INSTANCE_TOKEN</code>; daemon maps <code>(token → server_name)</code>; secret-read RPCs from wrappers must present matching token. Closes cross-server-as-same-UID class SO_PEERCRED cannot. (<a href="./security/overview.html#decisions">security synthesis</a>)</td></tr>
+      </tbody>
+    </table>
+    <p>
+      <strong>Dependencies:</strong> <code>tokio</code>, <code>tokio-util</code>,
+      <code>nix</code>, <code>tracing</code>, <code>mcpm-core</code>, <code>mcpm-protocol</code>.
+    </p>
+    <p>
+      <strong>Test strategy:</strong> proptest on the three sans-I/O pure functions; integration
+      tests that spawn fake-MCP binaries from a fixture directory. Skip the crash-equivalence
+      property test (per <a href="./backend/overview.html#open">OQ-B-2</a>; deferred to v1.1).
+    </p>
+
+    <!-- mcpm-registry -->
+    <h3 id="crate-registry">mcpm-registry</h3>
+    <p>
+      <strong>Responsibility:</strong> Index fetch, signature verification, package install,
+      version pinning, search. Three default registry implementations behind a sealed trait.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong>
+      <code>Registry::search(query, limit) -&gt; Vec&lt;PackageHit&gt;</code>,
+      <code>Registry::resolve(spec, want) -&gt; ResolvedPackage</code>,
+      <code>Registry::download_and_verify(resolved, dest_dir) -&gt; VerifiedTarball</code>,
+      <code>Registry::list_installed() -&gt; Vec&lt;InstalledPackage&gt;</code>.
+    </p>
+    <p>
+      <strong>RegistrySource trait:</strong> sealed in v1.0 (per
+      <a href="./backend/overview.html#open">OQ-B-6 lean</a>; unsealing is non-breaking, so we
+      can revisit at v1.1). Three concrete impls: <code>OfficialRegistry</code>,
+      <code>GitHubRegistry</code>, <code>DockerCatalogRegistry</code>.
+    </p>
+    <p>
+      <strong>Source URI shape:</strong> The TOML table form with string-sugar fallback is locked
+      in the v1.0 spec. The crate parses both into the same internal <code>SourceUri</code> struct.
+    </p>
+    <p>
+      <strong>Search:</strong> hand-rolled BM25 over the cached index (~100 LoC per the
+      <a href="./backend/agent-boring-tech-defender.html#design">boring-tech-defender</a>); we
+      do <em>not</em> pull <code>tantivy</code> for a corpus of a few thousand entries.
+    </p>
+    <p>
+      <strong>Network:</strong> <code>reqwest</code> with <code>rustls</code> (no OpenSSL).
+      Stale-while-revalidate semantics with an explicit <code>freshness</code> field per the
+      <a href="./backend/agent-systems-veteran.html#design">veteran</a>; never silently serve
+      stale.
+    </p>
+    <p>
+      <strong>Verification ordering:</strong> minisign-verify BEFORE temp-file
+      <code>rename(2)</code>; cosign-when-present required for Docker MCP Catalog packages with
+      Rekor inclusion proof (per the <a href="./security/overview.html#decisions">security
+      synthesis</a>).
+    </p>
+    <p>
+      <strong>Dependencies:</strong> <code>reqwest</code>, <code>rustls</code>,
+      <code>minisign-verify</code>, optional <code>cosign-verify</code> (feature-flag),
+      <code>serde</code>, <code>tracing</code>, <code>mcpm-core</code>, <code>mcpm-trust</code>.
+    </p>
+
+    <!-- mcpm-secrets -->
+    <h3 id="crate-secrets">mcpm-secrets</h3>
+    <p>
+      <strong>Responsibility:</strong> Secret storage with the layered store. Ships the
+      <code>SecretStore</code> trait from day one even though we have only one concrete
+      implementation in v1.0 — <em>this</em> is the published extension point.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong>
+    </p>
+    <pre><code class="lang-rust">#[async_trait]
+pub trait SecretStore: Send + Sync {
+    async fn get(&amp;self, r: &amp;SecretRef) -&gt; Result&lt;Option&lt;SecretString&gt;, SecretError&gt;;
+    async fn set(&amp;self, r: &amp;SecretRef, v: SecretString) -&gt; Result&lt;(), SecretError&gt;;
+    async fn unset(&amp;self, r: &amp;SecretRef) -&gt; Result&lt;(), SecretError&gt;;
+    async fn list(&amp;self, scope: &amp;ScopeFilter) -&gt; Result&lt;Vec&lt;SecretRef&gt;, SecretError&gt;;
+    /// Default: returns Err(SecretError::Unsupported). v1.1 backends can override.
+    async fn rotate(&amp;self, r: &amp;SecretRef) -&gt; Result&lt;(), SecretError&gt; {
+        Err(SecretError::Unsupported)
+    }
+}
+
+#[non_exhaustive]
+pub enum SecretRef {
+    Named { server: String, name: String },
+    // v1.1: VaultPath, OnePasswordItem, BitwardenId, ...
+}</code></pre>
+    <p>
+      <strong>Layered chain:</strong> <code>EnvVarPassthroughStore</code> first (read-only override
+      for CI), <code>OsKeyringStore</code> second (durable). Reads fall through; writes go to
+      keyring only. Per-server scoping is mandatory: keychain account is
+      <code>dev.mcp-manager.mcpmanagerd/&lt;server&gt;/&lt;name&gt;</code>; a server can only request
+      secrets in its own namespace; cross-server access requires
+      <code>secrets_from = ["other-server.NAME"]</code> in user-scope (never project-scope) per the
+      <a href="./security/overview.html#decisions">security synthesis</a>.
+    </p>
+    <p>
+      <strong>macOS Keychain accessibility:</strong>
+      <code>kSecAttrAccessibleWhenUnlocked</code> (per the secrets-architect; defended against
+      crypto-pedant's stricter alternative because the threat model is stolen laptop, not
+      remote-with-physical-access). Never <code>kSecSynchronizable</code>; iCloud Keychain sync
+      is non-negotiably off.
+    </p>
+    <p>
+      <strong>Linux Keychain:</strong> libsecret (Secret Service); KWallet detected and warned
+      about (lock prompts every session is a UX disaster); explicit refuse-to-write with
+      <code>secret.backend.degraded</code> audit if no backend is reachable, rather than rolling
+      our own keyring file.
+    </p>
+    <p>
+      <strong>In-memory hygiene:</strong> <code>secrecy::SecretString</code> through every
+      function signature; <code>zeroize</code> on drop; <code>clippy::disallowed_types</code>
+      bans raw <code>String</code> in this crate. A <code>tracing</code> redaction layer rewrites
+      known-secret field names (<code>token</code>, <code>password</code>, <code>api_key</code>,
+      <code>secret</code>, <code>authorization</code>) to <code>[REDACTED]</code> as
+      belt-and-suspenders. CI fuzz test: write random secret values, grep every emitted
+      log/audit line for a match; build fails if any byte sequence leaks.
+    </p>
+    <p>
+      <strong>Intake paths:</strong> TTY via <code>rpassword</code> (reads <code>/dev/tty</code>,
+      never echoes); <code>--from-file</code>, <code>--from-env</code>, <code>--stdin</code>.
+      No <code>--value=...</code>: argv is broadcast to every process on the machine via
+      <code>ps</code>.
+    </p>
+    <p>
+      <strong>Dependencies:</strong> <code>secrecy</code>, <code>zeroize</code>,
+      <code>keyring</code> (cross-platform OS-keyring wrapper), <code>rpassword</code>,
+      <code>async-trait</code>, <code>tracing</code>, <code>mcpm-core</code>.
+    </p>
+
+    <!-- mcpm-projector -->
+    <h3 id="crate-projector">mcpm-projector</h3>
+    <p>
+      <strong>Responsibility:</strong> Managed-block sync into editor configs (Claude Code,
+      Cursor, Zed, JetBrains XML, VSCode). Stateless per-editor adapters; fenced managed-block
+      semantics; <code>quick-xml</code> for JetBrains XML (DOM-aware, no injection); atomic
+      temp-rename with directory-fsync.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong>
+      <code>Projector::list() -&gt; Vec&lt;EditorTarget&gt;</code>,
+      <code>Projector::diff(canonical) -&gt; Vec&lt;PendingChange&gt;</code>,
+      <code>Projector::sync(canonical) -&gt; Result&lt;SyncReport&gt;</code>.
+    </p>
+    <p>
+      <strong>Pure function:</strong>
+      <code>compute_managed_block(canonical, current_file, target) -&gt; (NewFileContents, DiffSummary)</code>
+      in <code>mcpm-core::projection</code>. The I/O shell drives <code>tokio::fs</code>.
+    </p>
+    <p>
+      <strong>ProjectionTarget trait:</strong> sealed in v1.0 (third-party projection targets are
+      not a v1.0 use case per <a href="./backend/agent-library-author.html#design">library-author</a>).
+    </p>
+    <p>
+      <strong>Editor-specific quirks:</strong>
+    </p>
+    <ul>
+      <li><strong>Claude Code:</strong> <code>~/.claude/settings.json</code> (per-user) and per-project <code>.claude/settings.json</code>. JSON; managed block via comment-fenced JSON impossible; instead we use a top-level <code>"mcpm.managed"</code> key whose value is a JSON object, and we leave the surrounding keys untouched.</li>
+      <li><strong>Cursor:</strong> <code>~/.cursor/mcp.json</code>. Same JSON-top-level-key pattern.</li>
+      <li><strong>Zed:</strong> <code>~/.config/zed/settings.json</code>. Same.</li>
+      <li><strong>JetBrains:</strong> <code>~/Library/Application Support/JetBrains/&lt;product&gt;/options/mcp.xml</code> (or Linux equivalent); XML; <code>quick-xml</code> parses; managed-block fence is an XML comment pair <code>&lt;!-- BEGIN mcpm managed --&gt;</code> ... <code>&lt;!-- END mcpm managed --&gt;</code>; we only edit the slice between fences.</li>
+      <li><strong>VSCode:</strong> via the Continue extension at <code>~/.continue/config.json</code>, JSON-top-level-key pattern.</li>
+    </ul>
+    <p>
+      <strong>Atomicity:</strong> per <a href="./backend/overview.html#decisions">backend
+      synthesis</a>: write to <code>tmp</code> in same dir; <code>fsync</code> the tmp file;
+      <code>rename(2)</code>; <code>fsync</code> the parent directory; on macOS additionally
+      <code>F_FULLFSYNC</code> on the canonical config path.
+    </p>
+    <p>
+      <strong>Drift detection:</strong> on every <code>projection.sync</code> call, compare the
+      current managed block bytes to the canonical-computed bytes. If different, audit-log
+      <code>projection.drift_detected</code> and report in <code>SyncReport</code>; the user sees
+      this in <code>mcpm status</code> as "edited outside" (per the
+      <a href="./ux/overview.html#decisions">UX synthesis</a> rename from "drifted").
+    </p>
+
+    <!-- mcpm-logs -->
+    <h3 id="crate-logs">mcpm-logs</h3>
+    <p>
+      <strong>Responsibility:</strong> Daemon log, per-MCP stdout/stderr capture, audit JSONL,
+      log rotation, the <code>logs.tail</code> streaming API.
+    </p>
+    <p>
+      <strong>Three log streams:</strong>
+    </p>
+    <ol>
+      <li>Daemon log (mcpmanagerd's own). Routed to stdout when running under systemd-user or
+        launchd (so <code>journalctl --user-unit mcp-manager --output=json</code> and Apple's
+        unified log Just Work) AND to
+        <code>$XDG_STATE_HOME/mcp-manager/daemon.log</code> as JSONL. Per the
+        <a href="./devops/overview.html#decisions">devops synthesis</a>.</li>
+      <li>Per-MCP stdout. Captured to
+        <code>$XDG_STATE_HOME/mcp-manager/servers/&lt;name&gt;.stdout.log</code> with daily rotation.</li>
+      <li>Per-MCP stderr. Same shape, different file.</li>
+    </ol>
+    <p>
+      <strong>Audit JSONL:</strong> append-only, single-writer, daily rotation. Per the
+      <a href="./security/overview.html#decisions">security synthesis</a> the audit gains a
+      hash-chain: every record carries <code>seq</code> (monotonic per-day) and
+      <code>prev_hash</code> (SHA-256 of the canonical-JSON of the previous record). Day-boundary
+      records cross-reference into the previous day's final record so the chain is unbroken
+      across files. <code>mcpm audit verify</code> verifies; <code>mcpm test --diagnostic</code>
+      includes a chain check.
+    </p>
+    <p>
+      <strong>logs.tail streaming:</strong> the daemon uses
+      <code>tokio::sync::broadcast::Sender</code> per stream class. Slow tail-clients see
+      <code>BroadcastStreamRecvError::Lagged(n)</code> and the synthesis surfaces this as a
+      <code>LogLine::lagged(n)</code> sentinel rather than dropping silently per the
+      <a href="./backend/agent-tokio-pragmatist.html#design">pragmatist</a>. Single-writer mpsc
+      for audit (blocking backpressure: we must not lose audit lines).
+    </p>
+    <p>
+      <strong>Rotation:</strong> rename-then-signal-reopen lossless rotation. Compare UTC date
+      once per minute; rotation grabs the file mutex only to swap the file descriptor. Per the
+      <a href="./backend/agent-kernel-hacker.html#design-logs">kernel-hacker</a>.
+    </p>
+
+    <!-- mcpm-trust -->
+    <h3 id="crate-trust">mcpm-trust</h3>
+    <p>
+      <strong>Responsibility:</strong> The TUF-lite trust manifest. Baked-in root pubkey (ed25519,
+      32 bytes) PLUS a baked-in revocation-only pubkey (per the
+      <a href="./security/overview.html#decisions">security synthesis</a>); fetched
+      <code>trust.toml</code> with 7-day TTL; baked-in-fallback mode for offline; periodic
+      refresh task.
+    </p>
+    <p>
+      <strong>Public API sketch:</strong>
+      <code>TrustStore::current(&amp;self) -&gt; TrustView</code>,
+      <code>TrustStore::verify_index(&amp;self, idx, sig) -&gt; Result&lt;()&gt;</code>,
+      <code>TrustStore::verify_package(&amp;self, pkg) -&gt; Result&lt;()&gt;</code>,
+      <code>TrustStore::refresh(&amp;self) -&gt; Result&lt;RefreshOutcome&gt;</code>.
+    </p>
+    <p>
+      <strong>Verifier order:</strong> parse → signature verify → now ≥ signed_at − skew →
+      now &lt; expires_at → version &gt; previous_version (monotonic; defends against
+      old-but-valid replay).
+    </p>
+    <p>
+      <strong>Stale-trust policy:</strong> fail-soft on read-only ops (<code>mcpm list</code>,
+      <code>mcpm exec</code>); fail-closed on state-changing ops (<code>mcpm install</code>,
+      <code>mcpm update</code>); hard ceiling of <code>expires_at + 30d</code> beyond which
+      nothing verifies. Compromise from the
+      <a href="./security/overview.html#disagreement">security synthesis tension 1</a>; rejects
+      red-team's strict fail-closed (unworkable for travel) and crypto-pedant's no-ceiling lean.
+    </p>
+    <p>
+      <strong>Algorithm-agility envelope:</strong>
+      <code>{ "alg": "ed25519", "key_id": "...", "signed_at": ..., "expires_at": ..., "payload_hash": "sha256:9f4e2d...", "payload_hash_alg": "sha256", "sig": "..." }</code>.
+      Static allowlist <code>["ed25519"]</code> for v1.0; never accept <code>"alg": "none"</code>
+      (the JWT bug class). Per the
+      <a href="./security/overview.html#decisions">security synthesis</a>.
+    </p>
+    <p>
+      <strong>Project-config trust gate:</strong> the trust key is
+      <code>SHA-256(absolute-path) || SHA-256(canonical-JSON(parsed-TOML))</code>. Moving the repo
+      invalidates the grant; semantic-equivalent re-formatting does not (because we canonical-JSON
+      the parsed TOML, not the raw bytes).
+    </p>
+
+    <!-- mcpm-cli -->
+    <h3 id="crate-cli">mcpm-cli</h3>
+    <p>
+      <strong>Responsibility:</strong> The <code>mcpm</code> binary. CLI parsing (clap-derive),
+      19 subcommands, output formatting, completion generation, manpage generation, the TUI app
+      entry. The <em>only</em> binary the user invokes directly.
+    </p>
+    <p>
+      <strong>Output modes:</strong> per the
+      <a href="./frontend/overview.html#decisions">frontend synthesis</a>:
+      <code>--format=human|json|ndjson|yaml|tsv</code>, default <code>human</code> on TTY,
+      auto-degrade to <code>tsv</code> when stdout is not a TTY. Pipe-detection is the
+      auto-default. <code>--plain</code> is an explicit screen-reader-friendly mode (no Unicode
+      glyphs, prose line endings).
+    </p>
+    <p>
+      <strong>Exit codes:</strong> aligned with <code>sysexits.h</code> (64-78); each E_* error
+      maps to a specific exit code documented in the runbook. Per the
+      <a href="./frontend/agent-cli-unix-purist.html#design">cli-unix-purist</a>.
+    </p>
+    <p>
+      <strong>stdout vs stderr:</strong> stdout is data; stderr is chatter. The JSON error
+      envelope goes to stdout (so it can be piped to <code>jq</code>); human prose error messages
+      go to stderr. Progress, spinners, and confirmations always to stderr.
+    </p>
+    <p>
+      <strong>TUI:</strong> the TUI app entry. Refuses to start when stdin/stdout isn't a TTY,
+      <code>$TERM=dumb</code>, <code>$CI</code> is set, or <code>--no-tty</code> is passed. Three
+      panes: Servers, Editors, Secrets (the "Toolchains" rename to "Editors" per the
+      <a href="./ux/overview.html#decisions">UX synthesis</a>). Modifier-free single-key actions,
+      <code>q</code> to quit, <code>?</code> opens contextual help, <code>Esc</code> universally
+      cancels.
+    </p>
+    <p>
+      <strong>The "20th subcommand" question:</strong> resolved by absorbing the doctor flow into
+      <code>mcpm test --diagnostic</code> per the
+      <a href="./frontend/overview.html#disagreement">frontend synthesis</a>. The subcommand count
+      stays at 19; the diagnostic output is the row-by-row chain check that the
+      onboarding-novice's transcript proposed.
+    </p>
+    <p>
+      <strong>Dependencies:</strong> <code>clap</code> (derive), <code>clap_complete</code>,
+      <code>clap_mangen</code>, <code>ratatui</code>, <code>crossterm</code>, <code>tokio</code>,
+      <code>tracing-subscriber</code>, <code>mcpm-client</code>, <code>mcpm-protocol</code>,
+      <code>mcpm-core</code>.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="section" id="flows">
+    <h2>Per-flow deep dive</h2>
+
+    <p>
+      The v1.0 spec sketched five end-to-end flows. This section extends each with the
+      synthesis-level detail accumulated above. Where a flow crosses facet boundaries (most do),
+      the synthesis specifies who owns which step.
+    </p>
+
+    <h3 id="flow-install">1. <code>mcpm install &lt;source&gt;</code></h3>
+    <ol>
+      <li><code>mcpm-cli</code> parses argv; converts a string-sugar URI to the canonical
+        <code>SourceUri</code> table form.</li>
+      <li><code>mcpm-client</code> connects (auto-spawns daemon if needed).</li>
+      <li><code>mcpmanagerd</code> peer-cred-auths the UDS; tower stack records audit
+        <code>install.start</code>.</li>
+      <li><code>mcpm-trust</code> validates the current trust manifest; refuses if stale beyond
+        the 30-day ceiling.</li>
+      <li><code>mcpm-registry</code> resolves the spec to a concrete package + version + hash;
+        downloads the tarball; minisign-verifies BEFORE temp-file <code>rename(2)</code>;
+        cosign-when-present required for OCI packages with Rekor inclusion proof.</li>
+      <li><code>mcpm-core</code> validates the package's manifest; computes
+        <code>prior_hash</code> on the current <code>config.toml</code>; emits the
+        <code>config.put</code> with the CAS guard.</li>
+      <li><code>mcpm-projector</code> recomputes the managed block for each editor target;
+        atomically writes; emits projection events.</li>
+      <li><code>mcpm-supervisor</code> spawns the server (sandboxed per the isolation mode);
+        injects <code>MCPM_INSTANCE_TOKEN</code> nonce; reports state.</li>
+      <li>Audit <code>install.complete</code> with the resolved version, content hash, signing
+        key id, and supervisor outcome.</li>
+      <li><code>mcpm-cli</code> renders the human-readable summary; on TTY, prints the AHA-moment
+        hint ("Try: ask Claude Code 'what time is it?'" for the bundled demo).</li>
+    </ol>
+
+    <h3 id="flow-exec">2. <code>mcpm exec &lt;server&gt; -- &lt;tool&gt;</code></h3>
+    <p>
+      The exec path is the only one the AI-editor SDK invokes directly. Performance-sensitive.
+      Locked end-to-end p99 budget: 50ms.
+    </p>
+    <ol>
+      <li>Client opens UDS (already open if persistent).</li>
+      <li>Tower stack: SO_PEERCRED check (UID match), trace span, audit
+        <code>exec.start</code>, concurrency limit.</li>
+      <li>Supervisor looks up the <code>ProcessKey</code> (singleton or per-client); spawns if
+        not running.</li>
+      <li>Secret resolver builds the env: layered <code>SecretStore</code> resolves each
+        secret; <code>SecretString</code> through the resolver; dropped immediately after
+        <code>execve</code> envp is built.</li>
+      <li>For containerized isolation modes: <code>--env-file /dev/fd/N</code> from a pipe the
+        daemon writes (per <a href="./security/overview.html#decisions">security synthesis</a>).
+        Never argv-injection of secret values.</li>
+      <li>Spawn (cgroup-attached on Linux; RLIMIT_AS-set on cgroup-v1 or macOS).
+        <code>PR_SET_PDEATHSIG</code> in <code>pre_exec</code> (Linux); sentinel pipe handshake
+        (macOS).</li>
+      <li>Tool call routes through the spawned MCP server; stdout JSON-RPC response is parsed
+        and re-emitted to the client; audit <code>exec.complete</code>.</li>
+    </ol>
+
+    <h3 id="flow-secret-set">3. <code>mcpm secret set &lt;server&gt;.&lt;name&gt;</code></h3>
+    <ol>
+      <li><code>mcpm-cli</code> opens <code>/dev/tty</code> via <code>rpassword</code>; reads the
+        value without echo.</li>
+      <li>Client calls <code>secret.set</code> with the <code>SecretRef::Named { server, name }</code>;
+        the value travels as a <code>SecretString</code> serialized into the JSON-RPC payload —
+        the only place plaintext crosses the wire (UDS, 0600, local-only, peer-cred-attested).</li>
+      <li>Daemon receives; secrets crate writes to keyring with per-server-scoped account
+        <code>dev.mcp-manager.mcpmanagerd/&lt;server&gt;/&lt;name&gt;</code>.</li>
+      <li>Audit <code>secret.set</code> with the scope (never the value).</li>
+      <li>CI fuzz test injected random byte sequences; greps audit/log for matches; build fails
+        if any leak.</li>
+    </ol>
+
+    <h3 id="flow-crash-restart">4. Crash → restart → max-attempts → Crashed</h3>
+    <ol>
+      <li>Spawned child exits abnormally (non-zero status, SIGKILL, or jetsam).</li>
+      <li>Linux cgroup-v2 path: OOM-watch thread reads <code>memory.events</code>; if
+        <code>oom_kill</code> delta &gt; 0, classify as
+        <code>CrashOrOom::Oom { reason: "cgroup-oom-kill" }</code>; mpsc-forward to the
+        supervisor.</li>
+      <li>cgroup-v1 / macOS path: three-signal heuristic per the kernel-hacker;
+        <code>jetsam-inferred</code> on full conjunction.</li>
+      <li>Supervisor's pure <code>classify_exit</code> consumes the platform classification +
+        last-RSS + exit signal and emits <code>Event::ChildExited { kind: Crash | Oom |
+        GracefulStop }</code>.</li>
+      <li>Pure <code>step()</code> consumes the event; if attempt count &lt; <code>attempts_max</code>
+        in window: emit <code>Action::ScheduleRestart { delay: next_delay(...) }</code> and
+        transition to <code>Restarting { attempt }</code>. Else emit
+        <code>Action::TransitionToFailed</code> and transition to
+        <code>Failed { reason }</code>.</li>
+      <li>I/O shell handles the action: <code>tokio::time::sleep(delay)</code>; respawn;
+        audit each transition.</li>
+      <li>On <code>Failed</code>: <code>mcpm status</code> shows <code>Crashed</code>
+        (user-facing rename per <a href="./ux/overview.html#decisions">UX synthesis</a>); TUI
+        glyph <code>⚠</code>; the error envelope's remedy points at
+        <code>mcpm test &lt;name&gt; --diagnostic</code>.</li>
+    </ol>
+
+    <h3 id="flow-tui-startup">5. TUI startup with auto-spawn race</h3>
+    <ol>
+      <li>User runs <code>mcpm</code> (no subcommand).</li>
+      <li><code>mcpm-cli</code> checks: is stdin/stdout a TTY? Is <code>$CI</code> set? Is
+        <code>$TERM=dumb</code>? Is <code>--no-tty</code> set? Any "yes" → print help to stderr
+        and exit non-zero.</li>
+      <li><code>mcpm-client</code> tries to connect to the UDS. If
+        <code>ENOENT</code>/<code>ECONNREFUSED</code>: try to acquire
+        <code>flock(2)</code> on <code>$XDG_RUNTIME_DIR/mcpmanagerd.spawn.lock</code>
+        non-blocking-exclusive.</li>
+      <li>Won the lock: <code>fork</code>+<code>exec</code> <code>which mcpmanagerd</code>;
+        release lock; poll UDS for up to 5s with 50ms sleeps.</li>
+      <li>Lost the lock (another client is spawning): poll UDS for up to 5s.</li>
+      <li>Connect; tower stack peer-cred-auths.</li>
+      <li><code>ratatui</code> initializes; three panes (Servers, Editors, Secrets); status
+        line shows daemon version + connection state.</li>
+      <li>First-frame paint: every glyph has a one-word screen-reader label;
+        <code>NO_COLOR</code> respected; <code>--plain</code> mode degrades to prose-style.</li>
+    </ol>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="section" id="facets">
+    <h2>Per-facet pull-ups</h2>
+
+    <p>
+      Each facet's net additions to the v1.0 spec, compressed into one paragraph. For full
+      reasoning, follow the link to the facet overview.
+    </p>
+
+    <h3>Backend — <a href="./backend/overview.html">facet overview</a></h3>
+    <p>
+      Adopts <code>tower</code> middleware (four layers, deliberately capped) for the daemon
+      dispatch; <code>JoinSet</code>+<code>CancellationToken</code> in the supervisor's I/O shell
+      with the pure state-machine core in <code>mcpm-core</code>; dedicated OS thread for the
+      cgroup-v2 OOM reactor (not a tokio task — <code>AsyncFd</code> doesn't surface
+      <code>EPOLLPRI</code> cleanly); raw cgroup pseudo-FS writes (no <code>cgroups-rs</code>);
+      <code>SecretStore</code> trait from day one; sealed <code>RegistrySource</code> and
+      <code>ProjectionTarget</code> for v1.0 (unsealing is non-breaking); no audit-log replay on
+      boot — re-derive state from <code>config.toml</code>.
+    </p>
+
+    <h3>Frontend — <a href="./frontend/overview.html">facet overview</a></h3>
+    <p>
+      Three discrete output modes (TTY default → visual, pipe → TSV, <code>--plain</code> →
+      screen-reader prose); folds <code>mcpm doctor</code> into <code>mcpm test --diagnostic</code>
+      to preserve the 19-subcommand contract; adopts the
+      <code>:</code>-palette + browse-mode TUI command palette dispatching through the same
+      registry as the CLI; status-line + bottom hint bar are non-negotiable discoverability
+      layers; <code>$VISUAL → $EDITOR → vi</code> fallback chain; default TTY palette is
+      green/red with Okabe-Ito and high-contrast as bundled alternatives (revisited on user
+      research).
+    </p>
+
+    <h3>DevOps — <a href="./devops/overview.html">facet overview</a></h3>
+    <p>
+      Curl + Nix as dual-primary install (byte-identical artifact, CI-enforced); minisign on the
+      tarball envelope (no GPG); cosign-when-present additive for OCI packages with Rekor
+      inclusion proof; reverse-DNS <code>dev.mcp-manager.mcpmanagerd</code> for macOS launchd
+      label, Keychain prefix, libsecret schema; systemd-user socket-activated
+      <code>mcp-manager.service</code> on Linux (bare name, systemd convention); reproducible
+      builds non-negotiable with a build-twice CI gate; AUR PKGBUILD in v1.0, deb/rpm recipes
+      shipped as release artifacts (no apt/dnf repos owned by us); $PREFIX defaults
+      <code>/usr/local</code> on macOS, <code>$HOME/.local</code> on Linux with auto-fallback;
+      SLSA L3 provenance; CycloneDX 1.5 SBOM via <code>cargo-cyclonedx</code>.
+    </p>
+
+    <h3>Security — <a href="./security/overview.html">facet overview</a></h3>
+    <p>
+      Per-spawn <code>MCPM_INSTANCE_TOKEN</code> nonce as a layered addition on top of
+      SO_PEERCRED — closes the cross-server-as-same-UID secret-read class; per-server keychain
+      namespacing mandatory; <code>cross-server</code> access requires user-scope
+      <code>secrets_from</code> opt-in (never project-scope); fail-soft on stale trust for
+      read-only ops + fail-closed for state-changing ops + hard 30-day ceiling; algorithm-agility
+      envelope on every signed payload (<code>{alg, key_id, signed_at, expires_at, payload_hash,
+      payload_hash_alg, sig}</code>); audit JSONL gains hash-chain
+      (<code>seq</code> + <code>prev_hash</code>); macOS Keychain
+      <code>kSecAttrAccessibleWhenUnlocked</code>; iCloud Keychain sync forbidden; project-scope
+      cannot request <code>isolation = "none"</code>; sandbox-policy logging at policy
+      granularity (not syscall) with bloom-filter dedupe.
+    </p>
+
+    <h3>UX — <a href="./ux/overview.html">facet overview</a></h3>
+    <p>
+      Three lucky-day onboarding prompts + a universal preview screen + the post-init
+      three-noun teach (Servers / Editors / Secrets); a bundled
+      zero-secret demo "time" MCP installed by default on <code>mcpm init</code> so the
+      first-launch AHA happens in 60 seconds without secrets or network; four-field error
+      envelope (code / what / why / remedy-as-literal-command) with <code>category</code> field
+      (external / input / internal / refusal); refusal ≠ failure visually
+      (<code>⊘</code> + amber for refusal; <code>✗</code> + red for failure); the
+      "Toolchains" TUI pane renamed to "Editors"; "failed" → "crashed" and "drifted" →
+      "edited outside" in user-facing surfaces (TOML keys unchanged);
+      <code>E_DAEMON_VERSION</code> → <code>E_DAEMON_TOO_OLD</code> as the one code-level
+      rename (no published release ships the old name); local NDJSON event log at
+      <code>$XDG_STATE_HOME/mcp-manager/events.ndjson</code> for self-diagnosis (no telemetry);
+      idle-TTL surfaced as "Auto-stop after N min" in TUI labels (TOML key unchanged);
+      "projection" rename deferred to v1.1 pending local-event data.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="section" id="open">
+    <h2>Consolidated open questions</h2>
+
+    <p>
+      Items that the synthesis cannot decide without human judgment, fresh data, or v1.0 alpha
+      feedback. Each is non-blocking. Re-open at v1.1 planning.
+    </p>
+
+    <ol>
+      <li>
+        <strong>OQ-1 (Backend) — Publish <code>mcpm-client</code> to crates.io?</strong>
+        Lean publish at 0.x with a "not stable" banner to capture docs.rs benefit. Trade-off:
+        Hyrum's law vs free third-party-experimentation. See
+        <a href="./backend/overview.html#open">backend OQ-B-1</a>.
+      </li>
+      <li>
+        <strong>OQ-2 (Backend) — How aggressive with <code>tracing</code> spans in v1.0?</strong>
+        Lean: spans on RPC handler boundaries and supervisor state transitions; not on inner
+        loops or the OOM-watch thread. Defer otel exporter to v1.1. See
+        <a href="./backend/overview.html#open">backend OQ-B-3</a>.
+      </li>
+      <li>
+        <strong>OQ-3 (Backend) — broadcast vs bounded mpsc for <code>logs.tail</code>?</strong>
+        Lean: broadcast for stdout/stderr (lossy backpressure correct); bounded mpsc for audit
+        (blocking backpressure mandatory). Already adopted; flagged because a future maintainer
+        may want to revisit. See <a href="./backend/overview.html#open">backend OQ-B-4</a>.
+      </li>
+      <li>
+        <strong>OQ-4 (Frontend) — Default TTY palette?</strong> Lean: visual-designer's
+        green/red as default; Okabe-Ito and high-contrast as bundled alternatives. Revisit on
+        user research. See <a href="./frontend/overview.html#open">frontend</a>.
+      </li>
+      <li>
+        <strong>OQ-5 (DevOps) — Two-key signing separation?</strong> Lean: single key in v1.0
+        (single-maintainer reality); v1.1 splits into release-signing + trust-manifest-signing.
+        See <a href="./devops/overview.html#open">devops</a>.
+      </li>
+      <li>
+        <strong>OQ-6 (DevOps) — Distro inclusion (deb/rpm) ownership?</strong> Lean: we ship
+        recipes in-tree, downstream volunteers own apt/dnf repos. AUR exception (low maintenance
+        burden, no gate). See <a href="./devops/overview.html#open">devops</a>.
+      </li>
+      <li>
+        <strong>OQ-7 (DevOps) — Self-update mechanism for v1.0?</strong> Lean: no self-updater
+        in v1.0; users re-run curl install or <code>nix profile upgrade</code>. v1.1 reconsiders
+        if user feedback demands. See <a href="./devops/overview.html#open">devops</a>.
+      </li>
+      <li>
+        <strong>OQ-8 (Security) — TUF timestamp role?</strong> Lean: omit in v1.0 (single
+        publisher; envelope's <code>signed_at</code>/<code>expires_at</code> suffices for replay
+        defense); v1.1 adds the timestamp role if we move to threshold signing. See
+        <a href="./security/overview.html#open">security</a>.
+      </li>
+      <li>
+        <strong>OQ-9 (Security) — fd-passing for secrets?</strong> Lean: env-var in v1.0 for
+        every isolation mode (env for level-0-to-2; <code>--env-file /dev/fd/N</code> for
+        containers); fd-passing aspirational for v1.1 once <code>MCPM_SECRETS_FD</code> spec is
+        stable. See <a href="./security/overview.html#open">security</a>.
+      </li>
+      <li>
+        <strong>OQ-10 (UX) — "projection" rename to "sync" in user-facing surfaces?</strong>
+        Lean: defer to v1.1 with local-event data on how often users edit projected files and
+        how often <code>E_PROJECTION_DRIFT</code> fires. See
+        <a href="./ux/overview.html#open">ux</a>.
+      </li>
+      <li>
+        <strong>OQ-11 (UX) — Internationalization beyond English?</strong> Lean: v1.0 ships
+        English only with translations-welcome pointer; v1.1 considers a translation file
+        mechanism that doesn't balloon the binary. See <a href="./ux/overview.html#open">ux</a>.
+      </li>
+      <li>
+        <strong>OQ-12 (UX) — Sub-codes inside the 12-row taxonomy?</strong> Lean: hold the 12
+        rows; the recovery-advocate's instinct to split (e.g.,
+        <code>E_KEYCHAIN_UNAVAILABLE.libsecret</code>) defers until local-event evidence shows
+        users actually need the disambiguation. See <a href="./ux/overview.html#open">ux</a>.
+      </li>
+    </ol>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="section" id="diffs">
+    <h2>Diffs against the v1.0 spec</h2>
+
+    <p>
+      Explicit table of where this synthesis adds to, refines, or replaces a detail in the
+      <a href="../technical-design.html">v1.0 spec</a>. Locked decisions (Windows out, no telemetry,
+      curl+Nix, 11-crate workspace, etc.) are <strong>not</strong> in this table; they are
+      preserved verbatim. Only changes to v1.0 details are listed.
+    </p>
+
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Area</th>
+          <th>v1.0 spec said</th>
+          <th>Deep-dive recommends</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Audit log</td>
+          <td>Append-only JSONL with fields ts/event/actor/server/outcome/details/v</td>
+          <td>Same fields PLUS <code>seq</code> (monotonic per-day) and <code>prev_hash</code>
+            (SHA-256 of canonical-JSON of previous record); day-boundary cross-reference closes
+            the chain across files; <code>mcpm audit verify</code> command</td>
+          <td>Tamper evidence; gap detection. Audit-compliance + security synthesis.</td>
+        </tr>
+        <tr>
+          <td>IPC auth</td>
+          <td>SO_PEERCRED (Linux) / LOCAL_PEERCRED (macOS) on UDS</td>
+          <td>Same PLUS per-spawn <code>MCPM_INSTANCE_TOKEN</code> 32-byte nonce in spawned env;
+            daemon maps token → server_name; secret-read RPCs must present matching token</td>
+          <td>Closes cross-server-as-same-UID secret-read class that SO_PEERCRED alone cannot.
+            Red-team Tree 2; security synthesis decision.</td>
+        </tr>
+        <tr>
+          <td>Secrets scoping</td>
+          <td>SecretStore trait + OsKeyringStore + EnvVarPassthrough + Layered</td>
+          <td>Same PLUS mandatory per-server keychain namespacing
+            (<code>dev.mcp-manager.mcpmanagerd/&lt;server&gt;/&lt;name&gt;</code>); cross-server access
+            requires user-scope <code>secrets_from</code> opt-in (never project-scope)</td>
+          <td>Closes "random tool declares <code>secrets = ["AWS_SECRET_ACCESS_KEY"]</code>" footgun.
+            Red-team + secrets-architect; security synthesis decision.</td>
+        </tr>
+        <tr>
+          <td>Stale trust policy</td>
+          <td>7-day TTL on fetched trust.toml; baked-in-fallback mode</td>
+          <td>Same PLUS: fail-soft on read-only ops (list, exec); fail-closed on state-changing
+            ops (install, update); hard ceiling of <code>expires_at + 30d</code> beyond which
+            nothing verifies</td>
+          <td>Workable for travel/offline; preserves "publisher silent for a month → something
+            wrong" tripwire. Crypto-pedant compromise; security synthesis tension 1.</td>
+        </tr>
+        <tr>
+          <td>Demo MCP server</td>
+          <td>Not mentioned</td>
+          <td>Bundle a zero-secret, zero-network "time" MCP in the binary; install by default
+            on <code>mcpm init</code> (opt-out via <code>--no-demo</code>); first AHA-moment
+            happens in &lt; 60s without secrets or network</td>
+          <td>Engineers <code>E_SECRET_MISSING</code> and <code>E_REGISTRY_UNREACHABLE</code> out
+            of the lucky-day path. Onboarding-specialist; UX synthesis.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm doctor</code></td>
+          <td>"19 CLI subcommands"; doctor flow informally suggested</td>
+          <td>Fold doctor into <code>mcpm test &lt;server&gt; --diagnostic</code> + bare
+            <code>mcpm test --diagnostic</code> (no server arg) walks the system-wide chain.
+            Subcommand count stays at 19.</td>
+          <td>Preserves locked 19-subcommand contract while delivering doctor's value.
+            Frontend synthesis tension 2.</td>
+        </tr>
+        <tr>
+          <td>Error taxonomy</td>
+          <td>12-row taxonomy in <code>ux-design.html#errors</code></td>
+          <td>Same rows PLUS <code>category</code> field (external/input/internal/refusal),
+            <code>remedy_cmd</code> column, <code>related_cmd</code> column;
+            <code>E_DAEMON_VERSION</code> renamed to <code>E_DAEMON_TOO_OLD</code> (no published
+            release ships the old name); refusal renders ⊘ + amber, failure ✗ + red</td>
+          <td>Recovery-advocate's four-field contract; coach's rename audit; UX synthesis.</td>
+        </tr>
+        <tr>
+          <td>TUI labels</td>
+          <td>"Toolchains" pane label per ux-design.html</td>
+          <td>Renamed to "Editors" — restores three-noun symmetry (Servers / Editors / Secrets).
+            "failed" → "crashed"; "drifted" → "edited outside". TOML keys and audit-log enums
+            unchanged.</td>
+          <td>Mental-model coach; UX synthesis.</td>
+        </tr>
+        <tr>
+          <td>Output modes</td>
+          <td>"<code>--json</code> mode"; otherwise human</td>
+          <td><code>--format=human|json|ndjson|yaml|tsv</code>; default <code>human</code> on
+            TTY, auto-degrade to <code>tsv</code> when stdout is not a TTY; <code>--plain</code>
+            explicit screen-reader-friendly mode</td>
+          <td>Cli-unix-purist; accessibility-advocate; frontend synthesis tension 1.</td>
+        </tr>
+        <tr>
+          <td>Exit codes</td>
+          <td>Mentioned but not enumerated</td>
+          <td>Aligned with <code>sysexits.h</code> (64-78); each E_* maps to a specific exit
+            code documented in the runbook</td>
+          <td>Cli-unix-purist; frontend synthesis.</td>
+        </tr>
+        <tr>
+          <td>Install paths</td>
+          <td>"curl installer + Nix flake"</td>
+          <td>Dual-primary curl+Nix from the same flake-built artifact (CI-enforced byte
+            equality); $PREFIX defaults <code>/usr/local</code> on macOS, <code>$HOME/.local</code>
+            on Linux (auto-fallback if not writable); state under <code>$XDG_STATE_HOME</code></td>
+          <td>Devops synthesis tensions 1 and 3.</td>
+        </tr>
+        <tr>
+          <td>Distro packaging</td>
+          <td>Not specified</td>
+          <td>AUR PKGBUILD in v1.0; deb + rpm recipes shipped as release artifacts (cargo-deb,
+            cargo-generate-rpm); no apt/dnf repos owned by us in v1.0</td>
+          <td>Devops synthesis tension 4. Honors "no Homebrew, no App Store" without excluding
+            community-driven downstream packages.</td>
+        </tr>
+        <tr>
+          <td>Reproducible builds</td>
+          <td>"Reproducible build" mentioned</td>
+          <td>Specific flag set: <code>SOURCE_DATE_EPOCH</code>,
+            <code>--remap-path-prefix</code>, <code>codegen-units = 1</code>,
+            <code>lto = "fat"</code>, <code>panic = "abort"</code>, <code>strip = "symbols"</code>,
+            <code>--locked</code>, <code>--offline</code>; build-twice diff CI gate. Flake as
+            reference reproducible build.</td>
+          <td>Supply-chain-sec essay; devops synthesis decision 2.</td>
+        </tr>
+        <tr>
+          <td>Service-string namespace</td>
+          <td>"mcp-manager or dev.mcp-manager — decision needed"</td>
+          <td><code>dev.mcp-manager.mcpmanagerd</code> for macOS launchd label, Keychain
+            prefix, libsecret schema, os_log subsystem; bare <code>mcp-manager.service</code>
+            for systemd unit (systemd convention)</td>
+          <td>Devops synthesis decision 10; security synthesis ratifies.</td>
+        </tr>
+        <tr>
+          <td>Local measurement</td>
+          <td>"No telemetry" (locked, preserved)</td>
+          <td>Add local NDJSON event log at
+            <code>$XDG_STATE_HOME/mcp-manager/events.ndjson</code> (mode 0600, 50 MB rotation cap)
+            for self-diagnosis; gated behind a privacy checklist (no argv, no paths, no secret
+            names, no error bodies, no cross-session correlation); read by
+            <code>mcpm test --diagnostic --history</code> and packaged by a new
+            <code>mcpm support-bundle</code> command. The user can disable; disabling is itself
+            audit-logged.</td>
+          <td>Data-driven PM under the no-telemetry constraint; UX synthesis. "User is co-author
+            of their own observability, not a research subject."</td>
+        </tr>
+        <tr>
+          <td><code>mcpm support-bundle</code></td>
+          <td>Not present</td>
+          <td>New subcommand. Packages events log + daemon ring buffer + version + trust status
+            into a tarball the user inspects before attaching to bug reports. Counts as one of
+            the 19 subcommands (replacing <code>mcpm test</code>'s diagnostic-only sub-mode, no
+            net subcommand-count change since diagnostic is folded into the existing
+            <code>mcpm test</code>).</td>
+          <td>Data-driven PM; UX synthesis.</td>
+        </tr>
+        <tr>
+          <td>SBOM</td>
+          <td>"SBOM" mentioned in v1.0 future-features as v1.1+</td>
+          <td>CycloneDX 1.5 JSON via <code>cargo-cyclonedx</code> at every release tag;
+            minisign-signed and attached as a release artifact. Pulls SBOM forward into v1.0.</td>
+          <td>Supply-chain-sec; devops synthesis decision 8. Low cost; significant downstream
+            value.</td>
+        </tr>
+        <tr>
+          <td>SLSA level</td>
+          <td>Not specified</td>
+          <td>SLSA Build Level 3 at v1.0 GA via <code>slsa-framework/slsa-github-generator</code>.
+            L4 aspirational.</td>
+          <td>Supply-chain-sec; devops synthesis decision 8.</td>
+        </tr>
+        <tr>
+          <td>cargo dep gate</td>
+          <td>"Cargo.lock review discipline"</td>
+          <td>Concrete CI gauntlet: <code>cargo-deny</code> (license + advisory + ban) on every
+            PR + daily cron; <code>cargo-vet</code> imports from Mozilla / Google / Bytecode
+            Alliance / Embark / Zcash with own audits only for the ~50-crate unaudited delta;
+            <code>cargo-audit</code> daily on main, auto-issue on new RUSTSEC advisory.</td>
+          <td>Supply-chain-sec; devops synthesis decision 8.</td>
+        </tr>
+        <tr>
+          <td>macOS Keychain accessibility</td>
+          <td>"OS Keychain" mentioned</td>
+          <td><code>kSecAttrAccessibleWhenUnlocked</code> (never Always, never AfterFirstUnlock,
+            never iCloud Keychain sync)</td>
+          <td>Secrets-architect; security synthesis tension 5.</td>
+        </tr>
+        <tr>
+          <td>Project-scope refusals</td>
+          <td>Trust gate is direnv-style sha256-pinned</td>
+          <td>Same PLUS: project-scope cannot request <code>isolation = "none"</code> or add new
+            registries; both refused outright; user opts in by setting in their own user-scope
+            for that specific server</td>
+          <td>Red-team Tree 2; security synthesis decision.</td>
+        </tr>
+        <tr>
+          <td>Algorithm-agility envelope</td>
+          <td>Not specified</td>
+          <td>Every signed payload: <code>{ alg, key_id, signed_at, expires_at, payload_hash,
+            payload_hash_alg, sig }</code>. Static allowlist <code>["ed25519"]</code> for v1.0;
+            reject "none" (the JWT bug class). Hash agility via string prefix
+            (<code>"sha256:9f4e2d..."</code>).</td>
+          <td>Crypto-pedant; security synthesis decision.</td>
+        </tr>
+        <tr>
+          <td>Sandbox policy logging</td>
+          <td>"Sandbox per server" with the five modes</td>
+          <td>Same PLUS: every <code>server.spawn</code> audit record captures the materialised
+            policy (bwrap argv hash, SBPL profile SHA-256, Docker run flags). Per-policy
+            granularity, not per-syscall. Bloom-filter dedupe for repeat first-touches.</td>
+          <td>Sandboxing-veteran + audit-compliance; security synthesis tension 4.</td>
+        </tr>
+        <tr>
+          <td>mdbook IA</td>
+          <td>"mdbook docs" mentioned</td>
+          <td>Specific chapter shape: What is MCP Manager? · Install · Servers · Editors ·
+            Secrets · Projects · The TUI · If something's wrong (errors, one page per E_*
+            enforced by CI) · Reference · Concepts (optional reading).</td>
+          <td>UX synthesis decision.</td>
+        </tr>
+        <tr>
+          <td>Idle TTL UI</td>
+          <td>"idle_ttl_secs per server"</td>
+          <td>Surface as "Auto-stop after N min" in TUI labels and prompts (TOML key
+            unchanged). On idle-stop, status bar shows a 10-second breadcrumb explaining the
+            event.</td>
+          <td>Mental-model coach; empathy-led designer; UX synthesis.</td>
+        </tr>
+        <tr>
+          <td>Singleton UI</td>
+          <td>"singleton flag per server"</td>
+          <td>TUI checkbox labelled "Share one process across editors" / "Give each editor its
+            own copy" (TOML key unchanged). Never surfaced during onboarding.</td>
+          <td>Mental-model coach; UX synthesis.</td>
+        </tr>
+        <tr>
+          <td>"projection" rename</td>
+          <td>"projection" as canonical noun</td>
+          <td><strong>Deferred to v1.1.</strong> v1.0 keeps "projection" as the subcommand,
+            TOML key, error code (<code>E_PROJECTION_DRIFT</code>), and doc-page noun. TUI hint
+            lines use "sync to editor" as a description verb. v1.1 reconsiders with local-event
+            data on drift frequency.</td>
+          <td>Mental-model coach proposed; UX synthesis deferred due to documentation-churn
+            cost in mid-stream rename.</td>
+        </tr>
+        <tr>
+          <td>Output dir for state</td>
+          <td>State under daemon-controlled paths (per the v1.0 spec ASCII diagram)</td>
+          <td><code>$XDG_STATE_HOME/mcp-manager/</code> on Linux (default
+            <code>~/.local/state/mcp-manager/</code>) and
+            <code>~/Library/Application Support/mcp-manager/</code> on macOS, both for state
+            (audit log, per-MCP stdout/stderr) and for the new local NDJSON event log</td>
+          <td>Distro-packager; SRE-hawk; devops synthesis tension 3.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      Twenty-eight diffs. None changes a v1.0 locked decision; every one refines a detail the
+      v1.0 spec either left open or specified at lower resolution than implementation needs.
+      Implementation begins with this list resolved.
+    </p>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Reads upward to the
+    <a href="./index.html">deep-dive index</a>,
+    <a href="../technical-design.html">v1.0 spec</a>, and
+    <a href="../index.html">v1.0 hub</a>. Reads downward to the five facet overviews —
+    <a href="./backend/overview.html">backend</a> ·
+    <a href="./frontend/overview.html">frontend</a> ·
+    <a href="./devops/overview.html">devops</a> ·
+    <a href="./security/overview.html">security</a> ·
+    <a href="./ux/overview.html">ux</a> — and through them to the 25 stance essays.
+  </p>
+</main>
+</body>
+</html>

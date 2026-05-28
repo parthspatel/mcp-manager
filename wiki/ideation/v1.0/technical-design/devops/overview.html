@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevOps Synthesis — MCP Manager v1.0 deep dive</title>
+<meta name="description" content="Synthesis of the five devops stances for MCP Manager v1.0: curl + Nix distribution, reproducible builds, minisign + cosign-when-present, systemd-user + launchd, mdbook docs, and a manifest-driven uninstall.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/matrix.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">devops &middot; synthesis</span></div>
+    <div class="crumbs"><a href="../index.html">&larr; deep dive</a> &middot; <a href="../synthesis.html">master synthesis</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>DevOps &mdash; Facet Synthesis</h1>
+  <p class="lede">
+    Where the five devops stances converge, where they diverge, and what we actually adopt for v1.0. The locked inputs &mdash; <em>curl installer + Nix flake (no Homebrew, no App Store), macOS+Linux only, auto-spawn daemon, service-manager auto-register/unregister, no telemetry, Apache 2.0, Renovate vocabulary, Cargo/npm-style ranges+lockfile, minisign for index, cosign-when-present for packages, mdbook docs</em> &mdash; sit on the table. The five agents argue about <em>how</em> to honour those inputs, not whether to. This synthesis closes those arguments.
+  </p>
+
+  <p>
+    <span class="evidence-badge">curl &middot; primary install</span>
+    <span class="evidence-badge">Nix &middot; reproducibility channel</span>
+    <span class="evidence-badge">minisign &middot; cosign-when-present</span>
+    <span class="evidence-badge">systemd-user &middot; launchd</span>
+    <span class="evidence-badge">mdbook docs</span>
+    <span class="evidence-badge">manifest-driven uninstall</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#agreement">Where the five agree</a></li>
+      <li><a href="#disagreement">Where they disagree</a></li>
+      <li><a href="#decisions">Per-component decisions</a></li>
+      <li><a href="#open">Open questions</a></li>
+      <li><a href="#matrix">Ranking matrix</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="agreement">
+    <h2>Where the five agree</h2>
+
+    <p>
+      Strip the rhetoric and the five essays land on a surprising number of shared positions. Listing them once is the cheapest way to free up budget for the genuinely contested decisions.
+    </p>
+
+    <h3>One: curl + Nix is correct &mdash; in that order of visibility</h3>
+    <p>
+      The <a href="./agent-nix-purist.html#design">nix-purist</a> concedes the curl installer is the path 95% of users take and explicitly designs around it. The <a href="./agent-curl-installer-defender.html#design">curl defender</a> agrees Nix is the second channel ("v1.0 ships <em>both</em>, this is not either-or"). The <a href="./agent-distro-packager.html#design">distro packager</a> accepts distros are downstream for v1.0; the <a href="./agent-sre-hawk.html#vs-nix-purist">SRE</a> and <a href="./agent-supply-chain-sec.html#vs-nix-purist">supply-chain</a> both accept Nix-as-build-system but reject Nix-as-runtime-dependency. There is no real fight here, only an argument about which channel is "canonical" &mdash; settled in <a href="#decisions">decisions</a>.
+    </p>
+
+    <h3>Two: minisign is the primary release signature</h3>
+    <p>
+      All five converge on minisign for the release-tarball envelope. The <a href="./agent-supply-chain-sec.html#design">supply-chain</a> essay makes the strongest case ("ed25519, no PKI, no X.509 disasters"); the <a href="./agent-curl-installer-defender.html#vs-supply-chain-sec">curl defender</a> writes the two-step verify into the installer; the <a href="./agent-nix-purist.html#arguments">nix-purist</a> wants minisign on the tarball <em>and</em> a cachix substituter key for the Nix path; the <a href="./agent-distro-packager.html#design">distro packager</a> uses minisign as the upstream signature that downstream deb/rpm signing layers on top of. <strong>No agent argues for GPG.</strong> Cosign-when-present for OCI packages is unanimous: additive verification, never sole.
+    </p>
+
+    <h3>Three: macOS+Linux only, no Windows, no Homebrew, no App Store</h3>
+    <p>
+      Five for five. The lockdown is honoured by all five essays without re-litigation. Cross-platform handling lives in the binary itself (launchd vs. systemd-user, sandbox-exec vs. bubblewrap, Keychain vs. libsecret); the same flake / same tarball / same artifact lands on both platforms. The <a href="./agent-distro-packager.html#design">distro packager</a> spends a paragraph on Apple's <code>/usr/local</code> SIP situation but lands on the same place (default <code>/usr/local/bin</code> with a <code>--prefix</code> escape hatch).
+    </p>
+
+    <h3>Four: structured-JSON logs + journald/launchd integration</h3>
+    <p>
+      The <a href="./agent-sre-hawk.html#design-logs">SRE</a> drives this position, but every other agent agrees in passing. The <a href="./agent-distro-packager.html#vs-sre-hawk">distro packager</a> explicitly trades structured-JSON-on-stdout for free journald + unified-log integration ("we are emitting the logs anyway"). The <a href="./agent-supply-chain-sec.html#vs-sre-hawk">supply-chain</a> agent accepts JSONL-with-stable-schema as the only way an audit log can be ingested for off-line analysis. The <a href="./agent-curl-installer-defender.html#vs-sre-hawk">curl defender</a> hangs their observability story on the OS's native logging stack instead of inventing a parallel pipeline.
+    </p>
+
+    <h3>Five: no telemetry &mdash; full stop</h3>
+    <p>
+      The locked policy is explicit, and no agent attempts to revisit it. The <a href="./agent-sre-hawk.html#thoughts">SRE</a> names what no-telemetry costs us &mdash; field-error blindness, CVE-impact opacity &mdash; and designs around it via <code>mcpm doctor --share</code> as an opt-in per-incident bundle. The <a href="./agent-supply-chain-sec.html#vs-sre-hawk">supply-chain</a> agent welcomes no-telemetry as a security <em>positive</em> ("no network egress path becomes itself a supply-chain concern").
+    </p>
+
+    <h3>Six: manifest-driven uninstall, logs + secrets preserved by default</h3>
+    <p>
+      Four of the five specify the same shape: an on-disk install manifest enumerates every file the installer touched; <code>mcpm uninstall</code> walks the manifest; logs + audit + keychain entries are preserved by default and removed only on <code>--purge</code> with explicit confirmation. The <a href="./agent-distro-packager.html#design">distro packager</a> wrote the most rigorous enumeration table; the <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent extends it to a keychain-namespace prune; the <a href="./agent-sre-hawk.html#design-uninstall">SRE</a> writes the human-facing prompt; the <a href="./agent-curl-installer-defender.html#design">curl defender</a> puts the uninstaller inside the <code>mcpm</code> binary itself &mdash; one fewer signed artifact to maintain.
+    </p>
+
+    <h3>Seven: reproducible builds are non-negotiable</h3>
+    <p>
+      The <a href="./agent-nix-purist.html#design">nix-purist</a> demands a build-twice gate enforced by Nix path equality; the <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent demands <code>SOURCE_DATE_EPOCH</code> + <code>--remap-path-prefix</code> + <code>codegen-units = 1</code> with a build-twice diff in CI; the <a href="./agent-distro-packager.html#vs-nix-purist">distro packager</a> and <a href="./agent-curl-installer-defender.html#vs-supply-chain-sec">curl defender</a> both accept the claim as load-bearing. The flake becomes the <em>reference</em> reproducible build; the tarball is verified against the flake's output hash in CI. Non-reproducibility is itself an alarm signal.
+    </p>
+
+    <h3>Eight: <code>dev.mcp-manager.mcpmanagerd</code> reverse-DNS namespace</h3>
+    <p>
+      All five accept the locked choice. The <a href="./agent-distro-packager.html#design">distro packager</a> writes the rationale (launchd's <code>Label</code> is a global namespace; reverse-DNS is the Apple-standard mitigation). The same string lands as macOS Keychain service prefix, Linux libsecret schema, macOS <code>os_log</code> subsystem, and launchd label. The systemd-user unit deliberately uses bare <code>mcp-manager.service</code> &mdash; systemd convention, honoured by every agent.
+    </p>
+
+    <h3>Nine: mdbook in-repo, GitHub Pages-served, no CDN</h3>
+    <p>
+      Unanimous. The <a href="./agent-nix-purist.html#design">nix-purist</a> builds mdbook in the flake so docs build reproducibly; the <a href="./agent-distro-packager.html#design">distro packager</a> wires the docs URL into manpages' <code>SEE ALSO</code> sections; the <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent adds a <code>/security/</code> advisories subsection; the <a href="./agent-sre-hawk.html#design-runbook">SRE</a> demands a Runbook chapter; the <a href="./agent-curl-installer-defender.html#design">curl defender</a> notes mdbook's static-output matches our no-CDN constraint.
+    </p>
+  </section>
+
+  <section class="section" id="disagreement">
+    <h2>Where they disagree</h2>
+
+    <h3>One: which install channel is "primary"</h3>
+    <p>
+      The <a href="./agent-nix-purist.html#arguments">nix-purist</a> insists "primary should mean <em>the source of truth for what gets built</em>" &mdash; the flake produces the canonical artifact, the curl installer downloads tarballs the flake produced. The <a href="./agent-curl-installer-defender.html#thoughts">curl defender</a> reads "primary" as <em>user-facing</em> and rejects any architecture that makes the curl path feel like an afterthought. The <a href="./agent-distro-packager.html#vs-nix-purist">distro packager</a> rejects both framings: distro packages are how 95% of Linux users <em>actually</em> install software, and curl/Nix are both transitional. The <a href="./agent-sre-hawk.html#vs-nix-purist">SRE</a> doesn't care about "primary" but insists the binary must run on a stock OS with no Nix, no Homebrew, nothing &mdash; otherwise the doctor that fixes broken systems can itself be broken by them.
+    </p>
+    <p>
+      Resolution: the lockdown's "curl installer + Nix flake" is a <em>dual primary</em>. Both are first-class; both ship from the same artifact; the curl installer is the default invocation in our docs and the flake is the default invocation for Nix users. This is captured in <a href="#decisions">decisions</a>.
+    </p>
+
+    <h3>Two: how aggressive to be about supply-chain ceremony</h3>
+    <p>
+      The <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent wants two ed25519 root keys on YubiKey FIPS tokens (release + trust-manifest), SLSA L3 provenance per release, CycloneDX SBOM signed with the release key, <code>cargo-vet</code> imports from five orgs, <code>cargo-deny</code> with a strict license allow-list. The <a href="./agent-curl-installer-defender.html#vs-supply-chain-sec">curl defender</a> agrees but rejects requiring the user to install cosign or GPG &mdash; minisign verification has to be performed by a sidecar binary the installer fetches. The <a href="./agent-nix-purist.html#vs-supply-chain-sec">nix-purist</a> wants the cachix substituter key as a parallel trust root for Nix users. The <a href="./agent-sre-hawk.html#vs-supply-chain-sec">SRE</a> adds the audit log itself must be hash-chained &mdash; pre-incident signing is not the same property as post-incident verifiability.
+    </p>
+    <p>
+      Resolution: take the union on the release side &mdash; minisign primary, cosign-when-present, CycloneDX 1.5 JSON SBOM, SLSA L3, reproducible-build CI gate. Add the SRE's hash-chained audit log to the runtime side. Users are not required to install cosign or GPG. Two-key separation is deferred to v1.1 (single maintainer, single token in v1.0).
+    </p>
+
+    <h3>Three: how Linux paths are laid out</h3>
+    <p>
+      The <a href="./agent-distro-packager.html#design">distro packager</a> wants FHS rigour &mdash; <code>mcpmanagerd</code> in <code>libexec</code> (invoked indirectly), 17 manpages auto-generated by <code>clap_mangen</code>. The <a href="./agent-curl-installer-defender.html#vs-distro-packager">curl defender</a> defaults to <code>$HOME/.local</code> on Linux for the curl path (no <code>sudo</code>) and <code>/usr/local/bin</code> on macOS. The <a href="./agent-sre-hawk.html#vs-distro-packager">SRE</a> objects to <code>/var/log/mcpmanagerd/</code> &mdash; user daemons go under <code>$XDG_STATE_HOME</code>.
+    </p>
+    <p>
+      Resolution: curl path defaults <code>$PREFIX = /usr/local</code> on macOS, <code>$HOME/.local</code> on Linux (with auto-fallback if <code>/usr/local/bin</code> is not writable). State and logs go under <code>$XDG_STATE_HOME</code>. The <code>libexec</code> location applies only to deb/rpm recipes; the curl-installed daemon lives in <code>$PREFIX/bin/mcpmanagerd</code> alongside <code>mcpm</code> so auto-spawn's <code>which mcpmanagerd</code> just works. Manpages: ship in v1.0, auto-generated where possible; the 17-manpage roster is aspirational, the floor is ~12 (top-level + one per major subcommand).
+    </p>
+
+    <h3>Four: do we ship deb/rpm/AUR ourselves in v1.0?</h3>
+    <p>
+      The <a href="./agent-distro-packager.html#design">distro packager</a> wants <code>cargo deb</code> / <code>cargo generate-rpm</code> / <code>pkg/PKGBUILD</code> recipes in-tree, with the .deb/.rpm/.tar.gz shipped as release artifacts (but no apt repo / no dnf repo / AUR-only for Arch). The <a href="./agent-curl-installer-defender.html#vs-distro-packager">curl defender</a> objects to the maintenance load and points out the cadence mismatch (we ship patch releases every 1&ndash;2 weeks, distros don't). The <a href="./agent-nix-purist.html#vs-distro-packager">nix-purist</a> dismisses deb/rpm as an 8&times; build matrix we don't need. The <a href="./agent-supply-chain-sec.html#vs-distro-packager">supply-chain</a> agent appreciates that distro packages bring their own attestation infrastructure but agrees the inclusion review process (6&ndash;18 months) doesn't fit v1.0.
+    </p>
+    <p>
+      Resolution: <strong>recipes in-tree, packages shipped as release artifacts, no apt/dnf repos owned by us</strong>. Arch AUR is the one exception &mdash; AUR has no gate, the Arch community expects the upstream to keep the PKGBUILD warm, and the maintenance burden is low. Debian/Fedora packaging is left to downstream volunteers in v1.0; we provide the recipes so the friction is minimal. This matches the locked-decisions table: "no Homebrew, no App Store" doesn't exclude AUR or community-driven downstream packages; it excludes channels we'd own.
+    </p>
+
+    <h3>Five: how the daemon binary path is resolved at auto-spawn</h3>
+    <p>
+      The <a href="./agent-sre-hawk.html#design-spawn-race">SRE</a> wants a sharper picture of the spawn race: <code>flock(2)</code>, ENOENT-vs-ECONNREFUSED handling, stale-socket recovery, and a counter in <code>mcpm doctor</code>. The <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent rules out spawn-time signature verification on the binary (50ms budget). The <a href="./agent-nix-purist.html#design">nix-purist</a> wants the lookup to be <code>which mcpmanagerd</code> via <code>$PATH</code> &mdash; no special-casing for Nix vs. curl. The <a href="./agent-curl-installer-defender.html#design">curl defender</a> agrees on <code>$PATH</code> resolution but adds an install-manifest receipt that doctor can cross-check.
+    </p>
+    <p>
+      Resolution: <code>$PATH</code>-based lookup (the v1.0 spec's design), <em>plus</em> the SRE's stale-socket-recovery counter and the install-manifest receipt that the doctor verifies on demand. <strong>No</strong> spawn-time signature verification &mdash; the 50ms p99 budget rules.
+    </p>
+  </section>
+
+  <section class="section" id="decisions">
+    <h2>Per-component decisions</h2>
+
+    <h3>1. Distribution &mdash; curl + Nix relationship</h3>
+    <p>
+      <strong>Two co-equal install channels, one artifact, one build.</strong> The release pipeline builds via the flake (<code>nix flake check</code> on four target systems), produces the tarballs as derivation outputs, and uploads them to GitHub Releases. The Nix path consumes the flake outputs directly; the curl path downloads the tarballs from the release. The byte-identical-artifact property is enforced by CI: a separate job rebuilds <code>nix build .#mcp-manager</code> and asserts SHA256 equality with the release artifact.
+    </p>
+    <p>
+      <strong>Default-install messaging:</strong> our docs lead with <code>curl -fsSL https://mcp-manager.dev/install.sh | sh</code> as the default install command; the Nix flake usage (<code>nix profile install github:user/mcp-manager</code> or <code>inputs.mcp-manager.url</code> in <code>flake.nix</code>) is documented as a peer, not a footnote. The installer script can optionally detect <code>nix</code> on <code>$PATH</code> and offer to shell out to <code>nix profile install</code> (this is the nix-purist's compromise) &mdash; deferred to v1.1; v1.0 the curl installer drops a static binary regardless of Nix presence.
+    </p>
+
+    <h3>2. Build / release pipeline &mdash; reproducibility</h3>
+    <p>
+      Reproducible-build flags non-negotiable: <code>SOURCE_DATE_EPOCH</code>, <code>--remap-path-prefix</code>, <code>codegen-units = 1</code>, <code>lto = "fat"</code>, <code>panic = "abort"</code>, <code>strip = "symbols"</code>, <code>--locked</code>, <code>--offline</code>, build-twice diff step. The <a href="./agent-supply-chain-sec.html#design">supply-chain</a> essay's recipe is the canonical one. The flake encodes the same pinning via <code>rust-overlay</code> + Crane.
+    </p>
+    <p>
+      <strong>CI matrix:</strong> four runners (<code>x86_64-linux</code>, <code>aarch64-linux</code>, <code>x86_64-darwin</code>, <code>aarch64-darwin</code>). Single command per runner: <code>nix flake check -L</code>. A fifth job runs the reproducibility-gate rebuild. SLSA L3 provenance via <code>slsa-framework/slsa-github-generator</code>. macOS binaries notarized via Apple Developer Program. Linux tarballs minisign-signed.
+    </p>
+
+    <h3>3. Code signing</h3>
+    <p>
+      <strong>Linux tarballs:</strong> minisign on the tarballs and on <code>SHA256SUMS</code>. The minisign pubkey is baked into the installer script <em>and</em> into the released binary <em>and</em> published at <code>https://mcp-manager.dev/release-key.pub</code> + in the README + in the GitHub repo description (multiple-witness corroboration, supply-chain's design).
+    </p>
+    <p>
+      <strong>macOS:</strong> hardened-runtime, signed with Apple Developer ID Application, notarized via <code>notarytool</code>, stapled. Gatekeeper passes on first run.
+    </p>
+    <p>
+      <strong>Touch ID / biometric:</strong> deferred to v1.1 per the locked decisions ("best-effort in v1.0"). When implemented, the keychain ACL on each secret will set <code>kSecAttrAccessibleWhenUnlockedThisDeviceOnly</code> + <code>kSecAttrAccessControl</code> with <code>biometryAny</code>. Not blocking for v1.0.
+    </p>
+    <p>
+      <strong>Cosign-when-present</strong> is the registry-package verification path, behind a feature flag in <code>mcpm-registry</code>. The release signing itself stays minisign-only in v1.0; sigstore-keyless is an additive verification path users can adopt downstream but not a required dependency on Fulcio/Rekor for our publication pipeline.
+    </p>
+
+    <h3>4. Service manager &mdash; systemd-user + launchd</h3>
+    <p>
+      <strong>Linux:</strong> systemd-user unit at <code>~/.config/systemd/user/mcp-manager.service</code> (curl install) or <code>/usr/lib/systemd/user/mcp-manager.service</code> (deb/rpm). Socket-activated (<code>mcp-manager.socket</code> at <code>$XDG_RUNTIME_DIR/mcp-manager/mcpmanagerd.sock</code>). <code>Type=notify</code>; daemon calls <code>sd_notify(READY=1)</code> after binding the UDS. <code>StandardOutput=journal</code> + <code>StandardError=journal</code>; the daemon emits JSON-per-line so <code>journalctl --user-unit mcp-manager --output=json</code> Just Works. Resource limits and the security hardening directives are taken verbatim from <a href="./agent-distro-packager.html#design">distro-packager's unit</a> &mdash; <code>NoNewPrivileges</code>, <code>ProtectSystem</code>, <code>RestrictAddressFamilies=AF_UNIX</code>, etc.
+    </p>
+    <p>
+      <strong>macOS:</strong> LaunchAgent (user-mode, never daemon-mode) at <code>~/Library/LaunchAgents/dev.mcp-manager.mcpmanagerd.plist</code>. <code>RunAtLoad=false</code>, <code>KeepAlive=false</code> &mdash; we use launchd's socket activation via the <code>Sockets</code> dictionary, so the daemon spawns on first connect and exits cleanly on idle-timer expiry. UDS path is <code>~/Library/Application Support/mcp-manager/mcpmanagerd.sock</code> (macOS lacks <code>$XDG_RUNTIME_DIR</code>). <code>ProcessType=Background</code>; <code>NumberOfFiles=1024</code>.
+    </p>
+    <p>
+      <strong>Naming:</strong> systemd unit is <code>mcp-manager.service</code> (no reverse-DNS &mdash; systemd convention is package-name-shaped). launchd label is <code>dev.mcp-manager.mcpmanagerd</code> (reverse-DNS &mdash; Apple convention). Keychain/libsecret namespace is <code>dev.mcp-manager.mcpmanagerd</code> on both.
+    </p>
+
+    <h3>5. Auto-spawn daemon</h3>
+    <p>
+      The locked design says <code>mcpm-client</code>'s <code>connect()</code> auto-spawns on ENOENT/ECONNREFUSED. We adopt the <a href="./agent-sre-hawk.html#design-spawn-race">SRE's</a> sharper specification: <code>flock(2)</code> on a sibling lockfile; 5-second timeout for the winning daemon to become ready; stale-socket recovery treats ECONNREFUSED the same as ENOENT but logs a higher-severity audit event so we can track frequency. Daemon path lookup is plain <code>which mcpmanagerd</code> via <code>$PATH</code> &mdash; no Nix vs. curl branching.
+    </p>
+    <p>
+      Service-manager-mediated auto-start: when the user runs <code>mcpm init</code>, the CLI offers to register the launchd plist / systemd-user socket unit. Default: <strong>register</strong> (locked: "Service manager auto-register on init"). Idempotent: re-running <code>mcpm init</code> with the unit already present is a no-op. The companion <code>mcpm uninstall</code> unregisters (locked: "auto-unregister on uninstall"). An audit event <code>service.register</code> / <code>service.unregister</code> fires either way.
+    </p>
+
+    <h3>6. Update mechanism &mdash; Renovate vocabulary + pinning</h3>
+    <p>
+      v1.0 ships <strong>no self-updater</strong>. Users update by:
+    </p>
+    <ul>
+      <li>Curl path: re-running the installer (idempotent; install manifest detects in-place upgrade; the old daemon keeps running until <code>mcpm daemon restart</code>). The installer atomically replaces the binary via <code>rename(2)</code>, then prints "restart with <code>systemctl --user restart mcp-manager.socket</code> (or <code>launchctl kickstart -k gui/$UID/dev.mcp-manager.mcpmanagerd</code>) when convenient."</li>
+      <li>Nix path: <code>nix profile upgrade mcp-manager</code> &mdash; atomic profile swap with <code>nix profile rollback</code> available.</li>
+      <li>Downstream packaged path: distro's native upgrade command.</li>
+    </ul>
+    <p>
+      <strong>Renovate vocabulary</strong> applies to MCP server pinning, not to the supervisor itself (which only has semver). <code>PATCH</code>, <code>MINOR</code>, <code>MAJOR</code>, <code>DIGEST</code>, <code>PIN</code>, <code>MAINT</code>, and the <code>SPEC</code> bump (MCP protocol version) classify updates returned by <code>mcpm outdated</code>. The <a href="./agent-nix-purist.html#design">nix-purist</a>'s observation maps cleanly: Cargo/npm-style range-in-manifest + exact-in-lockfile is the same shape as flake-input + flake.lock; both encode "what range is acceptable" separately from "what we resolved last time."
+    </p>
+
+    <h3>7. Cross-platform &mdash; macOS + Linux only</h3>
+    <p>
+      Four release tarballs: <code>x86_64-apple-darwin</code>, <code>aarch64-apple-darwin</code>, <code>x86_64-unknown-linux-gnu</code>, <code>aarch64-unknown-linux-gnu</code>. Glibc-linked, not musl. Static where possible (Rust std, system libraries via <code>rpath</code> when needed). No Windows. No musl variant in v1.0.
+    </p>
+    <p>
+      Platform-specific code paths inside the daemon (OS sandboxing, OOM detection per the spec's per-platform table, service manager, keychain) are detected at runtime, not via separate builds. One flake, one binary per target.
+    </p>
+
+    <h3>8. SBOM + supply chain</h3>
+    <p>
+      <strong>SBOM format:</strong> CycloneDX 1.5 JSON, generated by <code>cargo-cyclonedx</code> in CI on every tag. Attached to every GitHub release as <code>mcp-manager-1.0.0-&lt;target&gt;.cdx.json</code> + minisign signature. The <a href="./agent-nix-purist.html#design">nix-purist</a>'s parallel proposal &mdash; <code>sbomnix</code> walks the flake derivation graph &mdash; runs as a secondary check; we attach <em>both</em> SBOMs when they agree, and a discrepancy blocks the release.
+    </p>
+    <p>
+      <strong>cargo-deny</strong> (license + advisory + ban gate) runs on every PR + daily cron. <strong>cargo-vet</strong> imports audits from Mozilla, Google, Bytecode Alliance, Embark, Zcash; we own audits only for the unaudited delta (~50 crates). <strong>cargo-audit</strong> daily on main; auto-issue on new RUSTSEC advisory; security patch within 7 days for High/Critical. The <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent's <code>deny.toml</code> is the canonical config.
+    </p>
+    <p>
+      <strong>SLSA Build Level 3</strong> at v1.0 GA via <code>slsa-framework/slsa-github-generator</code>. L4 (parameterless, hermetic) aspirational.
+    </p>
+    <p>
+      <strong>Hash-chained audit log</strong> (the <a href="./agent-sre-hawk.html#design-audit">SRE's</a> ask): every audit JSONL line carries <code>seq</code> (monotonic per-day) and <code>prev_hash</code> (sha256 of the previous canonical-JSON line). Day-boundary cross-references close one day's chain into the next. <code>mcpm audit verify</code> verifies the chain; <code>mcpm doctor</code> runs it as part of its checks.
+    </p>
+
+    <h3>9. mdbook docs hosting</h3>
+    <p>
+      Source at <code>docs/</code> in the repo. Built by <code>mdbook build</code> in CI &mdash; produced as a flake derivation (<code>packages.docs</code>) so the build is reproducible. Published to <code>https://mcp-manager.dev/docs/</code> via GitHub Pages. Versioned per release at <code>/docs/v1.0/</code>; <code>/docs/latest/</code> redirects to current.
+    </p>
+    <p>
+      <strong>Required chapters for v1.0:</strong> install (curl + Nix), tutorial, CLI reference, config reference, runbook (SRE's chapter shape: daily ops / common failures / incident response / recovery procedures / reference), security (<code>SECURITY.md</code> + advisories + pubkeys + SBOM links + reporting), and the developer-facing protocol spec (<code>mcpm-protocol</code> crate's wire types).
+    </p>
+
+    <h3>10. Service-string namespace &mdash; <code>dev.mcp-manager</code> reverse-DNS</h3>
+    <p>
+      <strong>macOS launchd label, macOS Keychain service prefix, Linux libsecret schema, macOS <code>os_log</code> subsystem:</strong> <code>dev.mcp-manager.mcpmanagerd</code>. Reverse-DNS, lowercase. The project owns <code>mcp-manager.dev</code>; <code>dev.</code>-prefixed reverse-DNS signals project-not-corporation.
+    </p>
+    <p>
+      <strong>systemd unit name:</strong> <code>mcp-manager.service</code> + <code>mcp-manager.socket</code>. systemd convention is package-name; reverse-DNS in unit names breaks tab-completion.
+    </p>
+    <p>
+      <strong>Why the asymmetry is correct:</strong> each namespace is a different OS's global identifier space, and each OS has its own collision-avoidance convention. We follow each platform's convention rather than enforce a single string everywhere. The <a href="./agent-distro-packager.html#design">distro-packager's</a> table is the canonical mapping.
+    </p>
+
+    <h3>11. <code>mcpm uninstall</code> correctness</h3>
+    <p>
+      The <strong>contract</strong>: on completion, no file written by <code>mcpm</code>/<code>mcpmanagerd</code> remains on disk, no service-manager registration remains, no <code>$PATH</code> entry we wrote remains, no projected managed-blocks remain in editor configs. <strong>Preserved by default</strong>: audit log + per-server logs (the SRE's argument &mdash; uninstall often follows a failed support thread) and keychain entries (the supply-chain agent's argument &mdash; secrets cannot be recovered, removal requires explicit consent). <code>--purge</code> removes everything, with separate interactive confirms for keychain entries.
+    </p>
+    <p>
+      <strong>Source of truth:</strong> <code>$XDG_STATE_HOME/mcp-manager/install.manifest</code> (the distro-packager's format: <code>event abs-path sha256 ISO-8601-timestamp</code>, append-only). For deb/rpm-installed copies, the package format <em>is</em> the manifest &mdash; <code>mcpm uninstall</code> detects this case and refuses with "use <code>apt remove</code> / <code>dnf remove</code> instead." Critical guard against double-uninstall of package-managed copies.
+    </p>
+    <p>
+      <strong>Last act:</strong> write a final audit line <code>{"event":"uninstall","outcome":"ok","purge":false,"audit_kept":true,"logs_kept":true}</code>, fsync, then drop the binary. The audit file ends with a clear marker. Forensic trail preserved up to the moment of teardown.
+    </p>
+    <p>
+      <strong>Projection teardown:</strong> for each editor in <code>projection.lock</code>, strip the managed-block fenced region from the editor's config (between <code># BEGIN mcp-manager</code> and <code># END mcp-manager</code> markers). Never touch unmanaged content. The <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent's "leave no trust state behind" framing extends this to keychain-namespace prune &mdash; enumerate every entry under the <code>dev.mcp-manager.mcpmanagerd</code> service prefix and delete each (on <code>--purge</code> only, with confirmation).
+    </p>
+  </section>
+
+  <section class="section" id="open">
+    <h2>Open questions</h2>
+
+    <p>
+      Items the five agents did not fully resolve. None are blockers for v1.0 implementation; each is captured here so the engineering pass can pick a default.
+    </p>
+
+    <h3>A &mdash; sidecar verify-helper bootstrap</h3>
+    <p>
+      The <a href="./agent-curl-installer-defender.html#design">curl defender</a> ships a static <code>mcpm-verify</code> sidecar binary that the installer downloads, verifies against an embedded hash, and uses to run the minisign + sha256 check. The <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent's installer prefers the user to have <code>minisign</code> already installed (via <code>brew</code>/<code>apt</code>/<code>dnf</code>). Trade-off: sidecar means one fewer dependency on the user's environment, but adds one more signed artifact we maintain. <strong>Default:</strong> follow the curl defender &mdash; ship the sidecar; the supply-chain agent's pre-installed-minisign path is the fallback if the sidecar download fails.
+    </p>
+
+    <h3>B &mdash; flake-built docs as part of the release</h3>
+    <p>
+      The <a href="./agent-nix-purist.html#design">nix-purist</a> wants <code>nix build .#docs</code> in CI to publish to GitHub Pages, so the published HTML is bit-identical from any contributor's machine. The <a href="./agent-curl-installer-defender.html#design">curl defender</a> proposes plain <code>mdbook build</code>. Both work; the flake-built path costs nothing extra given the flake is already in the build pipeline. <strong>Default:</strong> flake-built; the docs derivation is part of the same <code>nix flake check</code> CI run.
+    </p>
+
+    <h3>C &mdash; two-key signing (release vs. trust manifest)</h3>
+    <p>
+      The <a href="./agent-supply-chain-sec.html#design">supply-chain</a> agent argues for two ed25519 root keys on separate YubiKey FIPS tokens: <code>KR</code> for releases, <code>KT</code> for trust-manifest. Separation of duties; one compromised key doesn't compromise the other. v1.0 ships with a single maintainer; the two-key ceremony is theatre at our current scale. <strong>Default for v1.0:</strong> single key, single token, documented rotation procedure. Two-key separation is a v1.1 add-on when we have multiple maintainers.
+    </p>
+
+    <h3>D &mdash; musl-static Linux build for Alpine</h3>
+    <p>
+      Locked v1.0 covers <code>x86_64-unknown-linux-gnu</code> + <code>aarch64-unknown-linux-gnu</code> only. The <a href="./agent-curl-installer-defender.html#design">curl defender</a>'s VM matrix runs Alpine with "expected: works with limitations" status. Real Alpine support requires musl-target builds (libsecret has musl issues; we'd need to vendor or use a different secret store). <strong>Default for v1.0:</strong> Alpine is best-effort; musl variants are a v1.1 add-on.
+    </p>
+
+    <h3>E &mdash; zero-downtime daemon hand-off</h3>
+    <p>
+      The <a href="./agent-sre-hawk.html#design-update">SRE</a> sketches a v1.1 design via <code>SCM_RIGHTS</code>-passing of child stdio FDs between old and new daemon processes during update. Out of scope for v1.0; calling out so the daemon's process model doesn't accidentally close the door on it. v1.0's update flow is graceful-stop + restart + re-spawn-autostart-servers, with editors briefly losing their MCP-server connections.
+    </p>
+
+    <h3>F &mdash; <code>mcpm doctor</code> scope</h3>
+    <p>
+      The <a href="./agent-sre-hawk.html#design-doctor">SRE</a> writes an extensive doctor sketch (14 checks, hash-chain verify, projection drift, install-receipt integrity). v1.0 floor: 8 checks (binary integrity, daemon liveness, config validity, audit chain, log rotation, per-server health summary, secret store reachability, registry trust status). Doctor's full surface (14+ checks, <code>--share</code> bundle) is iterative; the 8 floor checks are part of v1.0 GA. The diagnostic-as-telemetry-substitute role argues for early investment.
+    </p>
+  </section>
+
+  <section class="section" id="matrix">
+    <h2>Ranking matrix</h2>
+    <p>
+      How the five stances score against the v1.0 priorities. Drag the sliders to reweight if you want to see what changes when (say) install friction matters more than reproducibility.
+    </p>
+    <div data-matrix-src="./data/ranking.json"></div>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Five devops stances: <a href="./agent-nix-purist.html">nix-purist</a> &middot;
+    <a href="./agent-distro-packager.html">distro-packager</a> &middot;
+    <a href="./agent-sre-hawk.html">sre-hawk</a> &middot;
+    <a href="./agent-supply-chain-sec.html">supply-chain-sec</a> &middot;
+    <a href="./agent-curl-installer-defender.html">curl-installer-defender</a>.
+    Back to <a href="../index.html">deep dive index</a> or
+    the top-level <a href="../../technical-design.html">technical design</a>.
+  </p>
+</main>
+</body>
+</html>

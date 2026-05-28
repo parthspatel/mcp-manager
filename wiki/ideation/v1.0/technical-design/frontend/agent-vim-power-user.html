@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vim Power User — Frontend deep dive — MCP Manager v1.0</title>
+<meta name="description" content="Modal, dense, single-key TUI design for MCP Manager v1.0 from the vim-power-user stance. Lazygit/k9s/Helix layout, j/k navigation, : command palette, / search.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">frontend · vim-power-user</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">frontend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Vim Power User's Frontend</h1>
+  <p class="lede">
+    Modal. Dense. Single-key. The TUI should feel like <strong>lazygit</strong>, not a wizard.
+    The mouse is a courtesy, not a contract. Every common action is reachable from the home row in two
+    keystrokes or fewer, every uncommon action is reachable from <code>:</code> with completion, and the
+    chrome stays out of the way of the data. If a user can run <code>nvim</code>, <code>helix</code>,
+    <code>tmux</code>, <code>k9s</code>, and <code>lazygit</code> without a manual, they should be able
+    to run <code>mcpm</code>'s TUI within a minute.
+  </p>
+
+  <p>
+    <span class="evidence-badge">stance: vim-power-user</span>
+    <span class="evidence-badge">facet: frontend</span>
+    <span class="evidence-badge">modal navigation</span>
+    <span class="evidence-badge">j/k aliases</span>
+    <span class="evidence-badge">: command palette</span>
+    <span class="evidence-badge">/ search</span>
+    <span class="evidence-badge">mouse opt-in</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments against the other four stances</a>
+        <ul>
+          <li><a href="#vs-accessibility">vs. accessibility-advocate</a></li>
+          <li><a href="#vs-onboarding">vs. onboarding-novice</a></li>
+          <li><a href="#vs-cli-purist">vs. cli-unix-purist</a></li>
+          <li><a href="#vs-visual">vs. visual-designer</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design</a>
+        <ul>
+          <li><a href="#design-layout">TUI layout</a></li>
+          <li><a href="#design-modal">Modal state diagram</a></li>
+          <li><a href="#design-keymap">Full keymap table</a></li>
+          <li><a href="#design-palette">Command palette spec</a></li>
+          <li><a href="#design-cli">CLI shape</a></li>
+          <li><a href="#design-onboarding">Onboarding for power users</a></li>
+        </ul>
+      </li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      The locked baseline is already good. <a href="../../ux-design.html#tui">ux-design.html#tui</a>
+      commits to <strong>ratatui + crossterm</strong>, a single-screen lazygit/k9s shape, mouse + keyboard
+      both supported, and a keymap that already names <code>l e r d s</code>, <code>?</code>, <code>/</code>,
+      <code>q</code>, <code>j/k/h/l</code>, <code>g/G</code>, <code>n/N</code>, <code>Tab</code> /
+      <code>Shift+Tab</code>. The decisions I would have fought for have already been made. So what's left
+      is HOW: how the modal states compose, how <code>:</code> works, how the command palette competes with
+      the hint bar without doubling chrome, and how every single one of the 19 CLI subcommands is reachable
+      from inside the TUI without invoking the CLI under the hood.
+    </p>
+
+    <p>
+      Three references frame everything I write below:
+    </p>
+
+    <ul>
+      <li>
+        <strong>lazygit</strong> — single-screen, panes you cycle with <code>Tab</code>, single-key actions
+        on the focused pane, <code>:</code> opens a command-line for everything that doesn't have a hotkey,
+        <code>?</code> opens a contextual cheatsheet that <em>changes per pane</em>. The hint bar at the
+        bottom is the single most-discoverable affordance in any TUI I've used.
+      </li>
+      <li>
+        <strong>k9s</strong> — <code>:</code> jumps to a resource kind by name with completion
+        (<code>:pod</code>, <code>:svc</code>), <code>/</code> filters the current view, and the status
+        line tells you which cluster/namespace you're in. The modal mental model is "the cursor is always
+        in Normal mode; you opt into <code>:</code> or <code>/</code> for input".
+      </li>
+      <li>
+        <strong>Helix</strong> — modern modal editor whose <em>selection-first</em> grammar (action verbs
+        always apply to the focused selection) maps cleanly onto our TUI: every action key applies to the
+        entity under the cursor in the focused pane. No prefix keys. No leader.
+      </li>
+    </ul>
+
+    <p>
+      The single biggest design lever I want to pull is making <strong>Normal mode</strong> the only mode
+      the user sees by default. <code>/</code>, <code>:</code>, and <code>e</code> (which spawns
+      <code>$EDITOR</code>) are the only escapes; everything else is single-key in Normal. That keeps the
+      mental model flat: the TUI has exactly four states — <code>Normal</code>, <code>Search</code>
+      (after <code>/</code>), <code>Command</code> (after <code>:</code>), and <code>Modal</code> (any
+      transient dialog: confirm-delete, edit-validation-error, help, error overlay). The state diagram in
+      <a href="#design-modal">§ Modal state diagram</a> has four boxes and that's it.
+    </p>
+
+    <p>
+      The second lever: <strong><code>:</code> is the universal escape hatch.</strong> Every CLI subcommand
+      that makes sense interactively is reachable as a palette command. That means <code>:install</code>,
+      <code>:search</code>, <code>:registry add</code>, <code>:secret set GITHUB_TOKEN</code>,
+      <code>:project allow</code>, etc. The palette is a single ratatui-rendered input line at the bottom
+      of the screen — same row as the hint bar — that swaps in when <code>:</code> is pressed and swaps out
+      on <code>Enter</code> or <code>Esc</code>. The implementation reuses the same internal command
+      registry the CLI uses; we are not building two command systems. (This dovetails with what
+      <a href="./agent-cli-unix-purist.html">cli-unix-purist</a> will argue for the CLI side.)
+    </p>
+
+    <p>
+      The third lever, which the locked baseline already grants: <strong>mouse is opt-in</strong>. The
+      ux-design page says "Mouse is enhancement, never required" — I agree, but I want to take it further:
+      add a <code>:set mouse off</code> (and <code>tui-mouse = false</code> in
+      <code>tui-theme.toml</code>) so that users on tmux + remote SSH can opt out of bracketed-paste / SGR
+      mouse capture entirely and reclaim native terminal copy-paste. The existing Option/Alt-drag bypass is
+      nice but only partially solves this; a permanent off switch is the real keyboard-first answer.
+    </p>
+
+    <p>
+      Final framing: the <em>vim power user</em> stance is not "make it look like vim". It's "respect the
+      grammar that users already have in their fingers". <code>j/k</code> for line, <code>g/G</code> for
+      top/bottom, <code>/</code> for find, <code>n/N</code> for next/previous match, <code>:q</code> for
+      quit, <code>Esc</code> to cancel, <code>Ctrl+D</code> / <code>Ctrl+U</code> for half-page scroll.
+      None of these cost the novice anything (they still have arrows + the hint bar + mouse) and all of
+      them are free wins for the millions of developers who already type them all day.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments against the other four stances</h2>
+
+    <section id="vs-accessibility">
+      <h3>vs. accessibility-advocate</h3>
+
+      <p>
+        accessibility-advocate is going to argue (correctly) that color must never be the only carrier of
+        information, that <code>NO_COLOR</code> must be respected, that screen-reader compatibility matters,
+        and that low-contrast palettes hurt low-vision users. I agree on all of that — modal navigation has
+        nothing to do with monochrome rendering. The friction point is going to be: <em>does modal
+        navigation hurt screen-reader users?</em>
+      </p>
+
+      <p>
+        My answer: no, modal navigation is actively easier for screen readers than rich mouse-driven UIs.
+        Every state transition in my design is announced by a visible status-line change
+        (<code>NORMAL</code> → <code>:</code> → <code>NORMAL</code>), every action has an audible
+        keystroke that maps to a single concept, and there is no hidden context. The
+        <a href="https://orca.gnome.org/">Orca</a> + <a href="https://www.freedesktop.org/wiki/Accessibility/Speakup/">Speakup</a>
+        screen readers handle terminal applications by reading the framebuffer. As long as we keep the
+        status line at a fixed row and write state changes there, the screen reader will pick them up.
+      </p>
+
+      <p>
+        Where I would <strong>concede</strong>: a <code>--reduce-motion</code> / <code>tui-animation =
+        false</code> flag that disables any animated transitions (we don't have many — the spinner during
+        <code>mcpm update</code>, the pane-focus border highlight). And a config-driven keymap
+        (<code>~/.config/mcp-manager/tui-keymap.toml</code>) so users who can't easily press <code>j/k</code>
+        (e.g. one-handed users) can remap to other keys. The <a href="https://docs.helix-editor.com/remapping.html">Helix
+        remapping doc</a> is the model.
+      </p>
+
+      <p>
+        Where I would <strong>not</strong> concede: I will not give up <code>j/k</code> as the
+        <em>default</em> aliases for arrow keys. Arrow keys are still there. <code>j/k</code> are
+        additions, not replacements. A user who can't press <code>j/k</code> never has to. A user who can
+        gets a hand-rest-friendly home-row shortcut for free.
+      </p>
+    </section>
+
+    <section id="vs-onboarding">
+      <h3>vs. onboarding-novice</h3>
+
+      <p>
+        onboarding-novice will argue: "the average user has never opened lazygit, doesn't know
+        <code>j/k</code>, panics when a TUI doesn't tell them what to do, and quits within 30 seconds".
+        That user exists and matters. The locked baseline already handles them: hint bar always visible,
+        context-aware affordances, <code>?</code> opens a full keymap modal, every TUI action also has a
+        CLI equivalent. I want to add one more affordance for them: <strong>a discoverability mode in the
+        command palette</strong>.
+      </p>
+
+      <p>
+        The <code>:</code> palette in my design has <em>two</em> modes: <strong>fuzzy</strong> (default,
+        like fzf) and <strong>browse</strong> (toggle with <code>Ctrl+B</code>). Browse mode shows the
+        entire command list grouped by category — install, lifecycle, logs, secrets, project, registry —
+        with descriptions. A novice presses <code>:</code> on a blank palette, hits <code>Ctrl+B</code>,
+        and gets a vertical menu of every action they could possibly want, with arrow-key navigation. A
+        power user just types <code>:inst&lt;Tab&gt;</code> and is done.
+      </p>
+
+      <p>
+        Where I would <strong>concede</strong>: a "did you mean" prompt when a typo'd command is run.
+        <code>:isnatll</code> should suggest <code>:install</code>. clap already does this for the CLI; we
+        reuse the same Levenshtein-distance library inside the palette.
+      </p>
+
+      <p>
+        Where I would <strong>not</strong> concede: the default state is Normal mode with no overlay. I
+        will not open a tutorial overlay on first launch. The hint bar is the tutorial. Onboarding belongs
+        in <code>mcpm init</code> (a CLI flow), not in the TUI. The TUI is for operating an already-set-up
+        system. If the user opens the TUI and has zero servers, the body of the Servers pane reads
+        <code>(no servers — press : install or run `mcpm install &lt;source&gt;`)</code> and that's
+        sufficient.
+      </p>
+    </section>
+
+    <section id="vs-cli-purist">
+      <h3>vs. cli-unix-purist</h3>
+
+      <p>
+        We are the closest allies in the room. cli-unix-purist will argue: "everything must be pipeable,
+        <code>--json</code> everywhere, stdout for data and stderr for diagnostics, no ANSI on stdout when
+        not a TTY". I agree with all of it — that's the right CLI design and I'd vote yes on every plank.
+        The only friction is going to be: <em>how do we reconcile a 19-subcommand CLI with my preference
+        for a unified <code>:</code> palette in the TUI?</em>
+      </p>
+
+      <p>
+        Answer: <strong>the palette is a thin wrapper around the same command names</strong>. The CLI
+        invokes <code>cmd::run("install", args)</code>; the palette invokes <code>cmd::run("install",
+        args)</code> against the same dispatch table. We are not maintaining two grammars. The palette is
+        the CLI with auto-completion, command discovery, and live feedback. (This matches how
+        <a href="https://github.com/derailed/k9s">k9s</a> presents <code>:resourceKind</code> commands and
+        how lazygit's command-line shows up.)
+      </p>
+
+      <p>
+        Where I'd <strong>concede</strong>: the 19-command count is one too many for me. I'd merge
+        <code>start</code>, <code>stop</code>, <code>restart</code> into a single <code>mcpm lifecycle
+        &lt;action&gt; &lt;server&gt;</code> with three short aliases — but the spec already names them as
+        separate top-level commands, so this is futile to relitigate. I drop it. Same logic on
+        <code>mcpm tui</code> vs. <code>mcpm</code>-with-no-args: I'd argue the no-arg invocation should
+        launch the TUI directly (avoiding the explicit <code>tui</code> subcommand) and the spec already
+        says that. Good.
+      </p>
+
+      <p>
+        Where I'd <strong>push back</strong>: I want a few quality-of-life features cli-unix-purist might
+        scoff at because they're "interactive". (1) <code>mcpm logs &lt;server&gt;</code> without
+        <code>--follow</code> should still be tail-able-default if isatty(stdout); cli-unix-purist would
+        say it should always dump-and-exit. The compromise: dump-and-exit when not a TTY,
+        <code>tail -f</code>-like when a TTY. (2) <code>mcpm status</code> on a TTY shows colorized
+        glyphs; on a pipe it dumps plain text. cli-unix-purist agrees with the latter half and tolerates
+        the former.
+      </p>
+    </section>
+
+    <section id="vs-visual">
+      <h3>vs. visual-designer</h3>
+
+      <p>
+        visual-designer will argue for <em>density-by-design</em>: typographic hierarchy, hand-tuned column
+        widths, color theory, a thoughtful 256-color palette, careful use of dim/bold/italic. I support all
+        of this — density is a vim virtue. The friction will be: <em>visual-designer wants to make
+        decisions about color and chrome that I will sometimes find too maximalist for keyboard-first
+        operation.</em>
+      </p>
+
+      <p>
+        Where I <strong>agree</strong>: status indicators use color AND glyph (already locked).
+        <code>●</code> running, <code>○</code> stopped, <code>⚠</code> failed. Three-tier color palette
+        (default / high-contrast / monochrome). Hand-tuned column widths in the Servers pane (name width
+        wraps name; status is fixed; uptime is right-aligned tabular). Borders are single-line box-drawing,
+        not double-line, not Unicode-light-shade-noise.
+      </p>
+
+      <p>
+        Where I'd <strong>push back</strong>: no <em>nested</em> bordered subpanes. lazygit's mistake (in
+        my view) is the occasional doubled border when a sub-modal opens inside a pane. We render modals
+        as <strong>overlays</strong> centered on the screen with a single shadowed border, not as inner
+        sub-panes. Less chrome, more content.
+      </p>
+
+      <p>
+        Also: I want <strong>dim</strong> used liberally for non-actionable metadata
+        (<code>14h</code> uptime, registry name) and reserved colors only for status. Color fatigue is real;
+        a rainbow TUI is just as unreadable as a no-color one.
+      </p>
+    </section>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <section id="design-layout">
+      <h3>TUI layout</h3>
+
+      <p>
+        The locked baseline ASCII sketch in <a href="../../ux-design.html#tui">ux-design.html</a> is good
+        but lacks the modal-state affordances. Here's my refined version with status-line and palette
+        treatments called out.
+      </p>
+
+<pre><code>┌─ mcpm · github · running · 14h ─────────────── 12:34:08 ┐
+│ Servers ▸                       │ Logs · github         │
+│ ─────────                       │ server·daemon·audit   │
+│ ▸ github      ●  running   14h  │ ─────────             │
+│   filesystem  ●  running   3d   │ 12:34:01 connected    │
+│   sqlite      ○  stopped        │ 12:34:02 listed tools │
+│   github-pr   ⚠  failed (5/5)   │ 12:34:05 tools/list   │
+│                                 │ 12:34:08 ready        │
+│ Toolchains ▾                    │                       │
+│ ──────────                      │                       │
+│   ✓ claude-code  sync           │                       │
+│   ✓ cursor       sync           │                       │
+│   ⚠ zed          drifted        │                       │
+│                                 │                       │
+│ Secrets ▾                       │                       │
+│ ─────────                       │                       │
+│   GITHUB_TOKEN  set             │                       │
+│   ACME_DB_URL   missing         │                       │
+├─────────────────────────────────┴───────────────────────┤
+│ NORMAL · ? help · : cmd · / search · l logs · r restart │
+└─────────────────────────────────────────────────────────┘
+</code></pre>
+
+      <p>
+        Notable differences from the baseline sketch:
+      </p>
+
+      <ul>
+        <li>
+          <strong>Status line in the title bar:</strong> mode (or focused entity name) shown on the left,
+          clock on the right. Mode replaces entity-name when in <code>SEARCH</code> /
+          <code>COMMAND</code> / <code>MODAL</code>.
+        </li>
+        <li>
+          <strong>Hint bar always starts with the mode tag</strong> (<code>NORMAL</code> by default). When
+          <code>:</code> is pressed, the hint bar transforms into the command palette — same row, same
+          chrome, no extra screen real estate.
+        </li>
+        <li>
+          <strong>Pane separators are <code>──────</code>, single-line.</strong> The focused pane is
+          indicated by a brighter border AND a <code>▸</code> caret next to the pane title (color +
+          glyph; a11y-correct).
+        </li>
+        <li>
+          <strong>Right pane is a single buffer with tab strip on top.</strong> Tab strip shows the current
+          stream and its scroll state (<code>●</code> = following, <code>○</code> = paused).
+        </li>
+      </ul>
+
+      <h4>Command palette open state</h4>
+
+<pre><code>├─────────────────────────────────┴───────────────────────┤
+│ :install official/github-mcp@^0.4_                       │
+│   install &lt;source&gt;     install an MCP server (top match)│
+│   install --dry-run    preview install                   │
+│   install --scope proj install project-scope             │
+└─────────────────────────────────────────────────────────┘
+</code></pre>
+
+      <p>
+        Three completion lines below the input. Top match is selected; <code>Tab</code> cycles,
+        <code>Enter</code> executes, <code>Esc</code> cancels, <code>Ctrl+B</code> toggles browse mode.
+      </p>
+
+      <h4>Browse mode</h4>
+
+<pre><code>┌─ Commands ──────────────────────────────────────────────┐
+│ LIFECYCLE                                               │
+│ ▸ start &lt;server&gt;     start a stopped server            │
+│   stop &lt;server&gt;      stop a running server             │
+│   restart &lt;server&gt;   restart any server                │
+│   test &lt;server&gt;      health check                      │
+│ INSTALL                                                 │
+│   install &lt;source&gt;   install an MCP server             │
+│   update [&lt;server&gt;]  update one or all                 │
+│   outdated           preview available updates         │
+│   uninstall          remove mcpm itself                │
+│ DISCOVERY                                               │
+│   search &lt;query&gt;     search registries                 │
+│   registry list      list configured registries        │
+│ ...                                                     │
+└─────────────────────────────────────────────────────────┘
+</code></pre>
+    </section>
+
+    <section id="design-modal">
+      <h3>Modal state diagram</h3>
+
+      <p>Four states. Two-letter transitions on every edge.</p>
+
+<pre><code>            ┌───────────────┐
+            │    NORMAL     │  ← default
+            │  (j/k focus,  │
+            │   l/e/r/d/s,  │
+            │   Tab cycles) │
+            └───┬───────┬───┘
+        '/' ↓   │       │   ↑ Esc
+                ↓   ':' ↓    │  (Esc anywhere returns to NORMAL)
+        ┌───────┐   ┌───────────┐
+        │ SEARCH│   │  COMMAND  │  ← palette
+        │ (n/N) │   │ (Tab cyc) │
+        └───┬───┘   └─────┬─────┘
+       Enter↓             ↓Enter
+            └──┐    ┌─────┘
+               ↓    ↓
+        ┌──────────────┐
+        │    MODAL     │  ← confirm / error / help-modal / edit-validation
+        │  (Esc / y/N) │
+        └──────────────┘
+</code></pre>
+
+      <p>
+        Notes:
+      </p>
+
+      <ul>
+        <li>
+          <code>Esc</code> always returns to <code>NORMAL</code>. There is no nested modal. If a modal
+          spawns another modal (e.g. error overlay during edit-validation), the first is closed first.
+          One-modal-at-a-time keeps the mental model clean and matches lazygit's behavior.
+        </li>
+        <li>
+          <code>e</code> spawns <code>$EDITOR</code> — this is a <strong>process suspension</strong>, not a
+          mode change. ratatui releases the alternate screen, <code>$EDITOR</code> runs, on exit we restore
+          the alternate screen and re-enter <code>NORMAL</code>. If <code>$EDITOR</code> exits non-zero we
+          show a <code>MODAL</code> with the error.
+        </li>
+        <li>
+          Spinner during long ops (<code>:install</code>, <code>:update</code>) does <em>not</em> count as
+          a mode. The user is still in <code>NORMAL</code> and can keep navigating; the spinner is in the
+          status line.
+        </li>
+      </ul>
+    </section>
+
+    <section id="design-keymap">
+      <h3>Full keymap table</h3>
+
+      <p>
+        Extends the locked baseline (<a href="../../ux-design.html#keymap">ux-design.html#keymap</a>) with
+        explicit modal context, <code>:</code> palette, and a few quality-of-life keys borrowed from
+        lazygit / helix / vim.
+      </p>
+
+      <h4>Normal mode — entity actions</h4>
+      <table class="compare">
+        <thead><tr><th>Key</th><th>Action</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>l</code></td><td>Open logs for focused entity</td><td>Locked baseline. In a list pane, also acts as right-arrow.</td></tr>
+          <tr><td><code>e</code></td><td>Edit focused entity in <code>$EDITOR</code></td><td>Locked baseline.</td></tr>
+          <tr><td><code>r</code></td><td>Restart focused server</td><td>Locked baseline.</td></tr>
+          <tr><td><code>d</code></td><td>Stop focused server</td><td>Locked baseline.</td></tr>
+          <tr><td><code>s</code></td><td>Start focused server</td><td>Locked baseline.</td></tr>
+          <tr><td><code>f</code></td><td>Toggle follow mode in active log pane</td><td>Locked baseline.</td></tr>
+          <tr><td><code>t</code></td><td>Run <code>mcpm test</code> on focused server</td><td>New. Health-check the focused server.</td></tr>
+          <tr><td><code>u</code></td><td>Run <code>mcpm update</code> on focused server</td><td>New. Opens a confirm-with-diff modal.</td></tr>
+          <tr><td><code>i</code></td><td>Inspect / drill (alias for <code>Enter</code>)</td><td>vim mnemonic: "inspect".</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Normal mode — navigation</h4>
+      <table class="compare">
+        <thead><tr><th>Key</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td><code>j</code> / <code>k</code></td><td>Down / up within focused pane</td></tr>
+          <tr><td><code>h</code> / <code>l</code><sup>(*)</sup></td><td>Collapse / drill (in tree-list panes only)</td></tr>
+          <tr><td><code>↑ ↓ ← →</code></td><td>Same as <code>k j h l</code></td></tr>
+          <tr><td><code>g</code> <code>g</code></td><td>Jump to top of focused pane (two-key, like vim)</td></tr>
+          <tr><td><code>G</code></td><td>Jump to bottom of focused pane</td></tr>
+          <tr><td><code>Ctrl+D</code> / <code>Ctrl+U</code></td><td>Half-page down / up (matches vim, lazygit)</td></tr>
+          <tr><td><code>PgDn</code> / <code>PgUp</code></td><td>Full-page down / up</td></tr>
+          <tr><td><code>Tab</code></td><td>Cycle log stream in right pane</td></tr>
+          <tr><td><code>Shift+Tab</code></td><td>Cycle left-column pane focus (Servers → Toolchains → Secrets → back)</td></tr>
+          <tr><td><code>1</code> / <code>2</code> / <code>3</code></td><td>Jump to left pane 1/2/3 directly (k9s-style)</td></tr>
+          <tr><td><code>4</code></td><td>Jump to right (log) pane directly</td></tr>
+          <tr><td><code>Enter</code></td><td>Drill into focused entity (expand for detail)</td></tr>
+          <tr><td><code>zz</code></td><td>Center the focused selection vertically in pane (vim mnemonic)</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size: 0.85rem; color: var(--fg-faint);">
+        <sup>(*)</sup> When <code>l</code> is pressed in a tree-list pane on a collapsed item, it expands.
+        Pressed on a leaf, it falls back to "open logs". This dual-meaning matches vim's
+        <code>l</code> = right-arrow and is unambiguous in context.
+      </p>
+
+      <h4>Mode transitions</h4>
+      <table class="compare">
+        <thead><tr><th>Key</th><th>Action</th><th>From → To</th></tr></thead>
+        <tbody>
+          <tr><td><code>:</code></td><td>Open command palette</td><td>NORMAL → COMMAND</td></tr>
+          <tr><td><code>/</code></td><td>Incremental search in focused pane</td><td>NORMAL → SEARCH</td></tr>
+          <tr><td><code>?</code></td><td>Open contextual keymap modal</td><td>NORMAL → MODAL</td></tr>
+          <tr><td><code>Esc</code></td><td>Cancel current mode / close modal</td><td>* → NORMAL</td></tr>
+          <tr><td><code>q</code> / <code>:q</code> / <code>Ctrl+C</code></td><td>Quit mcpm</td><td>NORMAL → exit</td></tr>
+          <tr><td><code>ZZ</code></td><td>Quit (vim alias)</td><td>NORMAL → exit</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Search mode</h4>
+      <table class="compare">
+        <thead><tr><th>Key</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>(printable)</td><td>Append to search query; pane filters incrementally</td></tr>
+          <tr><td><code>Enter</code></td><td>Commit search; return to NORMAL with matches kept</td></tr>
+          <tr><td><code>Esc</code></td><td>Cancel search; clear filter</td></tr>
+          <tr><td><code>n</code> / <code>N</code></td><td>(in NORMAL after committing) next / previous match</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Command palette</h4>
+      <table class="compare">
+        <thead><tr><th>Key</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>(printable)</td><td>Type the command</td></tr>
+          <tr><td><code>Tab</code></td><td>Accept top completion / cycle to next</td></tr>
+          <tr><td><code>Shift+Tab</code></td><td>Cycle to previous completion</td></tr>
+          <tr><td><code>Ctrl+B</code></td><td>Toggle browse mode (grouped command list)</td></tr>
+          <tr><td><code>Ctrl+Space</code></td><td>Show argument hints for current command</td></tr>
+          <tr><td><code>Enter</code></td><td>Execute</td></tr>
+          <tr><td><code>Esc</code></td><td>Cancel</td></tr>
+          <tr><td><code>↑</code> / <code>↓</code></td><td>Navigate command history (per-session, then persisted to <code>~/.config/mcp-manager/tui-history</code>)</td></tr>
+          <tr><td><code>Ctrl+R</code></td><td>Reverse-history-search (readline mnemonic)</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Reserved for v1.x (will not be bound in v1.0)</h4>
+      <ul>
+        <li><code>x</code>, <code>D</code> — destructive deletes (will require typed confirmation, per the locked spec).</li>
+        <li><code>v</code> — visual-select multi-pick for batch actions.</li>
+        <li><code>m</code> — bookmark / mark (think vim's <code>m{a-z}</code>; jump back with <code>'a</code>).</li>
+        <li><code>%</code> — jump to matching pair (e.g. server ↔ its log).</li>
+        <li><code>.</code> — repeat last action (the most-vim of all features).</li>
+      </ul>
+    </section>
+
+    <section id="design-palette">
+      <h3>Command palette spec</h3>
+
+      <h4>Command registry shape (Rust sketch)</h4>
+
+<pre><code>// crate: mcpm-tui · module: palette
+pub struct Command {
+    pub name: &amp;'static str,            // "install"
+    pub aliases: &amp;'static [&amp;'static str],// &amp;["i", "add"]
+    pub category: Category,             // Lifecycle | Install | Discovery | …
+    pub summary: &amp;'static str,          // one-line desc
+    pub args: ArgSpec,                  // parsed via the same clap derive
+    pub run: fn(Ctx, ArgValues) -&gt; Result&lt;Outcome, Error&gt;,
+}
+
+// All 19 CLI subcommands are registered here at compile time.
+// The CLI and the palette dispatch through the same table.
+</code></pre>
+
+      <h4>Completion strategy</h4>
+
+      <ol>
+        <li><strong>Stage 1 — command:</strong> fuzzy-match against <code>name</code> + <code>aliases</code>. Top-3 shown.</li>
+        <li><strong>Stage 2 — args:</strong> once a command is matched, complete its positional and flag args. <code>install &lt;source&gt;</code> queries the registry cache; <code>logs &lt;server&gt;</code> queries the live server list; <code>secret set &lt;NAME&gt;</code> queries the keychain index.</li>
+        <li><strong>Stage 3 — values:</strong> for enum flags like <code>--runtime devenv|docker|podman|uvx-npx|none</code>, complete the value set.</li>
+      </ol>
+
+      <h4>Palette commands beyond the 19 CLI subcommands</h4>
+
+      <p>A few TUI-only commands the palette adds for ergonomics:</p>
+
+      <table class="compare">
+        <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>:set mouse on|off</code></td><td>Toggle mouse capture in-session (and persist to tui-theme.toml).</td></tr>
+          <tr><td><code>:set theme default|high-contrast|monochrome</code></td><td>Switch palette live.</td></tr>
+          <tr><td><code>:set follow on|off</code></td><td>Toggle log follow-mode (alternative to <code>f</code>).</td></tr>
+          <tr><td><code>:focus servers|toolchains|secrets|logs</code></td><td>Jump pane focus by name.</td></tr>
+          <tr><td><code>:tab server|daemon|audit|combined</code></td><td>Switch log stream by name.</td></tr>
+          <tr><td><code>:source ~/foo.mcpmrc</code></td><td>Re-read a TUI rc file (for users who heavily customize keymaps).</td></tr>
+          <tr><td><code>:reload</code></td><td>Force-reload canonical config from disk (rare; recoverable from <code>E_CONFIG_CONFLICT</code>).</td></tr>
+          <tr><td><code>:!&lt;shell-cmd&gt;</code></td><td>Shell-out (vim mnemonic). Useful for power users; logged in audit.</td></tr>
+          <tr><td><code>:q</code> / <code>:quit</code></td><td>Quit.</td></tr>
+        </tbody>
+      </table>
+
+      <h4>History + audit</h4>
+
+      <ul>
+        <li>Per-session command history; persisted to <code>tui-history</code> on graceful exit. Up to 500 entries, LRU.</li>
+        <li>Every palette command that <em>writes</em> to canonical state is audit-logged with <code>source = "tui-palette"</code>. This matches CLI audit entries' <code>source = "cli"</code> and the daemon's <code>source = "daemon"</code>. Audit-log parity is a security ask; we'd want this anyway.</li>
+      </ul>
+    </section>
+
+    <section id="design-cli">
+      <h3>CLI shape — short notes from this stance</h3>
+
+      <p>
+        19 subcommands is acceptable, slightly bloated. The locked baseline names them. My stance-specific
+        additions:
+      </p>
+
+      <ul>
+        <li>
+          <strong>Every long flag should have a short alias.</strong> Locked baseline has <code>-v / -q /
+          -y</code>. Add: <code>-f</code> (= <code>--force</code> where used), <code>-S</code> (=
+          <code>--scope</code>), <code>-r</code> (= <code>--runtime</code>), <code>-n</code> (=
+          <code>--name</code>). Vim users want short flags; power users typing
+          <code>mcpm install x -Sproject -rdocker</code> is real.
+        </li>
+        <li>
+          <strong>Output piping must be sacred.</strong> If stdout is not a TTY, never emit ANSI, never
+          emit progress spinners, never emit table-formatted output by default — emit either TSV or JSON
+          (with <code>--json</code>). This aligns with cli-unix-purist; the locked spec already commits to
+          <code>--json</code> everywhere.
+        </li>
+        <li>
+          <strong><code>mcpm</code> with no args launches the TUI</strong> (already locked). I'd argue we
+          should keep <code>mcpm tui</code> as a synonym, not a separate subcommand surface; just a
+          shortcut for those who want explicitness. Cost: 0 lines of clap config.
+        </li>
+        <li>
+          <strong>Add <code>mcpm completions &lt;shell&gt;</code></strong> — clap-derive generates these
+          for free. Vim users want zsh + fish + bash completions on tap.
+        </li>
+      </ul>
+    </section>
+
+    <section id="design-onboarding">
+      <h3>Onboarding for power users</h3>
+
+      <p>
+        The four onboarding transcripts in <a href="../../ux-design.html#onboarding">ux-design.html</a>
+        cover the lucky-day, non-interactive, project-scope, and cloned-elsewhere cases. From the
+        power-user angle, two refinements:
+      </p>
+
+      <ol>
+        <li>
+          <strong>Honor <code>$VISUAL</code> before <code>$EDITOR</code>.</strong> Vim users distinguish
+          between <code>$VISUAL</code> (full-screen) and <code>$EDITOR</code> (line-mode <code>ed</code>).
+          mcpm's <code>e</code> action should check <code>$VISUAL</code> first, fall through to
+          <code>$EDITOR</code>, then to <code>vi</code>. This matches
+          <a href="https://www.man7.org/linux/man-pages/man1/git-var.1.html"><code>git var</code></a>'s
+          <code>GIT_EDITOR</code> resolution.
+        </li>
+        <li>
+          <strong>Cloned-from-elsewhere trust gate keystrokes are wrong.</strong> The current sketch shows
+          <code>[y/n/e]</code>. Power users will reflexively type <code>q</code> to bail and get nowhere.
+          Add <code>q</code> = "no" (synonym for <code>n</code>), <code>?</code> = "show me the diff first",
+          and <code>!</code> = "trust forever (no re-prompt on hash change)" (with a warning that this is
+          the dangerous escape hatch and is audit-logged). Discoverable but matches vim's danger-tier
+          keystrokes.
+        </li>
+      </ol>
+
+      <h4>Trust-gate sketch (revised)</h4>
+
+<pre><code>$ cd /work/cloned-from-github
+mcpm: new project config detected
+      path:      /work/cloned-from-github/.mcp-manager.toml
+      sha256:    8a9f2d1b4c…
+      servers:   1 added (acme-db), 1 override (github)
+      inherit:   "all"
+      registry:  official (trusted)
+      secrets:   ACME_DB_URL (not in your keychain)
+
+Trust this exact config?
+  y  yes, trust this hash
+  n  no, ignore (this session only)
+  e  edit it before deciding
+  d  show full diff first
+  q  same as n (quit prompt)
+  !  trust forever (auto-accept future hash changes — DANGER)
+
+[y/n/e/d/q/!]:</code></pre>
+
+      <h4>Power-user $EDITOR integration</h4>
+
+      <p>
+        When the user presses <code>e</code> on a server entity:
+      </p>
+
+      <ol>
+        <li>mcpm extracts the <code>[server.&lt;name&gt;]</code> stanza to <code>$TMPDIR/mcpm-edit-&lt;hash&gt;.toml</code>, prefixed with a <code># DO NOT EDIT THE HEADER COMMENTS</code> banner that includes the entity name, scope, and a <code>vim: ft=toml</code> modeline.</li>
+        <li>mcpm releases the alternate screen, runs <code>${VISUAL:-${EDITOR:-vi}} "$tmpfile"</code>, awaits exit.</li>
+        <li>On success exit + content-changed: validate via <code>config.validate</code>; if OK, atomic-write back; mcpmanagerd reload; audit-log.</li>
+        <li>On validation failure: spawn a <code>MODAL</code> overlay with the validator error pointing at line:col. User presses <code>e</code> to re-enter the editor on the same tmpfile (changes preserved), or <code>Esc</code> to discard.</li>
+        <li>On editor non-zero exit: discard.</li>
+      </ol>
+
+      <p>
+        This matches how <a href="https://github.com/cli/cli/blob/trunk/internal/text/editor.go">gh</a>,
+        <a href="https://docs.python.org/3/library/click.html#click.edit"><code>click.edit</code></a>, and
+        <a href="https://crates.io/crates/edit"><code>edit</code></a> (the Rust crate) handle editor
+        suspension. There is no novelty here, which is exactly the point.
+      </p>
+    </section>
+
+    <section id="design-project-scope">
+      <h3>Project-scope behaviors</h3>
+
+      <p>
+        From this stance, project-scope (<code>.mcp-manager.toml</code>) is mostly a backend concern, but
+        the TUI needs three power-user affordances:
+      </p>
+
+      <ul>
+        <li>
+          <strong>Status line shows the active scope.</strong> When inside a directory with a trusted
+          project config, the title bar reads <code>mcpm · github · running · 14h · scope:project
+          (acme)</code>. When in user scope, <code>scope:user</code>. Always visible. Single glance to
+          know "am I about to mutate user state or project state?".
+        </li>
+        <li>
+          <strong><code>:project diff</code></strong> palette command — shows the overlay between user
+          and project canonical state, with <code>+</code> / <code>-</code> / <code>~</code> markers per
+          server. Vim users will <code>:!git diff</code> if we don't give them this.
+        </li>
+        <li>
+          <strong>Name-override servers are marked.</strong> When the user has
+          <code>[server.github]</code> in their user config AND the project has <code>[server.github]</code>
+          with overrides, the entity name in the Servers pane gets a small <code>(overridden)</code> tag.
+          Power users want this signal explicit.
+        </li>
+      </ul>
+    </section>
+
+    <section id="design-error-ux">
+      <h3>Error UX — keyboard-first treatment</h3>
+
+      <p>
+        The 12-row error taxonomy in <a href="../../ux-design.html#errors">ux-design.html#errors</a> is
+        well-designed. From this stance, the additions:
+      </p>
+
+      <ul>
+        <li>
+          <strong>Error modal is single-key navigable.</strong> <code>y</code> = copy the suggested-fix
+          command (this matches the locked baseline). <code>l</code> = jump to relevant logs.
+          <code>e</code> = open the offending config file in <code>$EDITOR</code> if the error is
+          <code>E_CONFIG_INVALID</code>. <code>Esc</code> = dismiss. <code>?</code> = open the docs page
+          for this error code in <code>$BROWSER</code> or <code>w3m</code> if no <code>$BROWSER</code>.
+        </li>
+        <li>
+          <strong>Error badge in the Servers pane is single-character.</strong> <code>✗</code> next to
+          the server name, color red. Pressing <code>Enter</code> on that server jumps directly into the
+          error modal.
+        </li>
+        <li>
+          <strong>CLI errors must exit with distinct exit codes.</strong> <code>E_SECRET_MISSING</code>
+          = exit 3, <code>E_CONFIG_INVALID</code> = exit 4, <code>E_REGISTRY_*</code> = exit 5, etc.
+          Documented in <code>mcpm help exit-codes</code>. Power users script around this.
+        </li>
+      </ul>
+    </section>
+
+    <section id="design-help">
+      <h3>Help system</h3>
+
+      <ul>
+        <li><strong><code>?</code> in TUI</strong> opens a context-sensitive keymap modal — shows only keys applicable to the focused pane / entity. Pressing <code>?</code> again toggles to the full keymap. Pressing <code>q</code> or <code>Esc</code> closes.</li>
+        <li><strong><code>mcpm help &lt;topic&gt;</code></strong> on the CLI prints rich help with 3+ worked examples per subcommand (already locked). Add: <code>mcpm help cookbook</code> shows multi-command recipes.</li>
+        <li><strong>mdbook</strong> at <code>docs.mcp-manager.dev/v1.0/</code>, linked from every error code and every <code>--help</code> output. Already locked. From the vim stance: every mdbook page must have a print-friendly variant for <code>w3m</code> / <code>links</code> / <code>lynx</code> users (mdbook ships this for free). I want users to be able to read docs without leaving the terminal.</li>
+      </ul>
+    </section>
+
+    <section id="design-summary">
+      <h3>Net design summary (vim-power-user stance)</h3>
+
+      <ul>
+        <li>4-state modal: NORMAL / SEARCH / COMMAND / MODAL. <code>Esc</code> always returns to NORMAL.</li>
+        <li>j/k/h/l + arrows + <code>g/G</code> + <code>Ctrl+D/U</code> + <code>1-4</code> pane-jump + <code>Tab</code> / <code>Shift+Tab</code> cycling.</li>
+        <li><code>:</code> opens a command palette with fuzzy completion, browse mode (<code>Ctrl+B</code>), history (<code>↑↓ / Ctrl+R</code>), and shell-out (<code>:!</code>).</li>
+        <li><code>/</code> opens incremental search. <code>n/N</code> next/previous. <code>Esc</code> cancels.</li>
+        <li>Mouse on by default but trivially disabled via <code>:set mouse off</code> or tui-theme.toml.</li>
+        <li>$VISUAL → $EDITOR → vi fallback for <code>e</code> editing. Validation modal with re-edit on failure.</li>
+        <li>Status line shows mode + entity + scope + clock. Hint bar shows context keys + transforms into palette on <code>:</code>.</li>
+        <li>Error modals: <code>y</code> copy fix, <code>l</code> logs, <code>e</code> edit, <code>?</code> docs, <code>Esc</code> dismiss.</li>
+        <li>Reserved keys for v1.x: <code>v . m % x D</code>. Don't bind them now.</li>
+      </ul>
+    </section>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+
+    <ol>
+      <li><strong>ratatui — official documentation.</strong> The framework choice is locked; this is the reference for widgets, layout, and event handling. <a href="https://ratatui.rs/">https://ratatui.rs/</a></li>
+      <li><strong>crossterm — terminal manipulation library.</strong> Mouse capture, alternate screen, keyboard event source. <a href="https://docs.rs/crossterm/latest/crossterm/">https://docs.rs/crossterm/latest/crossterm/</a></li>
+      <li><strong>lazygit — terminal UI for git.</strong> The canonical reference for single-screen TUI design with pane-cycling, single-key actions, and a <code>:</code> command-line for everything else. <a href="https://github.com/jesseduffield/lazygit">https://github.com/jesseduffield/lazygit</a></li>
+      <li><strong>k9s — Kubernetes CLI to manage clusters.</strong> Reference for <code>:</code>-prefixed resource navigation, <code>/</code> filtering, and dense status-line communication. <a href="https://k9scli.io/">https://k9scli.io/</a></li>
+      <li><strong>Helix editor — modal selection-first editor.</strong> Reference for modal grammar and keymap remapping. <a href="https://helix-editor.com/">https://helix-editor.com/</a> and <a href="https://docs.helix-editor.com/remapping.html">https://docs.helix-editor.com/remapping.html</a></li>
+      <li><strong>ranger — vim-inspired file manager.</strong> Reference for j/k navigation in a tree-pane TUI. <a href="https://github.com/ranger/ranger">https://github.com/ranger/ranger</a></li>
+      <li><strong>Vim documentation — modal navigation primer.</strong> Source of the muscle-memory grammar (<code>j/k/h/l, gg, G, /, ?, n/N, Ctrl+D/U, :q, ZZ, .</code>). <a href="https://vimhelp.org/usr_02.txt.html">https://vimhelp.org/usr_02.txt.html</a></li>
+      <li><strong>NO_COLOR — informal environment variable standard.</strong> Locked baseline already commits to honoring it; reference for the full standard. <a href="https://no-color.org/">https://no-color.org/</a></li>
+      <li><strong>clap — Rust CLI parsing library.</strong> The locked CLI parser; derive macros for short/long flag aliases, subcommand grouping, completion generation. <a href="https://docs.rs/clap/latest/clap/">https://docs.rs/clap/latest/clap/</a></li>
+      <li><strong>fzf — command-line fuzzy finder.</strong> Reference for the fuzzy-match completion behavior in the <code>:</code> palette. <a href="https://github.com/junegunn/fzf">https://github.com/junegunn/fzf</a></li>
+      <li><strong>edit — Rust crate for spawning $EDITOR cleanly.</strong> Reference implementation for the $VISUAL → $EDITOR → vi fallback chain. <a href="https://crates.io/crates/edit">https://crates.io/crates/edit</a></li>
+      <li><strong>GitHub CLI — gh editor handling.</strong> Reference for editor-suspension UX (alternate screen release, exit-code handling, content-changed detection). <a href="https://github.com/cli/cli/blob/trunk/internal/text/editor.go">https://github.com/cli/cli/blob/trunk/internal/text/editor.go</a></li>
+      <li><strong>git-var(1) — editor resolution order.</strong> Documents GIT_EDITOR → core.editor → VISUAL → EDITOR → vi fallback chain that we mirror. <a href="https://www.man7.org/linux/man-pages/man1/git-var.1.html">https://www.man7.org/linux/man-pages/man1/git-var.1.html</a></li>
+      <li><strong>mdbook — Rust documentation tool.</strong> Already locked as the docs site generator; built-in search, versioned releases, terminal-friendly print mode. <a href="https://rust-lang.github.io/mdBook/">https://rust-lang.github.io/mdBook/</a></li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

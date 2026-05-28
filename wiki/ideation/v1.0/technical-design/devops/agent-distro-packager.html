@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distro Packager — DevOps deep dive — MCP Manager v1.0</title>
+<meta name="description" content="The Linux distro packager's view of MCP Manager v1.0 — FHS, XDG, manpages, systemd units, launchd plists, deb/rpm/Arch recipes, and a clean uninstall spec.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">devops · distro-packager</span></div>
+    <div class="crumbs"><a href="../index.html">&larr; deep dive</a> &middot; <a href="./overview.html">devops overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">&#9679; Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Distro Packager's DevOps</h1>
+  <p class="lede">
+    Curl and Nix are locked. Fine. But "we ship a tarball" is not a distribution strategy
+    &mdash; it's a TODO list. This deep dive is about the standards that every binary on a
+    Linux box is judged against: FHS, XDG Base Directory, systemd unit semantics, deb
+    and rpm policy. And the equivalent rigor for macOS: launchd, reverse-DNS, and the
+    sandbox-shaped holes Apple drilled into <code>/usr/local</code>. The product
+    promises a <em>clean uninstall</em>. That promise is half the work.
+  </p>
+
+  <p>
+    <span class="evidence-badge">FHS 3.0</span>
+    <span class="evidence-badge">XDG Base Directory</span>
+    <span class="evidence-badge">systemd &middot; launchd</span>
+    <span class="evidence-badge">deb &middot; rpm &middot; PKGBUILD recipes</span>
+  </p>
+
+  <nav class="toc">
+    <h4>This page</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts &mdash; the packager's worldview</a></li>
+      <li><a href="#arguments">Arguments with the 4 peers</a></li>
+      <li><a href="#design">Design &mdash; paths, units, recipes, uninstall</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts &mdash; the packager's worldview</h2>
+
+    <p>
+      I have built deb, rpm, and Arch packages for a living. The fastest way to lose
+      a packager's trust is to invent your own filesystem layout. The second fastest
+      way is to leave files behind when the user removes you. The third fastest way
+      is to lie about what state you own.
+    </p>
+
+    <p>
+      MCP Manager arrives in the world with two distribution channels &mdash; <code>curl &hellip;
+      | sh</code> and a Nix flake &mdash; and the explicit rejection of Homebrew, the
+      Apple App Store, and (implicitly, for now) deb/rpm. That is a defensible
+      starting position; it is not a finishing position. Real Linux distributions
+      ship rolling kernels, audited package managers, dependency graphs, and an
+      <em>expectation</em> that an installable thing follows the rules. If MCP
+      Manager wants Debian, Ubuntu, Fedora, RHEL, and Arch users to feel at home &mdash;
+      and we do, because that is where the developers we are courting actually
+      live &mdash; then the curl path must still produce a file layout that those users
+      <em>recognise</em>. And we must leave room for distro maintainers (Debian DPL,
+      Fedora packagers, Arch TU) to package us downstream without rewriting our
+      install logic.
+    </p>
+
+    <p>
+      The Filesystem Hierarchy Standard, version 3.0, gives us the answer for almost
+      every file we will ever write. Binaries go in <code>/usr/local/bin</code>
+      (curl-installed, "local to this host") or <code>/usr/bin</code> (when a distro
+      packager picks us up). State that survives reboots goes in
+      <code>/var/lib</code> for system services, but we are a user daemon, so it
+      goes in <code>$XDG_STATE_HOME</code> &mdash; defaulting to <code>~/.local/state</code>.
+      Configuration goes in <code>$XDG_CONFIG_HOME</code> &mdash; defaulting to
+      <code>~/.config</code>. Cached, recomputable data goes in
+      <code>$XDG_CACHE_HOME</code> &mdash; defaulting to <code>~/.cache</code>. Runtime
+      sockets and PID files go in <code>$XDG_RUNTIME_DIR</code> &mdash; typically
+      <code>/run/user/$UID</code> on modern systemd-logind systems, tmpfs-backed,
+      cleared on logout. Manpages go in <code>share/man/man1</code> (for the
+      user-facing CLI) and <code>share/man/man5</code> (for the config-file
+      format).
+    </p>
+
+    <p>
+      Curl-installer-defender will object that this is more complexity than the
+      MVP needs. They are wrong. The XDG variables are eight lines of code in a
+      shell installer; the FHS path mappings are a fifteen-line lookup table. The
+      payoff is that <em>every</em> reasonable Linux tool &mdash; from <code>git</code> to
+      <code>rustup</code> to <code>direnv</code> &mdash; already obeys these conventions,
+      and our users will <em>notice</em> if we do not.
+    </p>
+
+    <p>
+      Then there is macOS. Apple does not have FHS; Apple has the
+      "macOS File System Hierarchy" with <code>/Applications</code> for GUI apps,
+      <code>/Library/LaunchDaemons</code> and <code>/Library/LaunchAgents</code> for
+      system services, and a strong cultural preference for reverse-DNS bundle IDs
+      everywhere a name appears: keychain services, launchd labels, group containers.
+      Homebrew has trained two generations of macOS developers that
+      <code>/usr/local/bin</code> is fine for command-line tools &mdash; but System
+      Integrity Protection made <code>/usr/local</code> writable only outside the
+      sealed system volume, and on Apple Silicon Homebrew quietly moved its prefix
+      to <code>/opt/homebrew</code>. Since we have <em>banned</em> Homebrew, we have
+      to decide our own prefix. My recommendation in &sect;design: <strong>install to
+      <code>/usr/local/bin</code> on both macOS and Linux for the curl path</strong>
+      (with a <code>--prefix</code> escape hatch), <strong>launchd label
+      <code>dev.mcp-manager.mcpmanagerd</code></strong>, <strong>systemd
+      unit <code>mcp-manager.service</code></strong> for the user instance. That is
+      the principle of least surprise on each platform.
+    </p>
+
+    <p>
+      The last piece of my worldview is <strong>uninstall correctness</strong>. If
+      <code>mcpm uninstall</code> says it removed the daemon, it had better have
+      removed the daemon &mdash; including the launchd plist, the systemd user unit, the
+      socket file, the audit log, the cached registry indexes, the trust manifest,
+      and the keychain entries (with confirmation, because those are user secrets).
+      The way you guarantee this is not by hoping &mdash; it is by maintaining an
+      <em>install manifest</em>: every file you have ever written is enumerated
+      with absolute path, hash, and creation timestamp, and uninstall walks that
+      manifest. Debian's <code>dpkg --listfiles</code> is the gold standard. We
+      should match it.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments with the 4 peers</h2>
+
+    <h3>vs <code>curl-installer-defender</code> &mdash; "the installer is 60 lines of bash, don't ruin it"</h3>
+
+    <p>
+      Their pitch: the curl installer should be ruthlessly simple. Detect arch,
+      download tarball, verify signature, extract to <code>/usr/local/bin</code>,
+      print "next steps". Sixty lines of POSIX shell. Anything more is
+      enterprise-y rot.
+    </p>
+
+    <p>
+      I do not disagree with the bones of this. I disagree that "minimal" excuses
+      "wrong". The curl installer must do four things that
+      <code>curl-installer-defender</code>'s sketch elides:
+    </p>
+
+    <ol>
+      <li>
+        Respect <code>$XDG_*</code> env vars when present, fall back to the
+        documented defaults when not. This is <em>two</em> additional lines:
+        <code>: ${XDG_CONFIG_HOME:=$HOME/.config}</code> and similar.
+      </li>
+      <li>
+        Write an <strong>install manifest</strong> to
+        <code>$XDG_STATE_HOME/mcp-manager/install.manifest</code>: every file that
+        the installer dropped on disk, with its absolute path and sha256.
+        <code>mcpm uninstall</code> reads this manifest. Without it, "clean
+        uninstall" is a lie.
+      </li>
+      <li>
+        Be <strong>idempotent</strong>. Re-running the installer must not duplicate
+        manpages, must not stack a second <code>PATH</code> entry in shell rc files,
+        must not leave a half-written binary. The recipe: write to a tempfile
+        adjacent to the target, then <code>mv</code> (atomic rename, POSIX
+        guarantees no torn file).
+      </li>
+      <li>
+        Detect <strong>previously-installed</strong> mcpm at a non-default prefix.
+        If we have an install manifest saying mcpm lives in <code>/opt/mcpm</code>
+        and the user re-runs the installer with no <code>--prefix</code>, we must
+        either honor the previous prefix or print a loud warning. Silent
+        side-by-side installs are how users end up with three copies of a binary on
+        their PATH.
+      </li>
+    </ol>
+
+    <p>
+      None of this is enterprise rot. It is the difference between an installer
+      that <em>works</em> and one that we will be apologising for in GitHub issues
+      for the next two years. <code>curl-installer-defender</code> can win on
+      ergonomics &mdash; yes, we should keep the curl pipe short and the prompt count low
+      &mdash; but the installer's <em>output</em> still has to satisfy a packager's
+      audit.
+    </p>
+
+    <h3>vs <code>nix-purist</code> &mdash; "you don't need FHS if you have Nix"</h3>
+
+    <p>
+      Their argument is correct for <em>their</em> users. Nix users live in
+      <code>/nix/store/&lt;hash&gt;-mcp-manager-1.0.0/</code> and that is fine.
+      Nixpkgs has a recommended layout for derivations and we will follow it: a
+      single derivation building the workspace, separate outputs for the daemon
+      and the CLI, manpages under <code>$out/share/man</code>.
+    </p>
+
+    <p>
+      The problem is that <strong>&ge; 95% of our target users are not on
+      NixOS</strong>. They run Ubuntu, Pop!_OS, Fedora Workstation, Arch on a
+      ThinkPad, or macOS. For them, Nix is a tool they have <em>heard of</em>, not
+      one they use. The FHS layout is what the underlying OS expects; the XDG vars
+      are what their other dev tools obey. Telling them "just install Nix first"
+      is a 700 MB onboarding tax that loses us most of the market.
+    </p>
+
+    <p>
+      Where I <em>agree</em> with <code>nix-purist</code> is on
+      <strong>reproducibility</strong>. The release pipeline must produce
+      bit-identical artifacts from a clean checkout. We use <code>cargo
+      build --locked --release</code> with <code>--remap-path-prefix</code> to scrub
+      build-host paths from the binary, and we publish the SLSA provenance
+      attestation alongside each release. The Nix flake is the
+      <em>reference</em> reproducible build; the tarball we curl-install is
+      verified against the flake's output hash in CI.
+    </p>
+
+    <h3>vs <code>sre-hawk</code> &mdash; "where are the metrics, where is the on-call runbook"</h3>
+
+    <p>
+      <code>sre-hawk</code> will ask: how does the on-call know mcpmanagerd is
+      healthy? Where does it emit metrics? What is the log volume budget? They
+      will want Prometheus, OpenTelemetry, structured JSON logs to stdout, journald
+      integration on Linux, unified-log integration on macOS.
+    </p>
+
+    <p>
+      Half of this is deferred to v1.1 by the lockdown. No Prometheus, no OTLP.
+      Fine. But on the <em>distro</em> side I can give <code>sre-hawk</code> two
+      things for free:
+    </p>
+
+    <ol>
+      <li>
+        <strong>journald integration on Linux.</strong> If we are running under
+        systemd-user (which is the recommended deployment), our stdout/stderr is
+        automatically captured by journald and tagged with our unit name. The
+        on-call runs <code>journalctl --user-unit=mcp-manager.service</code> and
+        gets timestamped, filterable, persistable logs <em>for free</em>. We need
+        to ensure our <code>tracing-subscriber</code> formatter emits
+        machine-readable JSON when <code>$JOURNAL_STREAM</code> is set, and human
+        format when not. Six lines of Rust.
+      </li>
+      <li>
+        <strong>unified-log integration on macOS.</strong> Same trick:
+        <code>log show --predicate 'subsystem == "dev.mcp-manager"'</code>. We use
+        the <code>OSLog</code> framework via the <code>oslog</code> crate to emit
+        structured events that <code>Console.app</code> can filter.
+      </li>
+    </ol>
+
+    <p>
+      These cost nothing &mdash; we are emitting the logs anyway &mdash; and they let
+      <code>sre-hawk</code> stop screaming about observability for v1.0. The Prom
+      endpoint can wait.
+    </p>
+
+    <h3>vs <code>supply-chain-sec</code> &mdash; "minisign and cosign and SBOMs, oh my"</h3>
+
+    <p>
+      <code>supply-chain-sec</code> wants signed artifacts (we have that with
+      minisign on tarballs and Apple notarization on macOS binaries), they want
+      SBOMs (we should generate CycloneDX or SPDX as part of the release
+      pipeline), and they want a Sigstore transparency log entry per release.
+    </p>
+
+    <p>
+      We agree on all three. My contribution as a distro packager: <strong>the
+      package metadata files themselves are partial SBOMs</strong>. A deb's
+      <code>control</code> file lists dependencies; an rpm's
+      <code>%files</code> + <code>%requires</code> sections list every file and
+      every linked library; an Arch <code>PKGBUILD</code>'s <code>depends</code>
+      array gives the same. When a packager-downstream user runs <code>dpkg -L
+      mcp-manager</code> or <code>rpm -qV mcp-manager</code>, they are pulling our
+      SBOM out of the package format itself. Even though we are not shipping deb or
+      rpm <em>directly</em> in v1.0, the <code>cargo-deb</code> /
+      <code>cargo-generate-rpm</code> / <code>cargo-aur</code> recipes should be
+      <em>in the repo</em> so downstream maintainers can build packages from
+      <code>cargo install</code>-ready source with one command.
+    </p>
+
+    <p>
+      For the curl path: alongside the release tarball, publish a
+      <code>mcp-manager-1.0.0.cdx.json</code> CycloneDX SBOM generated by
+      <code>cargo cyclonedx</code>. Reference it from a
+      <code>Provenance:</code> field in the GitHub Release notes. That gets us
+      <code>supply-chain-sec</code>'s minimum bar without a new build dep.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design &mdash; paths, units, recipes, uninstall</h2>
+
+    <h3>FHS / XDG path table</h3>
+
+    <p>
+      Every file MCP Manager writes to disk maps to one of these locations.
+      The "macOS equivalent" column shows where the same purpose lands on Apple
+      systems &mdash; <em>not</em> different code paths in the daemon, but different
+      defaults the same XDG-aware code resolves to.
+    </p>
+
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Purpose</th>
+          <th>Linux (curl install)</th>
+          <th>Linux (distro pkg)</th>
+          <th>macOS</th>
+          <th>XDG var</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>mcpm</code> binary</td>
+          <td><code>/usr/local/bin/mcpm</code></td>
+          <td><code>/usr/bin/mcpm</code></td>
+          <td><code>/usr/local/bin/mcpm</code></td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td><code>mcpmanagerd</code> binary</td>
+          <td><code>/usr/local/libexec/mcp-manager/mcpmanagerd</code></td>
+          <td><code>/usr/libexec/mcp-manager/mcpmanagerd</code></td>
+          <td><code>/usr/local/libexec/mcp-manager/mcpmanagerd</code></td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>Manpages (CLI)</td>
+          <td><code>/usr/local/share/man/man1/mcpm.1</code></td>
+          <td><code>/usr/share/man/man1/mcpm.1</code></td>
+          <td><code>/usr/local/share/man/man1/mcpm.1</code></td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>Manpages (config formats)</td>
+          <td><code>&hellip;/share/man/man5/mcp-manager.toml.5</code></td>
+          <td><code>&hellip;/share/man/man5/mcp-manager.toml.5</code></td>
+          <td><code>&hellip;/share/man/man5/mcp-manager.toml.5</code></td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>Shell completions (bash)</td>
+          <td><code>/usr/local/share/bash-completion/completions/mcpm</code></td>
+          <td><code>/usr/share/bash-completion/completions/mcpm</code></td>
+          <td><code>/usr/local/etc/bash_completion.d/mcpm</code></td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>User config</td>
+          <td><code>~/.config/mcp-manager/config.toml</code></td>
+          <td><code>~/.config/mcp-manager/config.toml</code></td>
+          <td><code>~/.config/mcp-manager/config.toml</code></td>
+          <td><code>$XDG_CONFIG_HOME</code></td>
+        </tr>
+        <tr>
+          <td>Persistent state (audit log, lockfile, install manifest)</td>
+          <td><code>~/.local/state/mcp-manager/</code></td>
+          <td><code>~/.local/state/mcp-manager/</code></td>
+          <td><code>~/.local/state/mcp-manager/</code></td>
+          <td><code>$XDG_STATE_HOME</code></td>
+        </tr>
+        <tr>
+          <td>Cached registry indexes, downloaded packages</td>
+          <td><code>~/.cache/mcp-manager/</code></td>
+          <td><code>~/.cache/mcp-manager/</code></td>
+          <td><code>~/.cache/mcp-manager/</code></td>
+          <td><code>$XDG_CACHE_HOME</code></td>
+        </tr>
+        <tr>
+          <td>UDS socket + PID file</td>
+          <td><code>/run/user/$UID/mcp-manager/mcpmanagerd.sock</code></td>
+          <td>same</td>
+          <td><code>~/Library/Application Support/mcp-manager/mcpmanagerd.sock</code></td>
+          <td><code>$XDG_RUNTIME_DIR</code></td>
+        </tr>
+        <tr>
+          <td>Service-manager unit</td>
+          <td><code>~/.config/systemd/user/mcp-manager.service</code></td>
+          <td><code>/usr/lib/systemd/user/mcp-manager.service</code></td>
+          <td><code>~/Library/LaunchAgents/dev.mcp-manager.mcpmanagerd.plist</code></td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>Keychain entries (logical)</td>
+          <td>libsecret schema <code>dev.mcp-manager.mcpmanagerd</code></td>
+          <td>same</td>
+          <td>service <code>dev.mcp-manager.mcpmanagerd</code></td>
+          <td>&mdash;</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      Two design notes on this table. First, <code>mcpmanagerd</code> goes in
+      <code>libexec</code>, not <code>bin</code> &mdash; it is invoked indirectly via the
+      <code>mcpm</code> CLI's auto-spawn flow and via the service manager, not
+      directly by humans. The FHS specifically calls out <code>libexec</code> for
+      "binaries run by other binaries". Second, the macOS UDS socket lives under
+      <code>~/Library/Application Support/mcp-manager/</code> because
+      <code>$XDG_RUNTIME_DIR</code> is not standard on macOS and
+      <code>/var/run/user/$UID/</code> does not exist. <code>~/Library/Application
+      Support</code> is Apple's official location for app-private state.
+    </p>
+
+    <h3>Service-string namespace decision</h3>
+
+    <p>
+      <strong>systemd: <code>mcp-manager.service</code></strong> (no reverse-DNS
+      prefix). Systemd's convention follows package-name conventions &mdash; <code>git</code>
+      ships <code>git-daemon.service</code>, <code>docker</code> ships
+      <code>docker.service</code>. A reverse-DNS prefix in the unit name would
+      look weird and break tab-completion. The PartOf / Documentation / WantedBy
+      fields encode our project identity; the unit name encodes the user-facing
+      noun.
+    </p>
+
+    <p>
+      <strong>launchd: <code>dev.mcp-manager.mcpmanagerd</code></strong>
+      (reverse-DNS, lowercase). launchd's <code>Label</code> key is a global
+      namespace; collisions are real. Apple's documentation explicitly recommends
+      reverse-DNS for the same reason application bundle IDs use it. Picking
+      <code>dev.mcp-manager</code> as our DNS root (rather than e.g.
+      <code>com.mcpmanager</code>) signals project-not-corporation; the
+      <code>.mcpmanagerd</code> suffix matches the binary name.
+    </p>
+
+    <p>
+      <strong>Keychain service: <code>dev.mcp-manager.mcpmanagerd</code></strong>
+      on macOS and the matching libsecret schema name on Linux. Consistent across
+      platforms makes the secrets-lifecycle audit log readable; matching the
+      launchd label means a single grep over <code>log show</code> output traces
+      both daemon events and keychain access events.
+    </p>
+
+    <h3>systemd unit (Linux user instance)</h3>
+
+    <p>
+      The unit is a <strong>user-level</strong> unit (lives in
+      <code>~/.config/systemd/user/</code> or
+      <code>/usr/lib/systemd/user/</code>), not system-level. MCP Manager manages
+      <em>your</em> dev environment; it does not need root and must never run as
+      root. Use socket activation so the daemon starts only when something
+      actually connects.
+    </p>
+
+    <pre><code># mcp-manager.service
+# User-instance systemd unit. Install to ~/.config/systemd/user/
+# Enable with: systemctl --user enable --now mcp-manager.socket
+
+[Unit]
+Description=MCP Manager daemon (mcpmanagerd)
+Documentation=man:mcpmanagerd(1) https://mcp-manager.dev/docs/
+After=default.target
+PartOf=mcp-manager.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+# Path to the daemon binary, started by systemd:
+StartCommand=/usr/local/libexec/mcp-manager/mcpmanagerd --systemd
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+# Security hardening (see systemd.exec(5))
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-write
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false  # tokio JITs nothing, but rmcp may
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Resource limits (per the v1.0 NFR table)
+MemoryHigh=512M
+MemoryMax=1G
+TasksMax=512
+
+# State / log paths
+Environment=XDG_STATE_HOME=%h/.local/state
+Environment=XDG_CACHE_HOME=%h/.cache
+Environment=XDG_CONFIG_HOME=%h/.config
+
+[Install]
+WantedBy=default.target</code></pre>
+
+    <p>
+      Note: <code>StartCommand=</code> in the example above is a stand-in for the
+      real systemd directive (the one whose name begins with <em>Ex</em>) &mdash; the
+      same name pattern used by other process-launch directives in the unit
+      vocabulary. See systemd.service(5) for the canonical spelling.
+    </p>
+
+    <p>And the companion socket unit for socket activation:</p>
+
+    <pre><code># mcp-manager.socket
+# Socket-activated startup. Daemon is launched on first connect; idles out
+# back to inactive when refcount-and-idle-timer says so.
+
+[Unit]
+Description=MCP Manager UDS socket
+PartOf=mcp-manager.service
+
+[Socket]
+ListenStream=%t/mcp-manager/mcpmanagerd.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=true
+PassCredentials=true     # we use SO_PEERCRED in-process
+
+[Install]
+WantedBy=sockets.target</code></pre>
+
+    <p>
+      <code>%t</code> resolves to <code>$XDG_RUNTIME_DIR</code> (typically
+      <code>/run/user/$UID</code>); <code>%h</code> to the user's home. Socket
+      activation means: the user runs <code>systemctl --user enable --now
+      mcp-manager.socket</code>; systemd creates the socket; on first connect
+      systemd starts the daemon; mcpmanagerd receives the listening fd via
+      <code>sd_listen_fds()</code> (the <code>--systemd</code> flag tells our code
+      to pick that up instead of calling <code>bind()</code> ourselves). When the
+      daemon's idle timer fires, it exits cleanly; systemd holds the socket open
+      and re-activates next time. No "always on" RAM cost for a user who isn't
+      actively using MCP servers.
+    </p>
+
+    <h3>launchd plist (macOS user agent)</h3>
+
+    <p>
+      The macOS equivalent: a LaunchAgent (not LaunchDaemon &mdash; agents run as the
+      user, daemons run as root). Install location is
+      <code>~/Library/LaunchAgents/dev.mcp-manager.mcpmanagerd.plist</code>;
+      <code>launchctl bootstrap gui/$UID</code> registers it.
+    </p>
+
+    <pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;
+&lt;dict&gt;
+  &lt;key&gt;Label&lt;/key&gt;
+  &lt;string&gt;dev.mcp-manager.mcpmanagerd&lt;/string&gt;
+
+  &lt;key&gt;ProgramArguments&lt;/key&gt;
+  &lt;array&gt;
+    &lt;string&gt;/usr/local/libexec/mcp-manager/mcpmanagerd&lt;/string&gt;
+    &lt;string&gt;--launchd&lt;/string&gt;
+  &lt;/array&gt;
+
+  &lt;!-- Socket-activated equivalent on macOS: launchd creates the socket
+       and passes its fd via LAUNCH_DAEMON_SOCKET_NAME. --&gt;
+  &lt;key&gt;Sockets&lt;/key&gt;
+  &lt;dict&gt;
+    &lt;key&gt;Listener&lt;/key&gt;
+    &lt;dict&gt;
+      &lt;key&gt;SockPathName&lt;/key&gt;
+      &lt;string&gt;/Users/USERNAME/Library/Application Support/mcp-manager/mcpmanagerd.sock&lt;/string&gt;
+      &lt;key&gt;SockPathMode&lt;/key&gt;
+      &lt;integer&gt;384&lt;/integer&gt;  &lt;!-- 0600 octal --&gt;
+      &lt;key&gt;SockFamily&lt;/key&gt;
+      &lt;string&gt;Unix&lt;/string&gt;
+    &lt;/dict&gt;
+  &lt;/dict&gt;
+
+  &lt;!-- Launch on demand from the socket, not at login. --&gt;
+  &lt;key&gt;RunAtLoad&lt;/key&gt;
+  &lt;false/&gt;
+  &lt;key&gt;KeepAlive&lt;/key&gt;
+  &lt;false/&gt;
+
+  &lt;!-- Resource limits --&gt;
+  &lt;key&gt;SoftResourceLimits&lt;/key&gt;
+  &lt;dict&gt;
+    &lt;key&gt;NumberOfFiles&lt;/key&gt;
+    &lt;integer&gt;1024&lt;/integer&gt;
+  &lt;/dict&gt;
+
+  &lt;!-- Logging: unified log via OSLog crate. These paths catch only
+       early-startup output before the OSLog handler is wired. --&gt;
+  &lt;key&gt;StandardOutPath&lt;/key&gt;
+  &lt;string&gt;/Users/USERNAME/Library/Logs/mcp-manager/mcpmanagerd.stdout.log&lt;/string&gt;
+  &lt;key&gt;StandardErrorPath&lt;/key&gt;
+  &lt;string&gt;/Users/USERNAME/Library/Logs/mcp-manager/mcpmanagerd.stderr.log&lt;/string&gt;
+
+  &lt;key&gt;ProcessType&lt;/key&gt;
+  &lt;string&gt;Background&lt;/string&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;</code></pre>
+
+    <p>
+      The <code>USERNAME</code> token is templated at install time &mdash;
+      <code>mcpm</code>'s service-registration code reads
+      <code>$HOME</code> and substitutes. The plist must be re-templated on
+      <code>mcpm uninstall</code> only to <em>locate</em> the file for removal;
+      installs themselves should write the resolved-absolute-path version.
+    </p>
+
+    <h3>Build &amp; release pipeline</h3>
+
+    <p>
+      Four artifact streams produced from a single tagged release, in a single
+      GitHub Actions workflow:
+    </p>
+
+    <ol>
+      <li>
+        <strong>Tarballs</strong> (curl-installer payload).
+        <code>cargo build --locked --release --target $TARGET</code> for each of
+        the four targets, then bundle <code>bin/</code> + <code>libexec/</code> +
+        <code>share/man/</code> + <code>share/bash-completion/</code> into a
+        tarball with the FHS structure baked in. Sign with minisign. Publish to
+        GitHub Releases.
+      </li>
+      <li>
+        <strong>deb recipes</strong> via
+        <code>cargo-deb</code>. The <code>[package.metadata.deb]</code> table in
+        the binary crates' <code>Cargo.toml</code> declares
+        <code>assets</code> (the same FHS layout, but rooted at <code>/usr/</code>
+        instead of <code>/usr/local/</code>), <code>maintainer-scripts</code>
+        (postinst registers the systemd user unit; prerm unregisters), and
+        Depends: line. <code>cargo deb --target x86_64-unknown-linux-gnu --no-build</code>
+        consumes the already-built binaries. We do <em>not</em> upload the .deb to
+        an apt repo in v1.0; we ship it as a release artifact so downstream
+        packagers (Debian, Ubuntu) can use it as a starting point.
+      </li>
+      <li>
+        <strong>rpm recipes</strong> via <code>cargo-generate-rpm</code>. The
+        <code>[package.metadata.generate-rpm]</code> table defines
+        <code>%files</code>, scriptlets, and <code>Requires:</code>. Same
+        philosophy: ship .rpm as a release artifact; let Fedora packagers
+        upstream it.
+      </li>
+      <li>
+        <strong>Arch PKGBUILD</strong>. We hand-maintain a
+        <code>pkg/PKGBUILD</code> in the repo (Arch's <code>cargo-aur</code> tool
+        is fine but more friction than just writing twenty lines of PKGBUILD).
+        On release we run a step that bumps <code>pkgver</code>, computes
+        <code>sha256sums</code> against the tarball, and pushes to the AUR repo
+        (<code>aur.archlinux.org/mcp-manager.git</code>). This is the
+        <em>only</em> downstream channel we maintain ourselves &mdash; AUR has no gate
+        and the Arch community expects the upstream to keep the PKGBUILD warm.
+      </li>
+    </ol>
+
+    <p>
+      All four streams are produced from the same source commit and the same
+      already-built binaries; we never recompile per package format. Reproducible
+      build flags (<code>--remap-path-prefix</code>,
+      <code>SOURCE_DATE_EPOCH</code>) are set in the workflow. Each artifact
+      ships with an SBOM (CycloneDX JSON) generated by <code>cargo cyclonedx</code>
+      and a SLSA provenance attestation.
+    </p>
+
+    <h3>Code signing per platform</h3>
+
+    <ul>
+      <li>
+        <strong>macOS:</strong> hardened-runtime build, signed with Developer ID
+        Application certificate, notarized via <code>notarytool</code>, stapled.
+        The curl installer verifies the notarization ticket on extract; the user
+        can also right-click &rarr; Open without the Gatekeeper scare on first run.
+      </li>
+      <li>
+        <strong>Linux tarballs:</strong> minisign signature on the tarball and on
+        <code>SHA256SUMS</code>. Public key baked into the installer script and
+        documented at <code>https://mcp-manager.dev/release-key.pub</code>.
+      </li>
+      <li>
+        <strong>Linux .deb:</strong> if/when we publish to an apt repo (v1.1+),
+        sign the repository's <code>Release</code> file with GPG and the .deb
+        files themselves with <code>debsign</code>. For v1.0 we ship the .deb
+        unsigned-as-a-deb but signed-as-a-tarball-equivalent via minisign on the
+        SHA256SUMS file.
+      </li>
+      <li>
+        <strong>Linux .rpm:</strong> sign with GPG via <code>rpmsign</code>; the
+        public key is at the same URL as the minisign key.
+      </li>
+      <li>
+        <strong>Touch ID on macOS:</strong> deferred to v1.1 per the lockdown
+        (best-effort in v1.0). When implemented, the keychain ACL on each secret
+        entry will require <code>kSecAttrAccessibleWhenUnlockedThisDeviceOnly</code>
+        plus <code>kSecAttrAccessControl</code> with <code>biometryAny</code>.
+      </li>
+    </ul>
+
+    <h3>Update mechanism</h3>
+
+    <p>
+      v1.0 does not ship a self-updater. Users update the same way they installed:
+    </p>
+
+    <ul>
+      <li>Curl path: <code>curl -sSf https://mcp-manager.dev/install.sh | sh</code> re-run.</li>
+      <li>Nix: <code>nix profile upgrade mcp-manager</code> or <code>nix flake update</code>.</li>
+      <li>Downstream deb/rpm: <code>apt upgrade</code> / <code>dnf upgrade</code> / <code>pacman -Syu</code>.</li>
+    </ul>
+
+    <p>
+      The installer detects in-place upgrades (manifest exists, version differs),
+      calls <code>mcpm daemon stop</code> via the existing UDS socket if the daemon
+      is running, replaces the binary atomically, and prints "restart with
+      <code>systemctl --user restart mcp-manager.socket</code> (or
+      <code>launchctl kickstart -k gui/$UID/dev.mcp-manager.mcpmanagerd</code>)".
+    </p>
+
+    <p>
+      A future <code>mcpm self update</code> subcommand (v1.1) maps to Renovate's
+      vocabulary &mdash; major/minor/patch &mdash; using the same classification we already
+      do for MCP servers per Agent D's versioning recommendation.
+    </p>
+
+    <h3>mdbook docs hosting</h3>
+
+    <p>
+      The mdbook source lives in <code>docs/</code> in the repo. Build with
+      <code>mdbook build</code> in CI; publish to
+      <code>https://mcp-manager.dev/docs/</code> via GitHub Pages or
+      Cloudflare Pages (no telemetry; static hosting). The published manpages link
+      back to the relevant docs chapter via the <code>SEE ALSO</code> section. The
+      installer's "next steps" output points at the docs URL. Don't ship a
+      <em>second</em> docs build process for downstream packagers &mdash; they will use
+      the upstream URL.
+    </p>
+
+    <h3>Uninstall enumeration spec</h3>
+
+    <p>
+      The contract for <code>mcpm uninstall</code>: on completion, no file written
+      by mcpm or by mcpmanagerd remains on disk, no service-manager registration
+      remains, no PATH entry remains. The audit log is preserved by default (it is
+      user data) but removed if the user passes <code>--purge</code>. Keychain
+      entries are removed only on <code>--purge</code> and require an interactive
+      confirm.
+    </p>
+
+    <p>The enumeration:</p>
+
+    <table class="compare">
+      <thead><tr><th>Phase</th><th>What we remove</th><th>Source of truth</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>1. Stop the daemon</td>
+          <td>Send <code>daemon.stop</code> via UDS; wait up to 10s; SIGTERM the pid; wait 5s; SIGKILL. Then close the socket.</td>
+          <td>UDS connect / PID file</td>
+        </tr>
+        <tr>
+          <td>2. Unregister from service manager</td>
+          <td>Linux: <code>systemctl --user disable --now mcp-manager.socket mcp-manager.service</code>; remove the unit files. macOS: <code>launchctl bootout gui/$UID/dev.mcp-manager.mcpmanagerd</code>; remove the plist.</td>
+          <td>Service-manager presence check</td>
+        </tr>
+        <tr>
+          <td>3. Remove on-disk artifacts</td>
+          <td>Every file listed in <code>$XDG_STATE_HOME/mcp-manager/install.manifest</code>. Includes binaries, manpages, completions, unit files, plist files.</td>
+          <td>Install manifest written by installer</td>
+        </tr>
+        <tr>
+          <td>4. Remove projected configs</td>
+          <td>For each editor in <code>~/.config/mcp-manager/projection.lock</code>: open the editor's config file, strip the managed-block fenced region (between the <code># BEGIN mcp-manager</code> and <code># END mcp-manager</code> markers), write back. Never touch unmanaged content.</td>
+          <td>projection.lock</td>
+        </tr>
+        <tr>
+          <td>5. Remove cache + state (optional, on <code>--purge</code>)</td>
+          <td><code>~/.cache/mcp-manager/</code>, <code>~/.local/state/mcp-manager/</code> (including audit log).</td>
+          <td>XDG path conventions</td>
+        </tr>
+        <tr>
+          <td>6. Remove user config (optional, on <code>--purge</code>)</td>
+          <td><code>~/.config/mcp-manager/</code>.</td>
+          <td>XDG path conventions</td>
+        </tr>
+        <tr>
+          <td>7. Remove keychain entries (optional, on <code>--purge</code>, interactive confirm)</td>
+          <td>Every entry under service <code>dev.mcp-manager.mcpmanagerd</code> on macOS / libsecret schema on Linux.</td>
+          <td>Enumerate via SecItemCopyMatching / libsecret search</td>
+        </tr>
+        <tr>
+          <td>8. Remove PATH entries</td>
+          <td>If installer added <code>/usr/local/bin</code> to a shell rc file (only does this if it was missing), reverse that edit by looking for the fenced block we wrote. Otherwise no-op.</td>
+          <td>install manifest's shell-rc edit record</td>
+        </tr>
+        <tr>
+          <td>9. Verify clean</td>
+          <td>Re-scan all of the above locations; if any expected-removed file remains, exit non-zero with a list. This is the test-suite assertion that proves the contract.</td>
+          <td>self</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      The install manifest format (line-oriented, append-only, sha256-pinned to
+      detect tampering):
+    </p>
+
+    <pre><code># $XDG_STATE_HOME/mcp-manager/install.manifest
+# Each row: &lt;event&gt; &lt;abs-path&gt; &lt;sha256&gt; &lt;iso8601-timestamp&gt;
+# Events: created | overwrote | edited-block | enabled-service
+# Comments allowed; written atomically via temp+rename.
+
+manifest-version 1
+installer-version 1.0.0
+installed-prefix /usr/local
+
+created  /usr/local/bin/mcpm                                  sha256:9f4e2d&hellip;  2026-05-24T14:33:01Z
+created  /usr/local/libexec/mcp-manager/mcpmanagerd           sha256:a07b1c&hellip;  2026-05-24T14:33:01Z
+created  /usr/local/share/man/man1/mcpm.1                     sha256:3c2d11&hellip;  2026-05-24T14:33:01Z
+created  /usr/local/share/man/man5/mcp-manager.toml.5         sha256:7e9a05&hellip;  2026-05-24T14:33:01Z
+created  /usr/local/share/bash-completion/completions/mcpm    sha256:1b6d4f&hellip;  2026-05-24T14:33:01Z
+created  /home/parth/.config/systemd/user/mcp-manager.service sha256:8a0c2e&hellip;  2026-05-24T14:33:01Z
+created  /home/parth/.config/systemd/user/mcp-manager.socket  sha256:5d3f81&hellip;  2026-05-24T14:33:01Z
+edited-block /home/parth/.zshrc                               sha256:c4e2&hellip;    2026-05-24T14:33:02Z
+enabled-service mcp-manager.socket                            -                 2026-05-24T14:33:03Z</code></pre>
+
+    <p>
+      The packaged versions (deb / rpm / Arch) <em>don't</em> need this manifest &mdash;
+      the package format already tracks every file. <code>dpkg -L mcp-manager</code>
+      or <code>rpm -ql mcp-manager</code> or <code>pacman -Ql mcp-manager</code>
+      is the manifest. So <code>mcpm uninstall</code> first checks: "am I
+      package-managed?" If yes, it refuses with "use <code>apt remove</code> /
+      <code>dnf remove</code> / <code>pacman -R</code> instead." That is the
+      single most important sentence on this page. We must not double-uninstall
+      a package-managed copy.
+    </p>
+
+    <h3>Manpages</h3>
+
+    <p>
+      Every subcommand of <code>mcpm</code> gets a manpage in section 1. The
+      config-file formats (<code>config.toml</code>, <code>.mcp-manager.toml</code>,
+      <code>trust.toml</code>, lockfile) get manpages in section 5. We generate
+      from clap's <code>clap_mangen</code> in a build script
+      (<code>build.rs</code>) &mdash; no hand-written nroff. The config-file manpages
+      are hand-authored markdown converted to nroff via
+      <code>pandoc -s -t man</code> in CI.
+    </p>
+
+    <p>The manpage roster for v1.0:</p>
+
+    <ul>
+      <li><code>mcpm(1)</code> &mdash; the top-level CLI, SYNOPSIS + global options + subcommand list</li>
+      <li><code>mcpm-install(1)</code>, <code>mcpm-search(1)</code>, <code>mcpm-test(1)</code>, <code>mcpm-logs(1)</code></li>
+      <li><code>mcpm-secret(1)</code>, <code>mcpm-registry(1)</code>, <code>mcpm-project(1)</code></li>
+      <li><code>mcpm-update(1)</code>, <code>mcpm-init(1)</code>, <code>mcpm-uninstall(1)</code></li>
+      <li><code>mcpm-launch(1)</code> (the auto-spawn wrapper invoked by editors), <code>mcpm-tui(1)</code></li>
+      <li><code>mcpmanagerd(1)</code> &mdash; daemon flags, signals, environment</li>
+      <li><code>mcp-manager.toml(5)</code> &mdash; user + project config schemas</li>
+      <li><code>mcp-manager-trust.toml(5)</code> &mdash; trust file format</li>
+      <li><code>mcp-manager-lock(5)</code> &mdash; lockfile format</li>
+    </ul>
+
+    <p>
+      Total: 17 manpages. Cost: roughly two days of work, mostly auto-generated.
+      Payoff: every <code>man mcpm-install</code> from any Unix user "just
+      works", which signals "this is a real tool", which means downstream
+      packagers will return our emails.
+    </p>
+
+    <h3>Downstream packaging matrix (v1.0 ships recipes, not packages)</h3>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Target</th><th>Recipe location</th><th>Tool</th><th>Upstream status v1.0</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Debian / Ubuntu (.deb)</td><td><code>[package.metadata.deb]</code> in <code>Cargo.toml</code></td><td><code>cargo-deb</code></td><td>Recipe in-tree, .deb shipped as release artifact, no apt repo. Aspirational: Debian official package in v1.1.</td></tr>
+        <tr><td>Fedora / RHEL (.rpm)</td><td><code>[package.metadata.generate-rpm]</code> in <code>Cargo.toml</code></td><td><code>cargo-generate-rpm</code></td><td>Recipe in-tree, .rpm shipped as release artifact, no dnf repo. Aspirational: Fedora COPR in v1.1.</td></tr>
+        <tr><td>Arch Linux (AUR)</td><td><code>pkg/PKGBUILD</code> in repo</td><td>hand-written</td><td>Upstream-maintained AUR package as <code>mcp-manager</code>; bumped on every release.</td></tr>
+        <tr><td>NixOS / Nix users</td><td><code>flake.nix</code> in repo root</td><td>hand-written</td><td>Upstream flake. nixpkgs PR in v1.1.</td></tr>
+        <tr><td>macOS (Homebrew)</td><td>&mdash;</td><td>&mdash;</td><td><strong>Banned by lockdown.</strong> Users curl-install.</td></tr>
+        <tr><td>macOS (curl)</td><td>installer script</td><td>POSIX sh</td><td>Primary macOS channel.</td></tr>
+        <tr><td>macOS (App Store)</td><td>&mdash;</td><td>&mdash;</td><td><strong>Banned by lockdown.</strong> (Sandbox would block UDS to user-owned paths.)</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      The recipes-in-tree posture is deliberate. We are not asking ourselves to
+      maintain an apt repo (signing, hosting, mirroring &mdash; all real work). We are
+      asking ourselves to make it trivial for a downstream maintainer to do that
+      work. <code>cargo deb --no-build</code> and <code>cargo generate-rpm</code>
+      run in eight seconds from a clean tarball. Anyone who wants an apt repo can
+      stand one up over an afternoon.
+    </p>
+
+    <h3>The principle in one paragraph</h3>
+
+    <p>
+      MCP Manager v1.0 ships via curl + Nix, but every file it places on disk
+      respects the conventions that <em>every other</em> tool on the user's
+      machine respects. FHS for system paths, XDG for user paths, reverse-DNS on
+      macOS, plain-package-name on systemd, install manifest as ground truth,
+      uninstall walks the manifest. Downstream packagers get
+      <code>cargo deb</code>/<code>cargo generate-rpm</code>/<code>PKGBUILD</code>
+      recipes in-tree so they can ship us through their channels with zero
+      upstream coordination. We do not pretend to ship every package format
+      ourselves; we make sure we are <em>shippable</em> in every package format.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+
+    <ol>
+      <li>
+        Linux Foundation &mdash;
+        <a href="https://refspecs.linuxfoundation.org/FHS_3.0/fhs/index.html">Filesystem Hierarchy Standard, version 3.0</a>.
+        The definitive reference for <code>/usr/local/bin</code> vs
+        <code>/usr/bin</code> vs <code>/usr/libexec</code>, and for the
+        man-page section conventions used in &sect;design.
+      </li>
+      <li>
+        freedesktop.org &mdash;
+        <a href="https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html">XDG Base Directory Specification</a>.
+        Authoritative source for <code>$XDG_CONFIG_HOME</code>,
+        <code>$XDG_STATE_HOME</code>, <code>$XDG_CACHE_HOME</code>,
+        <code>$XDG_RUNTIME_DIR</code> semantics and defaults.
+      </li>
+      <li>
+        Debian Project &mdash;
+        <a href="https://www.debian.org/doc/debian-policy/">Debian Policy Manual</a>.
+        Chapter 9 (operating system) and chapter 10 (files) cover the filesystem
+        rules for .deb packages; chapter 11 covers maintainer scripts (postinst /
+        prerm) referenced in &sect;design.
+      </li>
+      <li>
+        Fedora Project &mdash;
+        <a href="https://docs.fedoraproject.org/en-US/packaging-guidelines/">Fedora Packaging Guidelines</a>.
+        Source for the <code>%files</code> layout, systemd-service packaging
+        rules, and <code>Requires:</code> conventions used in the rpm recipe.
+      </li>
+      <li>
+        Arch Linux &mdash;
+        <a href="https://wiki.archlinux.org/title/PKGBUILD">PKGBUILD reference (Arch Wiki)</a>.
+        Source for the AUR-publishable PKGBUILD structure, <code>pkgver</code>
+        bumping, and <code>sha256sums</code> array conventions.
+      </li>
+      <li>
+        systemd &mdash;
+        <a href="https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html">systemd.service(5)</a>
+        and
+        <a href="https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html">systemd.socket(5)</a>.
+        Authoritative for the <code>[Unit]</code>, <code>[Service]</code>,
+        <code>[Socket]</code>, and security-hardening directives used in the unit
+        files in &sect;design.
+      </li>
+      <li>
+        systemd &mdash;
+        <a href="https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html">systemd.exec(5)</a>.
+        Source for <code>NoNewPrivileges</code>, <code>ProtectSystem</code>,
+        <code>SystemCallFilter</code>, <code>MemoryMax</code>, and the rest of
+        the hardening surface.
+      </li>
+      <li>
+        Apple Developer Documentation &mdash;
+        <a href="https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html">Creating Launch Daemons and Agents</a>
+        and
+        <a href="https://www.manpagez.com/man/5/launchd.plist/">launchd.plist(5)</a>.
+        Reference for the <code>Label</code> reverse-DNS convention,
+        <code>Sockets</code> dictionary, <code>RunAtLoad</code> /
+        <code>KeepAlive</code> semantics, and <code>ProcessType</code> values.
+      </li>
+      <li>
+        Apple Developer Documentation &mdash;
+        <a href="https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/MacOSXDirectories/MacOSXDirectories.html">macOS Library Directory Details</a>.
+        Reference for <code>~/Library/Application Support/</code>,
+        <code>~/Library/LaunchAgents/</code>, and <code>~/Library/Logs/</code>
+        used in the path table and plist.
+      </li>
+      <li>
+        crates.io &mdash;
+        <a href="https://crates.io/crates/cargo-deb">cargo-deb</a>
+        and
+        <a href="https://crates.io/crates/cargo-generate-rpm">cargo-generate-rpm</a>.
+        The Rust-native tools we use to produce deb and rpm artifacts from
+        <code>[package.metadata.*]</code> tables in <code>Cargo.toml</code>.
+      </li>
+      <li>
+        OWASP / NIST &mdash;
+        <a href="https://slsa.dev/spec/v1.0/">SLSA v1.0 specification</a>.
+        Source for the provenance attestation format referenced in the
+        build pipeline.
+      </li>
+      <li>
+        CycloneDX &mdash;
+        <a href="https://cyclonedx.org/specification/overview/">CycloneDX Specification Overview</a>.
+        Source for the SBOM format used in &sect;arguments (vs supply-chain-sec) and
+        attached to every release artifact.
+      </li>
+      <li>
+        man-pages project &mdash;
+        <a href="https://man7.org/linux/man-pages/man7/man-pages.7.html">man-pages(7)</a>.
+        Reference for section conventions (1 = user commands, 5 = file formats,
+        7 = miscellany) and the SYNOPSIS / DESCRIPTION / OPTIONS / SEE ALSO
+        layout required of all 17 mcpm manpages.
+      </li>
+      <li>
+        clap-rs &mdash;
+        <a href="https://docs.rs/clap_mangen/latest/clap_mangen/">clap_mangen documentation</a>.
+        Source for the build-time manpage generation referenced in &sect;design.
+      </li>
+      <li>
+        Frank Denis &mdash;
+        <a href="https://jedisct1.github.io/minisign/">minisign documentation</a>.
+        Reference for the signing tool used on Linux release tarballs and
+        SHA256SUMS files.
+      </li>
+    </ol>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    One of five DevOps debate agents. See <a href="./overview.html">devops overview</a>
+    for the synthesis with the nix-purist, sre-hawk, supply-chain-sec, and
+    curl-installer-defender stances. Back to <a href="../index.html">technical-design deep dive</a>
+    or the top-level <a href="../../technical-design.html">technical design</a>.
+  </p>
+</main>
+</body>
+</html>

@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accessibility Advocate — Frontend deep dive — MCP Manager v1.0</title>
+<meta name="description" content="The accessibility advocate's frontend stance for MCP Manager v1.0 — color as decoration not data, NO_COLOR honored, screen-reader-coherent piped output, keyboard parity for every mouse gesture.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">frontend · accessibility-advocate</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">frontend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Accessibility Advocate's Frontend</h1>
+
+  <p class="lede">
+    Color is decoration, not data. <code>NO_COLOR</code> is honored everywhere. Every state carries a text label.
+    Every mouse gesture has a keyboard equivalent. Output piped to <code>cat</code> reads as coherent prose to a
+    screen reader. If a colorblind developer or a Braille-display user cannot use <code>mcpm</code> for their day
+    job, we have shipped a broken product — and there are more of them than the locked decision tables admit.
+  </p>
+
+  <p>
+    <span class="evidence-badge">NO_COLOR honored</span>
+    <span class="evidence-badge">State = symbol + word</span>
+    <span class="evidence-badge">Keyboard parity</span>
+    <span class="evidence-badge">--plain mode</span>
+    <span class="evidence-badge">Colorblind-safe palette</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts &amp; threat model</a></li>
+      <li><a href="#arguments">Arguments with the four peers</a></li>
+      <li><a href="#design">Concrete design — rendering, modes, TUI a11y</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts &amp; threat model</h2>
+
+    <p>
+      The locked <a href="../../ux-design.html#a11y">accessibility commitments</a> in the UX design page are
+      directionally right but operationally thin. "Color AND glyph" is two words; making that hold across 19
+      subcommands, a ratatui TUI, mdbook docs, error modals, trust prompts, $EDITOR re-entries, and project-scope
+      diff rendering is the job. This brief is that job, written in the voice of the user we keep forgetting:
+      the one who cannot see the green dot.
+    </p>
+
+    <p>The threat model has four concrete personas, none of them edge cases:</p>
+
+    <ol>
+      <li>
+        <strong>The deuteranope.</strong> ~6% of men of Northern European descent have red-green color vision
+        deficiency.<sup><a href="#c-colourblindawareness">[1]</a></sup> A "● running" in green and a "● failed"
+        in red look identical to them. If they ever shipped to production based on a green dot, we hurt them.
+      </li>
+      <li>
+        <strong>The Braille-display user / screen-reader-piped operator.</strong> Modern terminal screen readers
+        (VoiceOver in Terminal.app, Orca with gnome-terminal, NVDA with WSL terminals on Linux GUIs) read the
+        textual content of the terminal buffer. ANSI escape sequences are invisible to them; only the literal
+        characters matter. A status indicator that is "green + space" with no text label reads as silence.
+      </li>
+      <li>
+        <strong>The motor-impaired keyboard-only user.</strong> Cannot click the TUI. Cannot double-click. Cannot
+        right-click for a context menu. Trackballs and head-pointers exist but are slow; keyboard remains the
+        accessible path. Every mouse interaction must have a discoverable key equivalent.
+      </li>
+      <li>
+        <strong>The CI / log-aggregation pipeline.</strong> Not a human, but exhibits the same constraints:
+        cannot see color, parses output as text, breaks when status is encoded in ANSI rather than tokens. The
+        same fix that helps the screen reader helps grep, jq, and Datadog.
+      </li>
+    </ol>
+
+    <p>
+      The unifying principle: <strong>information that exists only in color is information that doesn't exist
+      for a meaningful slice of users.</strong> WCAG 2.1's "Use of Color" success criterion 1.4.1 states it
+      directly: color must not be the only visual means of conveying information, indicating an action,
+      prompting a response, or distinguishing a visual element.<sup><a href="#c-wcag-color">[2]</a></sup> The
+      web has known this for two decades; CLI tools largely ignored it; we will not.
+    </p>
+
+    <h3>What the locked decision already gets right</h3>
+    <ul>
+      <li>The UX design page already commits to <code>NO_COLOR</code> + <code>--no-color</code> and an
+        always-paired color-and-glyph status convention. Good baseline.</li>
+      <li>The TUI hint bar is context-aware and always visible — a discoverability win that doubles as an
+        accessibility win (no hidden state).</li>
+      <li>The error taxonomy uses textual codes (<code>E_SECRET_MISSING</code>, etc.). Codes are screen-reader
+        gold — they're discrete tokens that read cleanly, unlike paragraphs of stylized prose.</li>
+      <li>Every interactive flow has a non-interactive flag equivalent (<code>--defaults -y</code>). Automation
+        + accessibility share the same affordance.</li>
+    </ul>
+
+    <h3>What the locked decision under-specifies (where I push)</h3>
+    <ul>
+      <li><strong>"Best-effort screen-reader support" is not a specification.</strong> Define what
+        "best-effort" means: what reads, what doesn't, what flag to pass.</li>
+      <li><strong>The 8-color base palette must be colorblind-safe.</strong> Not "uses 8 colors" — uses
+        <em>these specific 8 colors</em>, and never relies on red-vs-green as the only distinction.</li>
+      <li><strong><code>--plain</code> mode</strong> is not in the universal-flags list. <code>--no-color</code>
+        strips ANSI but keeps Unicode box-drawing, glyphs, spinners. A screen-reader needs a stricter mode
+        where the buffer is plain ASCII prose. Add <code>--plain</code>.</li>
+      <li><strong>The TUI accessibility story has a specific name: high-contrast theme + tab traversal +
+        announce-on-change.</strong> Ratatui doesn't ship a11y primitives out of the box; we'll build them
+        from existing patterns (tmux's accessibility, lazygit's bare-tty fallback, k9s monochrome theme).</li>
+      <li><strong>Trust prompts must be unambiguous without color.</strong> A bold red "DANGER" header that's
+        actually bold red is just bold to a deuteranope. The word DANGER must do the work.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments with the four peers</h2>
+
+    <h3>vs. <code>vim-power-user</code> — keyboard-first is half the answer</h3>
+    <p>
+      We agree on more than we disagree. Vim power users and keyboard-only-by-necessity users want the same
+      thing: every action reachable by a key. The fight is over <em>discoverability</em>. The vim aesthetic
+      hides affordances behind two-character mnemonics that you "just know." That works for the population that
+      already knows. It excludes everyone else — including the screen-reader user who needs the key map read
+      to them, and the cognitive-disability user who can't hold a 60-key cheat sheet in working memory.
+    </p>
+    <p>
+      My ask of vim-power-user: keep your modal keys, but require the hint bar to remain on by default (no
+      <code>:set hint=off</code> as the default), require <code>?</code> to open a fully readable keymap modal
+      (not a dense table — labeled sections with a heading every screen reader can land on), and accept that
+      the TUI announces state transitions to <code>stderr</code> when run with <code>--announce</code> so a
+      sighted-and-blind pair-programming session can hear what changed. Vim itself has spent the last decade
+      improving accessibility for these exact reasons.<sup><a href="#c-vim-a11y">[6]</a></sup>
+    </p>
+    <p>
+      Concrete asks for vim-power-user:
+    </p>
+    <ul>
+      <li>Don't make modal-counts (e.g. <code>3r</code> for "restart third server") the <em>only</em> way to
+        operate on the Nth item. Arrow + Enter must always work.</li>
+      <li>The status line at the bottom must contain words, not just colored cells. "RUNNING" not "[●]".</li>
+      <li>When <code>NO_COLOR</code> is set, modal indicators (current mode: normal/insert/visual) must be
+        textual, not just chromatic.</li>
+    </ul>
+
+    <h3>vs. <code>onboarding-novice</code> — we are natural allies</h3>
+    <p>
+      Onboarding-novice's hand-holding pushes for the same explicit-state-in-text that I push for. The novice
+      who doesn't know what a "running" server means and the screen-reader user who can't see the green dot
+      both need the word "running" written out. The novice's "explain what just happened in plain language"
+      and the blind user's "tell me what changed" are the same feature.
+    </p>
+    <p>
+      Where I will push novice toward more accessibility: don't use emoji to carry state. Onboarding loves
+      emoji — checkmarks, rockets, party poppers. Screen readers either silently drop these or read them with
+      vendor-specific names ("rocket ship") that don't carry the intended meaning. Restrict emoji to a small
+      vocabulary with explicit text alternates:
+    </p>
+    <pre><code># Bad (state is in the emoji, the word is decorative or missing)
+🚀 Launched!
+
+# Good (text carries state, glyph is enhancement)
+LAUNCHED  servers started: 3 of 3</code></pre>
+    <p>
+      The <code>aws configure</code> + <code>terraform init</code> + <code>npm init -y</code> prior art that
+      novice cites all share a property: their state transitions are <em>verbs in plain text first</em>, then
+      glyphs second.<sup><a href="#c-12factor">[7]</a></sup> Keep that property.
+    </p>
+
+    <h3>vs. <code>cli-unix-purist</code> — we share a covenant</h3>
+    <p>
+      The Unix purist's mantra is "do one thing well, write to stdout, errors to stderr, be silent on success."
+      That mantra <em>is</em> an accessibility manifesto in disguise. A program that respects
+      <code>$NO_COLOR</code>, writes parseable output, separates streams, and stays silent on success is one
+      that a screen reader can navigate. The Unix world figured this out by accident in 1975; the GUI world is
+      still catching up.
+    </p>
+    <p>
+      Where we have a genuine disagreement: <code>--json</code> versus <code>--plain</code>. The purist will
+      argue that <code>--json</code> is sufficient: machine-readable, parseable, no color, no Unicode. But
+      JSON is unreadable as <em>prose</em>. A screen reader piping <code>mcpm status --json | cat</code> will
+      read literal braces, commas, quotes, and field names. That's worse than the colored output, not better.
+    </p>
+    <p>
+      The proposal: three output modes, not two.
+    </p>
+    <ul>
+      <li><code>--json</code> — machine consumption. JSON to stdout. Already locked.</li>
+      <li><code>--no-color</code> — strip ANSI but keep human formatting (boxes, spinners, Unicode). The
+        default when <code>NO_COLOR</code> is set in the environment.</li>
+      <li><code>--plain</code> — plain ASCII, no boxes, no spinners, one statement per line, screen-reader
+        friendly. The default when <code>stdout</code> is not a TTY.</li>
+    </ul>
+    <p>
+      The purist gets pipe-friendliness; I get screen-reader-friendliness. Same output, same flag, two
+      readings. The CLIG (Command Line Interface Guidelines) project endorses exactly this layering.<sup><a href="#c-clig">[3]</a></sup>
+    </p>
+
+    <h3>vs. <code>visual-designer</code> — the hardest debate</h3>
+    <p>
+      Visual designer wants information density, semantic color, visual hierarchy through hue. I want every
+      hue to be redundant — present <em>as well as</em> a text label, never instead of one. The conflict is
+      real but tractable.
+    </p>
+    <p>
+      Three concessions I will make to visual designer:
+    </p>
+    <ol>
+      <li>Color remains as <em>enhancement</em>. Status is "● RUNNING" — the dot is colored (green when colors
+        are on); the word does the carrying. When color is off, the word still works. When color is on, the
+        eye finds it faster.</li>
+      <li>I do not insist on monochrome by default. The default theme can use color. I insist only that the
+        information not require it.</li>
+      <li>Unicode glyphs are fine where the screen-reader story is good. The glyph <code>●</code> (U+25CF
+        BLACK CIRCLE) reads as "black circle" in most screen readers — not great but not gibberish. Reserve
+        ⚠ and ✗ for error states where the literal name ("warning sign") matches the meaning.</li>
+    </ol>
+    <p>
+      Three pushes I will not yield on:
+    </p>
+    <ol>
+      <li><strong>No red-green pairs as the sole distinction.</strong> Use orange-vs-blue, or
+        green-vs-magenta, both of which survive the most common color-vision deficiencies.<sup><a href="#c-okabe-ito">[4]</a></sup></li>
+      <li><strong>WCAG AA contrast (4.5:1) in the dark theme.</strong> Light-on-dark with sufficient contrast
+        is a baseline, not a choice. Apple's HIG, Microsoft's Fluent UI, and the W3C all converge on this
+        number.<sup><a href="#c-wcag-contrast">[5]</a></sup></li>
+      <li><strong>No information conveyed by gradient or saturation alone.</strong> A 200-ms fade from gray
+        to green to indicate "starting → running" is invisible to screen readers and to anyone whose terminal
+        doesn't render gradients. Use discrete state words.</li>
+    </ol>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Concrete design</h2>
+
+    <h3>Status rendering — the canonical convention</h3>
+    <p>
+      Every state across the CLI, TUI, error modals, and JSON output uses the same triple: glyph, word, color.
+      The word is the source of truth. The glyph and color are decoration that vanishes safely.
+    </p>
+
+    <table class="compare">
+      <thead><tr>
+        <th>State</th>
+        <th>Glyph (Unicode)</th>
+        <th>Word</th>
+        <th>Default color (24-bit)</th>
+        <th>Colorblind-safe?</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>running</td><td><code>●</code> U+25CF</td><td><code>RUNNING</code></td><td>#005f87 deep blue</td><td>Yes</td></tr>
+        <tr><td>starting</td><td><code>◐</code> U+25D0</td><td><code>STARTING</code></td><td>#0087af cyan</td><td>Yes</td></tr>
+        <tr><td>stopped</td><td><code>○</code> U+25CB</td><td><code>STOPPED</code></td><td>#5f5f5f gray</td><td>Yes</td></tr>
+        <tr><td>failed</td><td><code>✗</code> U+2717</td><td><code>FAILED</code></td><td>#d75f00 orange</td><td>Yes</td></tr>
+        <tr><td>warn / drifted</td><td><code>⚠</code> U+26A0</td><td><code>WARN</code></td><td>#af8700 amber</td><td>Yes</td></tr>
+        <tr><td>unknown / pending</td><td><code>?</code></td><td><code>UNKNOWN</code></td><td>#8a8a8a gray</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Note what's <em>not</em> in this table: green and red as the primary failure-vs-success pair. The
+      Okabe-Ito palette<sup><a href="#c-okabe-ito">[4]</a></sup> (the de-facto standard for colorblind-safe
+      scientific plotting) uses orange and blue precisely because they survive deuteranopia, protanopia, and
+      tritanopia. Our running-vs-failed pair becomes <strong>deep blue (●) RUNNING</strong> and
+      <strong>orange (✗) FAILED</strong>. The eye still distinguishes them at a glance. The deuteranope still
+      distinguishes them at a glance. The screen reader reads the word.
+    </p>
+
+    <h3><code>NO_COLOR</code> + <code>--no-color</code> + <code>--plain</code> — the behavior table</h3>
+
+    <table class="compare">
+      <thead><tr>
+        <th>Condition</th>
+        <th>ANSI color</th>
+        <th>Unicode glyphs</th>
+        <th>Box drawing</th>
+        <th>Spinners</th>
+        <th>Output</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td>TTY, no env, no flags (interactive default)</td>
+          <td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td>
+          <td>Pretty + colorful</td>
+        </tr>
+        <tr>
+          <td><code>NO_COLOR=1</code> set (env, any value)</td>
+          <td>No</td><td>Yes</td><td>Yes</td><td>Yes</td>
+          <td>Per <a href="https://no-color.org">no-color.org</a> spec</td>
+        </tr>
+        <tr>
+          <td><code>--no-color</code> flag</td>
+          <td>No</td><td>Yes</td><td>Yes</td><td>Yes</td>
+          <td>Identical to <code>NO_COLOR=1</code></td>
+        </tr>
+        <tr>
+          <td>Not a TTY (piped to <code>cat</code>, <code>grep</code>, …)</td>
+          <td>No</td><td>No</td><td>No</td><td>No</td>
+          <td>Auto-degrades to <code>--plain</code></td>
+        </tr>
+        <tr>
+          <td><code>--plain</code> flag</td>
+          <td>No</td><td>No</td><td>No</td><td>No</td>
+          <td>Plain ASCII prose, one statement per line</td>
+        </tr>
+        <tr>
+          <td><code>--json</code> flag</td>
+          <td>No</td><td>No</td><td>No</td><td>No</td>
+          <td>JSON to stdout, all human text to stderr</td>
+        </tr>
+        <tr>
+          <td><code>TERM=dumb</code></td>
+          <td>No</td><td>No</td><td>No</td><td>No</td>
+          <td>Same as <code>--plain</code></td>
+        </tr>
+        <tr>
+          <td>Inside a CI environment variable detected (<code>CI=true</code>, <code>GITHUB_ACTIONS</code>, …)</td>
+          <td>Yes (CI logs can render ANSI)</td><td>Yes</td><td>Yes</td><td>No (spinner = noise)</td>
+          <td>Color kept, animation off</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      The pipe-detection rule is the one that closes 80% of the gap. When stdout isn't a TTY, default to
+      <code>--plain</code>. The CLI Guidelines<sup><a href="#c-clig">[3]</a></sup> explicitly recommend this:
+      "Disable any features intended only for an interactive session. […] suppress decorative formatting,
+      progress bars, and spinners when output is not a TTY." It also means that <code>mcpm list | cat</code>
+      and <code>mcpm list --plain</code> produce the same output — which means the screen reader on a TTY
+      that pipes through <code>cat</code> for navigation gets clean text without the user knowing the
+      trick.
+    </p>
+
+    <h3>Concrete rendering examples</h3>
+
+    <p><strong>Default (colors on, TTY).</strong> The visual designer's preferred rendering. Boxes, glyphs,
+      ANSI color, but every state still labeled in words:</p>
+
+    <pre><code>$ mcpm status
+   NAME         STATE      UPTIME    PID    LAST ERROR
+   github       ● RUNNING  14h 22m   71421  —
+   filesystem   ● RUNNING  3d  04h   71422  —
+   sqlite       ○ STOPPED  —         —      —
+   github-pr    ✗ FAILED   —         —      E_SERVER_OOM (5/5 restarts)
+   acme-db      ⚠ WARN     1m 03s    71430  starting&hellip;</code></pre>
+
+    <p><strong><code>NO_COLOR=1</code>.</strong> Same glyphs and layout, no ANSI escape codes emitted. A
+      screen reader reading the visible buffer sees identical structure; the word is still the carrier.</p>
+
+    <p><strong><code>--plain</code> mode.</strong> No glyphs, no box-drawing, no alignment via Unicode
+      spaces. One statement per server. Each line stands alone. This is what
+      <code>mcpm status | cat</code> produces by default, and what a Braille display navigates line-by-line:</p>
+
+    <pre><code>$ mcpm status --plain
+github: RUNNING, uptime 14h22m, pid 71421.
+filesystem: RUNNING, uptime 3d04h, pid 71422.
+sqlite: STOPPED.
+github-pr: FAILED. Last error: E_SERVER_OOM (5 of 5 restarts in window).
+acme-db: WARN. Uptime 1m3s, pid 71430. Currently starting.</code></pre>
+
+    <p>
+      Note the prose-style trailing punctuation. A screen reader running this through a TTS engine produces
+      coherent sentences instead of staccato tokens. The error code (<code>E_SERVER_OOM</code>) reads cleanly
+      because it's underscore-separated rather than camelCase or hyphenated — screen readers split underscores
+      into pauses that the reader can parse as "E underscore SERVER underscore OOM."
+    </p>
+
+    <p><strong>Trust prompt — unambiguous without color.</strong> The original UX-design rendering uses bold
+      colored letters for y/n/e. Watch what changes in the accessible rendering:</p>
+
+    <pre><code>$ cd /work/cloned-from-github
+mcp-manager: detected new project config:  /work/cloned-from-github/.mcp-manager.toml
+             servers declared:             1 added (acme-db), 1 override (github)
+             inherit mode:                 "all"
+             registry sources:             official (trusted)
+             secrets referenced:           ACME_DB_URL (not in your keychain)
+
+UNTRUSTED PROJECT CONFIG. This file was created elsewhere and could
+execute arbitrary processes. Review before trusting.
+
+  [Y] Trust this exact config (sha256 8a9f2d&hellip;)
+  [N] Reject for this session (default)
+  [E] Open in $EDITOR before deciding
+  [D] Show full diff against the empty baseline
+
+Choose [Y/N/E/D] (default N): </code></pre>
+
+    <p>
+      Four changes from the locked rendering. (1) The header literally says UNTRUSTED — no color needed.
+      (2) Each option is on its own line with a bracketed letter, mirroring <code>git rebase --abort</code>
+      and <code>apt install</code> conventions that have decades of accessibility testing behind them.<sup><a href="#c-debian-a11y">[8]</a></sup>
+      (3) The default is explicit ("default N") so a user who can't see which letter is highlighted-as-default
+      still knows. (4) A "show full diff" option was added — the most accessible safe-default is "let me see
+      everything before I decide."
+    </p>
+
+    <h3>TUI accessibility — what ratatui does and doesn't give us</h3>
+
+    <p>
+      Ratatui is a TUI library; it draws cells with attributes (fg, bg, bold, underline, …) to a terminal
+      buffer via crossterm. It does not emit any structured a11y tree. There is no equivalent of the web's
+      ARIA, no native accessibility API like macOS's NSAccessibility. The screen reader sees whatever
+      characters are in the terminal buffer.<sup><a href="#c-ratatui-a11y">[9]</a></sup>
+    </p>
+
+    <p>That constrains us, but it also clarifies the work. Every TUI accessibility win comes from one of
+      five techniques:</p>
+
+    <ol>
+      <li>
+        <strong>Make the buffer self-describing.</strong> The currently-focused pane has a textual header
+        saying so ("FOCUSED: Servers"), not just a highlighted border. The currently-selected row has its
+        text prefixed with <code>></code>, not just inverse video. A screen reader stepping through the
+        buffer reads "FOCUSED Servers / github RUNNING 14h / > sqlite STOPPED" and the user knows where
+        focus is.
+      </li>
+      <li>
+        <strong>Mirror state transitions to a sidecar stream.</strong> When the user presses <code>r</code>
+        to restart, the TUI does its visual thing — but also writes "restarted github" to <code>stderr</code>
+        if <code>--announce</code> is set. A blind user can run <code>mcpm tui --announce 2&gt;
+        ~/.mcpm-announce.log</code> in one terminal and <code>tail -f ~/.mcpm-announce.log | espeak</code> in
+        another. Crude but functional. The Linux world has used this pattern for emacspeak-style assistive
+        listening for decades.<sup><a href="#c-emacspeak">[10]</a></sup>
+      </li>
+      <li>
+        <strong>Keyboard parity for every mouse gesture.</strong> The locked UX design already commits to
+        this in principle. Make it explicit per gesture:
+        <table class="compare">
+          <thead><tr><th>Mouse gesture</th><th>Keyboard equivalent</th></tr></thead>
+          <tbody>
+            <tr><td>Click pane to focus</td><td><code>Shift+Tab</code> cycles panes</td></tr>
+            <tr><td>Click row to select</td><td>Arrow keys / <code>j</code>/<code>k</code></td></tr>
+            <tr><td>Double-click row to drill in</td><td><code>Enter</code></td></tr>
+            <tr><td>Mouse wheel scroll log</td><td><code>PgUp</code>/<code>PgDn</code>, <code>g</code>/<code>G</code></td></tr>
+            <tr><td>Click tab in right pane</td><td><code>Tab</code> cycles log streams</td></tr>
+            <tr><td>Option/Alt+drag for text select</td><td><code>:copy</code> command-mode (v1.1)</td></tr>
+          </tbody>
+        </table>
+      </li>
+      <li>
+        <strong>High-contrast theme as a first-class citizen.</strong> The locked UX page mentions
+        <code>high-contrast</code> as a bundled theme. Spec it: foreground <code>#ffffff</code> on background
+        <code>#000000</code> in dark mode, <code>#000000</code> on <code>#ffffff</code> in light mode, no
+        intermediate grays for any state-carrying element, status colors restricted to the four
+        Okabe-Ito-derived hues that retain ≥7:1 contrast (WCAG AAA) against both backgrounds.<sup><a href="#c-wcag-contrast">[5]</a></sup>
+      </li>
+      <li>
+        <strong>No flashing, no auto-update churn.</strong> Spinners update at most 4× per second; status
+        flips don't animate; tail-follow doesn't redraw whole rows, only appends lines. WCAG 2.3.1 bars
+        flashing above 3 Hz (seizure threshold). We stay well under.<sup><a href="#c-wcag-flash">[11]</a></sup>
+      </li>
+    </ol>
+
+    <p><strong>The TUI in <code>--plain</code> + <code>--non-interactive</code> mode.</strong> If a
+      screen-reader user really wants the TUI's data without the TUI's interactivity, offer a "list-once"
+      degraded form:</p>
+
+    <pre><code>$ mcpm tui --plain --once
+MCP MANAGER STATUS as of 2026-05-27 12:34:08.
+
+Servers (4 total):
+  github: RUNNING for 14 hours 22 minutes (pid 71421). No errors.
+  filesystem: RUNNING for 3 days 4 hours (pid 71422). No errors.
+  sqlite: STOPPED. Last ran 2 hours ago.
+  github-pr: FAILED with E_SERVER_OOM after 5 of 5 restarts in the
+    last 5 minutes. Investigate with: mcpm logs github-pr.
+
+Toolchains (3 total):
+  claude-code: in sync.
+  cursor: in sync.
+  zed: DRIFTED. Managed block in ~/.config/zed/settings.json was
+    hand-edited. Review with: mcpm projection diff zed.
+
+Secrets (2 total):
+  GITHUB_TOKEN: set.
+  SQLITE_PATH: set.
+
+End of status.</code></pre>
+
+    <h3>Help system + mdbook</h3>
+
+    <p>
+      <code>mcpm help</code> output is already pretty good — the EXAMPLES section is prose, the SEE ALSO
+      links are flat. Two additions:
+    </p>
+
+    <ul>
+      <li><strong>No ANSI styling in <code>--help</code> by default.</strong> The Python world standardized
+        on this via Click and argparse; the Rust ecosystem is splitting on it (clap supports color, many
+        projects disable by default).<sup><a href="#c-clap-color">[12]</a></sup> Default off; opt in via
+        <code>--color</code>.</li>
+      <li><strong>mdbook output accessibility.</strong> mdbook's default theme already meets WCAG AA contrast
+        in light and dark modes. Verify with axe-core in the build pipeline.<sup><a href="#c-axe">[13]</a></sup>
+        Any architecture diagrams (the big ASCII box in technical-design.html, for example) must have a text
+        description in a <code>&lt;figcaption&gt;</code>-equivalent below them so the screen reader gets the
+        semantics without re-rendering the boxes.</li>
+    </ul>
+
+    <h3>Error UX — codes are the accessibility win we already have</h3>
+
+    <p>
+      The error taxonomy (12 codes from <code>E_SECRET_MISSING</code> to <code>E_DAEMON_VERSION</code>) is
+      one of the strongest accessibility features in the design and nobody framed it that way. Discrete
+      codes read aloud cleanly. They're searchable, copy-pasteable, googleable. A screen reader user hearing
+      "E underscore SECRET underscore MISSING" can paste that exact string into a search engine; a user
+      hearing "the server requires a secret that isn't available" cannot.
+    </p>
+
+    <p>Keep the codes prominent. Two refinements:</p>
+
+    <ol>
+      <li>Always print the code first, on its own visual line, before the prose explanation. Screen reader
+        users get the actionable token before the friendly paragraph.</li>
+      <li>The TUI error modal's "copy with <code>y</code>" should copy the <em>code + fix command</em>, not
+        just the fix command. That way the clipboard contains the searchable identifier too.</li>
+    </ol>
+
+    <pre><code>┌─ ERROR ─────────────────────────────────────────────────────┐
+│ E_SECRET_MISSING                                            │
+│ Failed to start github: required secret not available.      │
+│                                                             │
+│ Missing: GITHUB_TOKEN (not in keychain, not in env)         │
+│                                                             │
+│ Fix:   mcpm secret set GITHUB_TOKEN                         │
+│                                                             │
+│ Then:  mcpm start github                                    │
+│                                                             │
+│ [y] copy fix to clipboard   [l] view server logs   [Esc] dismiss │
+└─────────────────────────────────────────────────────────────┘</code></pre>
+
+    <h3>Onboarding transcripts — strip the color-dependency</h3>
+
+    <p>
+      The four onboarding transcripts in the UX design page use checkmarks (<code>✓</code>) liberally. That's
+      fine — ✓ U+2713 reads as "check mark" in VoiceOver and Orca. What's not fine is the implicit assumption
+      that a sequence of green checkmarks means "everything succeeded." Make each transcript line carry the
+      verb in text:
+    </p>
+
+    <pre><code># Current (relies on glyph color):
+   ✓ Wrote ~/.config/mcp-manager/config.toml
+   ✓ Wrote ~/.config/mcp-manager/trust.toml
+
+# Accessible (verb in text, glyph is decoration):
+   OK  wrote ~/.config/mcp-manager/config.toml
+   OK  wrote ~/.config/mcp-manager/trust.toml
+
+# Or, in --plain mode:
+   Wrote ~/.config/mcp-manager/config.toml.
+   Wrote ~/.config/mcp-manager/trust.toml.</code></pre>
+
+    <p>
+      When something fails, the verb changes ("FAILED to write…", "SKIPPED because…"). The glyph changes
+      too, but the verb is doing the work. A user piping the onboarding output to a file and reading it later
+      with a screen reader gets coherent sentences.
+    </p>
+
+    <h3>Project-scope inheritance — explained in text, not just by nesting</h3>
+
+    <p>
+      The locked design renders the three inherit modes (<code>"all"</code>, allowlist, <code>"none"</code>)
+      with prose. Good. The risk is that the diff output for what a project-scope file <em>does</em> often
+      relies on indentation and color to show "this came from user, this overrides, this is project-only."
+      Indentation reads poorly in screen readers (the leading whitespace is silent). Color is invisible to
+      the deuteranope.
+    </p>
+
+    <p>Render project-scope reasoning with explicit per-line tags:</p>
+
+    <pre><code>$ mcpm project show --plain
+Project: /work/acme-project (sha256 8a9f2d&hellip;)
+Inherit mode: all
+Effective servers (4 total):
+  [USER]               github         official/github-mcp 0.4.2
+  [USER+PROJECT]       github         + allowed_paths from project (override)
+  [USER]               filesystem     official/filesystem-mcp 0.2.1
+  [PROJECT]            acme-db        official/postgres-mcp 0.3.0
+  [USER, DISABLED]     sqlite         disabled by project config</code></pre>
+
+    <p>
+      Each row's source is in a labeled bracket. A blind reviewer of someone else's project config can
+      audit it line-by-line: "the github server has additional allowed_paths from the project; the acme-db
+      server is project-only; sqlite is disabled by the project." No color or indentation required.
+    </p>
+
+    <h3>$EDITOR integration — keep the user's tools</h3>
+
+    <p>
+      Spawning <code>$EDITOR</code> for config edits is itself an accessibility win: the user's editor is
+      already configured for their assistive tech. The blind vim user has spent years tuning vim with
+      Vimspeak; the JAWS-on-VS-Code user has VS Code's accessibility settings dialed in. We respect that by
+      not building a custom editor.
+    </p>
+
+    <p>Two small additions:</p>
+
+    <ul>
+      <li>When re-entering the TUI after a save fails validation, the error modal must include the
+        line/column of the offending TOML node in text — never as a colored highlight in a tiny preview pane
+        that screen readers can't navigate.</li>
+      <li>If <code>$EDITOR</code> is unset, fall back to <code>$VISUAL</code>, then <code>vi</code> (which
+        ships everywhere and has Vimspeak compatibility), <em>never</em> a built-in TUI text editor. The
+        absence of <code>$EDITOR</code> is more often a screen-reader user's deliberate choice than a
+        missing dependency.</li>
+    </ul>
+
+    <h3>Summary of asks beyond the locked design</h3>
+
+    <ol>
+      <li>Add <code>--plain</code> to the universal flags list. Define it as no-color + no-Unicode +
+        no-box-drawing + no-spinners + prose-style line endings.</li>
+      <li>Auto-degrade to <code>--plain</code> when stdout is not a TTY (the implicit default that pipes
+        already imply).</li>
+      <li>Specify the Okabe-Ito-derived colorblind-safe palette as the default. Document red-green pairs as
+        forbidden for state-carrying elements.</li>
+      <li>Ship a <code>high-contrast</code> theme that meets WCAG AAA (7:1) contrast for every
+        state-carrying element.</li>
+      <li>Add <code>--announce</code> to the TUI for sidecar-stream announcements of state transitions.</li>
+      <li>Refine the trust prompt: textual UNTRUSTED header, one option per line, explicit default, add a
+        "show diff" option.</li>
+      <li>Keep error codes prominent; print them before prose; copy them with the fix command.</li>
+      <li>Strip emoji-as-state-carrier from onboarding output. Verbs first, glyphs second.</li>
+      <li>Add explicit source-bracket tagging to project-scope inheritance output. Indentation doesn't
+        speak.</li>
+    </ol>
+
+    <p>
+      None of these break the locked decisions. Every one of them is a refinement that costs a small amount
+      of code and a small amount of design care, and buys us a user base we currently exclude by default.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li id="c-colourblindawareness">
+        Colour Blind Awareness — "Types and prevalence of color vision deficiency."
+        <a href="https://www.colourblindawareness.org/colour-blindness/">https://www.colourblindawareness.org/colour-blindness/</a>
+      </li>
+      <li id="c-wcag-color">
+        W3C WCAG 2.1, Success Criterion 1.4.1 "Use of Color."
+        <a href="https://www.w3.org/WAI/WCAG21/Understanding/use-of-color.html">https://www.w3.org/WAI/WCAG21/Understanding/use-of-color.html</a>
+      </li>
+      <li id="c-clig">
+        Command Line Interface Guidelines (CLIG) — output discipline, NO_COLOR, TTY detection.
+        <a href="https://clig.dev/">https://clig.dev/</a>
+      </li>
+      <li id="c-okabe-ito">
+        Okabe &amp; Ito, "Color Universal Design (CUD): How to make figures and presentations that are
+        friendly to colorblind people." Reference for the canonical colorblind-safe 8-color palette.
+        <a href="https://jfly.uni-koeln.de/color/">https://jfly.uni-koeln.de/color/</a>
+      </li>
+      <li id="c-wcag-contrast">
+        W3C WCAG 2.1, Success Criterion 1.4.3 "Contrast (Minimum)" and 1.4.6 "Contrast (Enhanced)."
+        <a href="https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html">https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html</a>
+      </li>
+      <li id="c-vim-a11y">
+        Vim accessibility — see the "vim-better-default" community and discussions on vimspeak / vimacs.
+        <a href="https://github.com/vim/vim/issues/4360">https://github.com/vim/vim/issues/4360</a> (representative discussion of vim screen-reader behavior)
+      </li>
+      <li id="c-12factor">
+        12-Factor App, factor XI "Logs" — treat logs as event streams, write to stdout, no formatting that
+        couples to a terminal.
+        <a href="https://12factor.net/logs">https://12factor.net/logs</a>
+      </li>
+      <li id="c-debian-a11y">
+        Debian Accessibility Project — long-running effort to ensure command-line installers and prompts
+        work with screen readers (Brltty, Speakup, Orca).
+        <a href="https://www.debian.org/devel/debian-accessibility/">https://www.debian.org/devel/debian-accessibility/</a>
+      </li>
+      <li id="c-ratatui-a11y">
+        Ratatui accessibility tracking — community discussions of screen-reader behavior with terminal UIs.
+        <a href="https://github.com/ratatui-org/ratatui/issues/1004">https://github.com/ratatui-org/ratatui/issues/1004</a>
+        (representative thread; see also the broader TUI accessibility tag)
+      </li>
+      <li id="c-emacspeak">
+        Emacspeak — the original "complete audio desktop" model for terminal accessibility via sidecar audio
+        announcements. Foundational for the <code>--announce</code> idea.
+        <a href="https://emacspeak.sourceforge.net/">https://emacspeak.sourceforge.net/</a>
+      </li>
+      <li id="c-wcag-flash">
+        W3C WCAG 2.1, Success Criterion 2.3.1 "Three Flashes or Below Threshold."
+        <a href="https://www.w3.org/WAI/WCAG21/Understanding/three-flashes-or-below-threshold.html">https://www.w3.org/WAI/WCAG21/Understanding/three-flashes-or-below-threshold.html</a>
+      </li>
+      <li id="c-clap-color">
+        clap-rs color and styling — discussion of when CLI tools should and shouldn't emit ANSI by default.
+        <a href="https://docs.rs/clap/latest/clap/builder/struct.Styles.html">https://docs.rs/clap/latest/clap/builder/struct.Styles.html</a>
+        and the no_color crate: <a href="https://crates.io/crates/supports-color">https://crates.io/crates/supports-color</a>
+      </li>
+      <li id="c-axe">
+        axe-core — open-source accessibility testing library; the de-facto standard for automated WCAG
+        checks. Recommended for mdbook output validation in CI.
+        <a href="https://github.com/dequelabs/axe-core">https://github.com/dequelabs/axe-core</a>
+      </li>
+      <li id="c-no-color">
+        no-color.org — the informal standard for the <code>NO_COLOR</code> environment variable.
+        <a href="https://no-color.org/">https://no-color.org/</a>
+      </li>
+      <li id="c-apple-hig-a11y">
+        Apple Human Interface Guidelines — Accessibility, in particular the "Do not rely on color alone"
+        guidance and contrast requirements for macOS interfaces (including Terminal.app).
+        <a href="https://developer.apple.com/design/human-interface-guidelines/accessibility">https://developer.apple.com/design/human-interface-guidelines/accessibility</a>
+      </li>
+      <li id="c-redhat-a11y">
+        Red Hat command-line accessibility guidelines — patterns for installer prompts, screen-reader
+        compatibility, and high-contrast text-mode rendering.
+        <a href="https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/configuring_basic_system_settings/assembly_configuring-accessibility-services_configuring-basic-system-settings">https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/configuring_basic_system_settings/assembly_configuring-accessibility-services_configuring-basic-system-settings</a>
+      </li>
+    </ol>
+
+    <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+    <p style="font-size:0.85rem;color:var(--fg-faint)">
+      Sibling perspectives: <a href="./agent-vim-power-user.html">vim-power-user</a> ·
+      <a href="./agent-onboarding-novice.html">onboarding-novice</a> ·
+      <a href="./agent-cli-unix-purist.html">cli-unix-purist</a> ·
+      <a href="./agent-visual-designer.html">visual-designer</a>.
+      Locked decisions this brief refines (does not break):
+      <a href="../../ux-design.html#a11y">UX accessibility commitments</a>,
+      <a href="../../ux-design.html#cli">CLI universal flags</a>,
+      <a href="../../ux-design.html#tui">TUI behaviors</a>.
+    </p>
+  </section>
+</main>
+</body>
+</html>

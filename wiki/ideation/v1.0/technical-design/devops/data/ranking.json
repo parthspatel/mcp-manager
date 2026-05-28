@@ -1,0 +1,100 @@
+{
+  "title": "How each devops stance scores against the v1.0 priorities. Drag the sliders to re-weight.",
+  "options": [
+    "agent-nix-purist",
+    "agent-distro-packager",
+    "agent-sre-hawk",
+    "agent-supply-chain-sec",
+    "agent-curl-installer-defender"
+  ],
+  "criteria": [
+    { "key": "reproducibility",       "label": "Reproducibility",                       "weight": 0.15 },
+    { "key": "install_friction",      "label": "Install friction (lower better)",       "weight": 0.20 },
+    { "key": "supply_chain",          "label": "Supply-chain hygiene",                  "weight": 0.20 },
+    { "key": "observability",         "label": "Observability / debuggability",         "weight": 0.15 },
+    { "key": "platform_coverage",     "label": "macOS + Linux coverage",                "weight": 0.15 },
+    { "key": "uninstall_cleanliness", "label": "Uninstall cleanliness",                 "weight": 0.15 }
+  ],
+  "scores": {
+    "agent-nix-purist": {
+      "reproducibility":       5,
+      "install_friction":      2,
+      "supply_chain":          5,
+      "observability":         3,
+      "platform_coverage":     4,
+      "uninstall_cleanliness": 5,
+      "_evidence": {
+        "reproducibility":       ["../agent-nix-purist.html#design"],
+        "install_friction":      ["../agent-nix-purist.html#arguments"],
+        "supply_chain":          ["../agent-nix-purist.html#design"],
+        "observability":         ["../agent-nix-purist.html#arguments"],
+        "platform_coverage":     ["../agent-nix-purist.html#design"],
+        "uninstall_cleanliness": ["../agent-nix-purist.html#design"]
+      }
+    },
+    "agent-distro-packager": {
+      "reproducibility":       4,
+      "install_friction":      3,
+      "supply_chain":          4,
+      "observability":         4,
+      "platform_coverage":     5,
+      "uninstall_cleanliness": 5,
+      "_evidence": {
+        "reproducibility":       ["../agent-distro-packager.html#arguments"],
+        "install_friction":      ["../agent-distro-packager.html#design"],
+        "supply_chain":          ["../agent-distro-packager.html#arguments"],
+        "observability":         ["../agent-distro-packager.html#arguments"],
+        "platform_coverage":     ["../agent-distro-packager.html#design"],
+        "uninstall_cleanliness": ["../agent-distro-packager.html#design"]
+      }
+    },
+    "agent-sre-hawk": {
+      "reproducibility":       3,
+      "install_friction":      3,
+      "supply_chain":          4,
+      "observability":         5,
+      "platform_coverage":     4,
+      "uninstall_cleanliness": 4,
+      "_evidence": {
+        "reproducibility":       ["../agent-sre-hawk.html#arguments"],
+        "install_friction":      ["../agent-sre-hawk.html#design"],
+        "supply_chain":          ["../agent-sre-hawk.html#vs-supply-chain-sec"],
+        "observability":         ["../agent-sre-hawk.html#design"],
+        "platform_coverage":     ["../agent-sre-hawk.html#design-journald"],
+        "uninstall_cleanliness": ["../agent-sre-hawk.html#design-uninstall"]
+      }
+    },
+    "agent-supply-chain-sec": {
+      "reproducibility":       5,
+      "install_friction":      3,
+      "supply_chain":          5,
+      "observability":         3,
+      "platform_coverage":     4,
+      "uninstall_cleanliness": 5,
+      "_evidence": {
+        "reproducibility":       ["../agent-supply-chain-sec.html#design"],
+        "install_friction":      ["../agent-supply-chain-sec.html#design"],
+        "supply_chain":          ["../agent-supply-chain-sec.html#design"],
+        "observability":         ["../agent-supply-chain-sec.html#vs-sre-hawk"],
+        "platform_coverage":     ["../agent-supply-chain-sec.html#design"],
+        "uninstall_cleanliness": ["../agent-supply-chain-sec.html#design"]
+      }
+    },
+    "agent-curl-installer-defender": {
+      "reproducibility":       3,
+      "install_friction":      5,
+      "supply_chain":          4,
+      "observability":         3,
+      "platform_coverage":     5,
+      "uninstall_cleanliness": 4,
+      "_evidence": {
+        "reproducibility":       ["../agent-curl-installer-defender.html#design"],
+        "install_friction":      ["../agent-curl-installer-defender.html#design"],
+        "supply_chain":          ["../agent-curl-installer-defender.html#vs-supply-chain-sec"],
+        "observability":         ["../agent-curl-installer-defender.html#vs-sre-hawk"],
+        "platform_coverage":     ["../agent-curl-installer-defender.html#design"],
+        "uninstall_cleanliness": ["../agent-curl-installer-defender.html#design"]
+      }
+    }
+  }
+}

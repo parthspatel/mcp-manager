@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crypto Pedant — Security deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">security · crypto-pedant</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">security overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Crypto Pedant's Security</h1>
+  <p class="lede">
+    ed25519 + SHA-256 + HMAC-SHA-256. No hand-rolled crypto. Algorithm-agility envelopes so we can rotate primitives without re-cutting binaries. Replay protection by construction. TUF-lite that documents <em>exactly</em> which TUF roles we omit and why. Key rotation as a planned operation, not a fire drill.
+  </p>
+
+  <p>
+    <span class="evidence-badge">ed25519 (RFC 8032)</span>
+    <span class="evidence-badge">SHA-256 (FIPS 180-4)</span>
+    <span class="evidence-badge">HMAC-SHA-256 (RFC 2104)</span>
+    <span class="evidence-badge">TUF reference spec</span>
+    <span class="evidence-badge">minisign · cosign · sigstore</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments</a>
+        <ul>
+          <li><a href="#vs-red-team">vs. red-team</a></li>
+          <li><a href="#vs-sandboxing-veteran">vs. sandboxing-veteran</a></li>
+          <li><a href="#vs-secrets-architect">vs. secrets-architect</a></li>
+          <li><a href="#vs-audit-compliance">vs. audit-compliance</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design</a>
+        <ul>
+          <li><a href="#design-tuf-lite">TUF-lite spec</a></li>
+          <li><a href="#design-envelope">Algorithm-agility envelope</a></li>
+          <li><a href="#design-canonical">Canonical JSON for hashing</a></li>
+          <li><a href="#design-rotation">Key rotation timeline</a></li>
+          <li><a href="#design-secrets">Secrets at rest</a></li>
+          <li><a href="#design-audit">Audit hash chain</a></li>
+          <li><a href="#design-supply-chain">Supply-chain pinning</a></li>
+          <li><a href="#design-binaries">Binary signing</a></li>
+          <li><a href="#design-ipc">IPC and root-of-trust prompt</a></li>
+        </ul>
+      </li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <h3>The pedantry, plainly</h3>
+    <p>
+      The v1.0 spec made the only two big calls correctly: it picked an established asymmetric primitive (ed25519 via minisign<a class="citation-ref" href="#cite-minisign">[1]</a>) and a Merkle-ish trust manifest (TUF-lite<a class="citation-ref" href="#cite-tuf-spec">[2]</a>). That's the part I don't have to argue. What I <em>do</em> have to argue is that the spec is silent on the details that distinguish a system the EFF would link to from a system that gets a CVE in eighteen months: <em>signing-envelope schema</em>, <em>replay window</em>, <em>canonical encoding of the bytes you're signing</em>, <em>algorithm-agility</em>, and a <em>written</em> key-rotation runbook. Those are five places where amateurs lose and where the literature has unambiguous answers.
+    </p>
+
+    <h3>The Latacora rule</h3>
+    <p>
+      <em>If it's not in "Cryptographic Right Answers,"<a class="citation-ref" href="#cite-latacora">[3]</a> we don't ship it.</em> That's not a rhetorical flourish — it's a checklist. The current Latacora answers for the operations we need are: ed25519 for signing, SHA-256 (or SHA-512/256) for hashing, HMAC-SHA-256 for MACs, ChaCha20-Poly1305 or AES-GCM for authenticated encryption, and Argon2id for password KDF. We use those exact primitives or we have a written justification for the deviation. We do not invent. We do not "improve." If a future Latacora update flips an answer, we have the algorithm-agility envelope ready to flip with it without a wire-format break.
+    </p>
+
+    <h3>The TUF-lite caveat the spec elides</h3>
+    <p>
+      "TUF-lite" sounds harmless but it is a load-bearing claim. Full TUF<a class="citation-ref" href="#cite-tuf-spec">[2]</a> defines five top-level roles — <em>root</em>, <em>targets</em>, <em>snapshot</em>, <em>timestamp</em>, plus optional <em>delegations</em> — each with a separate keypair, separate threshold, and separate expiration. Each role exists to defend a specific attack: <em>root</em> rotates keys; <em>targets</em> authorizes file hashes; <em>snapshot</em> defends against mix-and-match attacks; <em>timestamp</em> defends against freeze attacks. v1.0 collapses these into a single signed <code>trust.toml</code>. That is a defensible choice for our threat model (one publisher, low-frequency updates) <strong>only if we explicitly enumerate which attacks we accept</strong>. I want that enumeration in the docs, not implied by silence. A future v1.1 should add at minimum a separate <em>timestamp</em> role (a short-lived second signature attesting "this <code>trust.toml</code> was current as of X") because it is cheap and shuts down freeze attacks completely.
+    </p>
+
+    <h3>Replay, freshness, and the offline edge</h3>
+    <p>
+      Every signed manifest we issue MUST carry both <code>signed_at</code> (timestamp) and <code>expires_at</code> (TTL ceiling). The verifier checks <code>now &lt; expires_at</code> and emits a warning if <code>signed_at</code> is older than the configured staleness threshold. The v1.0 spec mentions "7-day TTL" but doesn't name the field that carries it nor specify the precise verifier behavior. We need: parse → verify signature → verify <code>now &gt;= signed_at - skew</code> → verify <code>now &lt; expires_at</code> → verify <code>version &gt; previous_version</code>. All four checks. The last one — monotonic version — is the one teams forget, and it is exactly what defends against an attacker replaying an old-but-still-valid <code>trust.toml</code> that contains a since-rotated-out compromised key.
+    </p>
+
+    <h3>Hand-rolled primitive count: target zero</h3>
+    <p>
+      I have read enough security postmortems<a class="citation-ref" href="#cite-nist-keymgmt">[4]</a> to set an internal budget: <strong>zero bytes of custom cryptographic code in v1.0</strong>. Every primitive is a thin Rust binding around an audited C library or a maintained pure-Rust crate. Specifically: <code>minisign-verify</code><a class="citation-ref" href="#cite-minisign">[1]</a> for ed25519 + BLAKE2b (its built-in pre-hash); <code>sha2</code> (the RustCrypto crate) for SHA-256; <code>ring</code> (or the OS keychain) for HMAC; <code>secrecy</code> + <code>zeroize</code> for in-memory carriers. If we ever need to verify a cosign signature, we shell out to the <code>cosign</code> binary<a class="citation-ref" href="#cite-sigstore">[5]</a> rather than try to reproduce its verification logic ourselves. Subprocess invocation is fine; "I'll write a quick X.509 parser" is not.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments</h2>
+
+    <h3 id="vs-red-team">vs. red-team</h3>
+    <p>
+      We agree more than we differ. Red-team wants default-deny on every interface; I want default-deny on every <em>cryptographic decision</em>. Where we'll friction: red-team will probably push for <em>fail-closed</em> on every trust manifest staleness, on the grounds that a fail-open verifier is an attacker's playground. I'm sympathetic, but a strict fail-closed posture turns "user's laptop spent the weekend offline" into "every <code>mcpm</code> command errors out." The pedant's compromise is <em>fail-soft on the cache, fail-closed on the install</em>:
+    </p>
+    <ul>
+      <li>If <code>trust.toml</code> is stale (past <code>expires_at</code>) but we already have it cached, we still honor it for read-only operations (<code>mcpm list</code>, <code>mcpm exec</code>) and emit a structured warning.</li>
+      <li>If <code>trust.toml</code> is stale and the user runs <code>mcpm install</code> or <code>mcpm update</code> — operations that change trust state — we refuse and tell them to run <code>mcpm trust refresh</code>.</li>
+      <li>If <code>trust.toml</code> is past <code>expires_at + grace_window</code> (default 30 days), we refuse all signature verifications. This is the "the publisher has been silent for a month; something is wrong" tripwire.</li>
+    </ul>
+    <p>
+      The other place red-team will push: <em>no exceptions</em> for the baked-in-fallback mode. I'll defend an exception specifically for first-launch offline use because the alternative is unusable: a brand-new mcpmanagerd binary already contains the publisher's ed25519 root pubkey (embedded at compile time, in <code>const ROOT_PUBKEY: [u8; 32] = …</code>), so accepting the baked-in pubkey set is exactly accepting the binary you already trusted enough to execute. The TOFU window collapses to "you ran the installer." We log <code>[root].mode = "baked-in-fallback"</code> and warn every CLI invocation until the first successful refresh — that's the visible UX cost that keeps users honest.
+    </p>
+
+    <h3 id="vs-sandboxing-veteran">vs. sandboxing-veteran</h3>
+    <p>
+      Sandboxing-veteran will tell us that no amount of cryptography saves us from a malicious MCP server that we cryptographically verified, signed by a publisher who just turned hostile. I agree. <em>Cryptography says who; sandboxing says what.</em> They're orthogonal layers and we need both. Where I'll push back is on the temptation to use cryptographic primitives <em>inside</em> the sandbox to do things they don't need to do — e.g., signing inter-process messages between mcpmanagerd and a sandboxed server, which adds latency, key-management complexity, and a new key-storage surface without buying real protection (the kernel already isolates these processes via UID and the bubblewrap mount namespace<a class="citation-ref" href="#cite-bubblewrap">[6]</a>). The UDS socket with SO_PEERCRED is the right primitive; HMACing every JSON-RPC frame would be cargo-culted-from-network-protocols crypto and we shouldn't do it.
+    </p>
+    <p>
+      One area where we genuinely overlap and should coordinate: <em>seccomp profiles must be content-addressed</em>. If a server's sandbox policy is stored on disk (rather than synthesized at runtime), its hash goes into the lockfile alongside the package checksum so a swapped-out policy file is detected as a tamper event. That's a sandboxing concern but it lives in the trust-and-hashing layer, which is mine.
+    </p>
+
+    <h3 id="vs-secrets-architect">vs. secrets-architect</h3>
+    <p>
+      Secrets-architect will own the keyring trait and the in-process secret carriers; I won't fight on those boundaries. Where I will pedant: <em>what cryptography is the OS keyring using under the hood, and do we trust it?</em>
+    </p>
+    <ul>
+      <li><strong>macOS Keychain</strong>: items stored in the user keychain are encrypted with AES-256 under a key derived from the user's login password via PBKDF2-HMAC-SHA256 (with a per-keychain salt) and protected by the user keychain's auto-locking behavior<a class="citation-ref" href="#cite-keychain-services">[7]</a>. That's defensible. The pedantic concern is: what's the per-item access ACL? We must set <code>kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly</code> — never <code>kSecAttrAccessibleAlways</code>, never iCloud-synced.</li>
+      <li><strong>Linux libsecret / GNOME Keyring</strong>: the default backend uses AES-128-CBC + HMAC-SHA256, with the master key derived from the user's login password via PBKDF2-SHA256. Newer KWallet uses BlowFish (we should warn). The pedantic concern: if the user runs headless (no GNOME session, no D-Bus), <code>libsecret</code> falls through to "in-memory only" or fails outright. Our keyring backend must <em>detect</em> headless and refuse to start rather than silently storing secrets in /tmp.</li>
+    </ul>
+    <p>
+      Secrets-architect will probably propose env-var passthrough as a graceful-degradation mode for headless Linux. I'll accept that <em>only</em> with a startup-time audit-log entry <code>secret.backend.degraded</code> so the operator knows the keyring is not in use. Silent degradation is how secrets end up in shell history.
+    </p>
+
+    <h3 id="vs-audit-compliance">vs. audit-compliance</h3>
+    <p>
+      Audit-compliance will want a tamper-evident audit log; I want the same thing. We will negotiate one thing: <em>which hash algorithm</em>. I want SHA-256. Audit-compliance might propose SHA-512 for "more bits" or BLAKE3 for speed. Both are reasonable, but the pedant's reasoning chooses SHA-256:
+    </p>
+    <ul>
+      <li>SHA-256 is FIPS 180-4<a class="citation-ref" href="#cite-fips-180">[8]</a> and is the algorithm in every compliance framework I will ever be audited against.</li>
+      <li>SHA-512 buys us nothing at our scale (a few thousand events/day per user). The audit log is not a content-addressable store for petabytes of objects.</li>
+      <li>BLAKE3 is faster but its standardization story is weaker. We don't have a throughput problem; we have an explainability problem. SHA-256 explains in one line.</li>
+    </ul>
+    <p>
+      The hash-chain construction itself: each line <code>e_n</code> includes <code>prev_hash = SHA-256(canonical_json(e_{n-1}))</code>. The first line of each daily file includes the previous day's terminal hash as <code>prev_day_hash</code>. That gives us cross-file tamper-evidence without requiring a single forever-growing file.
+    </p>
+    <p>
+      Where audit-compliance and I might diverge: they may want every audit line individually signed. I'll argue against that for v1.0 — the per-line ed25519 verification cost (~50&micro;s) is fine, but the <em>key</em> would have to live in mcpmanagerd's process memory continuously, which is a new attack surface. Instead: sign the <em>terminal hash</em> of each daily rotation file when it closes (one signature per day, embedded in the next day's first record). That gives us tamper-evidence without a live signing key.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3 id="design-tuf-lite">TUF-lite spec — exactly what we keep and what we omit</h3>
+
+    <p>
+      Full TUF<a class="citation-ref" href="#cite-tuf-spec">[2]</a> defines four mandatory roles. We collapse them and we say so out loud:
+    </p>
+
+    <table class="compare">
+      <thead><tr><th>TUF role</th><th>Purpose</th><th>v1.0 status</th><th>Deviation note</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>root</code></td>
+          <td>Holds the public keys of all other roles; rotates trust</td>
+          <td><strong>Kept</strong>, but combined</td>
+          <td>v1.0 <code>trust.toml</code>'s <code>[root]</code> table holds the single publisher ed25519 pubkey. Rotation requires a new signed <code>trust.toml</code> whose old signature still verifies and whose <code>root_pubkey</code> field has changed. Clients must accept the new root iff (a) the file is signed by the <em>old</em> root, (b) version is monotonic, (c) within freshness window.</td>
+        </tr>
+        <tr>
+          <td><code>targets</code></td>
+          <td>Authorizes file hashes (packages)</td>
+          <td><strong>Kept</strong>, in the same file</td>
+          <td>Per-package signatures (minisign or cosign) live alongside each package. The <code>trust.toml</code> binds <em>which registries are authoritative</em>; per-package <code>.minisig</code> files bind <em>which package bytes are authentic</em>. Two-layer trust.</td>
+        </tr>
+        <tr>
+          <td><code>snapshot</code></td>
+          <td>Pins the current set of versioned metadata files; defends against mix-and-match</td>
+          <td><strong>Omitted in v1.0</strong></td>
+          <td>We have one metadata file (<code>trust.toml</code>) so there is nothing to mix-and-match between. <em>If</em> a future version splits trust into multiple per-registry files, we MUST add a snapshot role to bind them.</td>
+        </tr>
+        <tr>
+          <td><code>timestamp</code></td>
+          <td>Short-lived signed assertion of "this is current"; defends against freeze attacks</td>
+          <td><strong>Omitted in v1.0; planned for v1.1</strong></td>
+          <td>Today, freeze attacks are mitigated only by the 7-day TTL on <code>trust.toml</code>. An attacker who controls the network can serve an old-but-valid <code>trust.toml</code> for up to its TTL. v1.1 will add a separately-signed <code>timestamp.toml</code> with hours-to-days TTL pointing at the current <code>trust.toml</code>'s hash.</td>
+        </tr>
+        <tr>
+          <td><code>delegations</code></td>
+          <td>Lets <code>targets</code> delegate to sub-publishers</td>
+          <td><strong>Omitted</strong>, no planned addition</td>
+          <td>Single-publisher model. If we ever federate, we revisit.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      Threats v1.0 TUF-lite <strong>does</strong> defend:
+    </p>
+    <ul>
+      <li>Arbitrary key trust (you cannot trust a registry pubkey not in <code>trust.toml</code>).</li>
+      <li>Tampered package bytes (per-package <code>.minisig</code> verification at install time).</li>
+      <li>Rollback to an older <code>trust.toml</code> (monotonic version check).</li>
+      <li>Indefinite serving of a stale <code>trust.toml</code> (7-day TTL with hard refusal after 30-day grace).</li>
+      <li>Key compromise <em>once detected</em> (rotation: publish a new <code>trust.toml</code> signed by the old key but with a new <code>root_pubkey</code>; clients with the old key validate the rotation and switch).</li>
+    </ul>
+
+    <p>
+      Threats v1.0 TUF-lite does <strong>not</strong> fully defend:
+    </p>
+    <ul>
+      <li><strong>Freeze attack within TTL window</strong>: an attacker who controls the network can pin clients to a known-stale <code>trust.toml</code> for up to 7 days. <em>Mitigation</em>: timestamp role in v1.1; until then, the TTL is the bound.</li>
+      <li><strong>Mix-and-match attacks</strong>: not applicable in v1.0 (single metadata file). Becomes applicable in v1.1 if we split files.</li>
+      <li><strong>Key compromise before detection</strong>: standard limitation of any signing system. Mitigated by short-lived keys and out-of-band revocation channel (the <code>revoked_keys</code> field, see below).</li>
+    </ul>
+
+    <h3 id="design-envelope">Algorithm-agility signing envelope</h3>
+
+    <p>
+      Every signature in the system uses the same envelope. This is the single most important pedantic intervention: it costs nothing today and saves a wire-format break the day NIST deprecates ed25519 in favor of ML-DSA<a class="citation-ref" href="#cite-nist-pqc">[9]</a>.
+    </p>
+
+    <pre><code>{
+  "v": 1,
+  "alg": "ed25519",            // explicit algorithm identifier
+  "key_id": "mcpm-root-2026a", // who signed (matches a key in trust.toml)
+  "signed_at": "2026-05-24T14:33:01Z",
+  "expires_at": "2026-05-31T14:33:01Z",
+  "payload_hash": "sha256:9f4e2d…",  // hash of canonical-JSON(payload)
+  "payload_hash_alg": "sha256",      // explicit hash algorithm
+  "sig": "&lt;base64 ed25519 signature over the canonical-JSON of all above fields except `sig`&gt;"
+}</code></pre>
+
+    <p>
+      Two layers of agility:
+    </p>
+    <ol>
+      <li><strong>Signature algorithm agility</strong> via <code>alg</code>: today <code>"ed25519"</code>; tomorrow possibly <code>"ed25519ph"</code> (pre-hashed), <code>"ml-dsa-65"</code>, or a hybrid scheme. Verifier dispatches on <code>alg</code> from a static allowlist baked into the binary.</li>
+      <li><strong>Hash algorithm agility</strong> via <code>payload_hash_alg</code>: today <code>"sha256"</code>; future possibilities <code>"sha512-256"</code>, <code>"sha3-256"</code>. Lockfile checksums use the same string prefix (e.g., <code>"sha256:9f4e2d…"</code>) so any future migration is a per-record opt-in.</li>
+    </ol>
+
+    <p>
+      The allowlist matters. A verifier that accepts <em>any</em> <code>alg</code> string the message claims is the textbook "alg=none JWT" bug<a class="citation-ref" href="#cite-jwt-alg-none">[10]</a>. Our allowlist for v1.0 is exactly <code>["ed25519"]</code>; <code>"none"</code>, <code>"hmac-sha256"</code>, and unknown values are rejected with a structured error and an audit-log entry <code>signature.alg.rejected</code>. The keyset is <em>tied</em> to the algorithm: the <code>trust.toml</code> stores each key with its <code>alg</code> field, and the verifier requires <code>envelope.alg == key.alg</code>.
+    </p>
+
+    <h3 id="design-canonical">Canonical JSON for hashing — the one no one gets right</h3>
+
+    <p>
+      "Hash this JSON" is ambiguous because JSON has multiple valid serializations of the same logical value (key order, whitespace, number formatting, escape choices for non-ASCII). If two implementations disagree on serialization, signatures verify on one platform and fail on another. We pin a single canonical form and document it. The closest existing standard is JCS (JSON Canonicalization Scheme, RFC 8785<a class="citation-ref" href="#cite-rfc-8785">[11]</a>), which we adopt.
+    </p>
+
+    <p>JCS in one paragraph (the rules we implement):</p>
+    <ul>
+      <li>Object keys sorted in code-point order (UTF-16 code units).</li>
+      <li>No insignificant whitespace.</li>
+      <li>Numbers serialized per ECMAScript <code>Number.prototype.toString()</code>: integers in plain form, floats in shortest-round-trip form, no leading zeros.</li>
+      <li>Strings escaped per RFC 8259 §7 with <em>only</em> the minimum required escapes (<code>\b \f \n \r \t \" \\</code> and <code>\uXXXX</code> for control characters &lt; U+0020).</li>
+      <li>No trailing newline. UTF-8 output.</li>
+    </ul>
+
+    <p>
+      For TOML (canonical config), we don't hash the TOML directly — we hash the <em>parsed value re-serialized as canonical JSON</em>. That's important: TOML formatting (comment placement, key ordering, table style) is preserved by <code>toml_edit</code> for human round-trips, but for the <em>hash</em> we need a unique encoding. The v1.0 spec's <code>prior_hash</code> field for <code>config.put</code> CAS and the lockfile's <code>checksum</code> field both use this rule: hash = <code>SHA-256(canonical-JSON(parsed-TOML))</code>.
+    </p>
+
+    <p>
+      The trust-gate hash for project configs follows the same construction. <code>trust.toml</code>'s per-project <code>config_hash</code> = <code>SHA-256(canonical-JSON(parsed(.mcp-manager.toml)))</code>. This means a user who only re-orders sections in their <code>.mcp-manager.toml</code> doesn't trigger a re-prompt; a user who actually changes semantics does.
+    </p>
+
+    <h3 id="design-rotation">Key rotation timeline (the runbook, written in advance)</h3>
+
+    <p>
+      The single biggest failure mode I see in projects that "have a signing key" is that the key has been on one person's USB drive for three years and nobody has ever tested a rotation. We pre-commit a written rotation schedule:
+    </p>
+
+    <table class="compare">
+      <thead><tr><th>Event</th><th>Cadence</th><th>Procedure</th></tr></thead>
+      <tbody>
+        <tr><td>Routine root-key rotation</td><td>Every 12 months</td><td>Generate <code>mcpm-root-YYYYa</code> on an offline machine; sign new <code>trust.toml</code> with the <em>outgoing</em> key listing both old and new pubkeys; clients accept the rotation; after 90 days, publish <code>trust.toml</code> that drops the old key.</td></tr>
+        <tr><td>Routine package-signing-key rotation</td><td>Every 6 months</td><td>Generate <code>mcpm-pkg-YYYYqN</code>; sign new <code>trust.toml</code> listing it; old key valid for verifying historical packages; new packages signed with new key.</td></tr>
+        <tr><td>Emergency rotation (suspected compromise)</td><td>Within 24h of detection</td><td>Add compromised <code>key_id</code> to <code>revoked_keys</code> array in <code>trust.toml</code>; publish new <code>trust.toml</code> signed by an uncompromised key; binary release with shortened TTL (24h) until normal cadence resumes.</td></tr>
+        <tr><td>Catastrophic rotation (root key lost / compromised)</td><td>Within 7 days</td><td>Out-of-band publication on GitHub release + website + Discord with new baked-in pubkey; users must reinstall from the curl script. This is the unavoidable cost of a single-root design; mitigated only by adding a threshold-signing setup in v2.0+.</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      <strong>Threshold signing for v2.0+ consideration.</strong> A single root key is a single point of failure. The TUF spec supports <em>m-of-n threshold</em> signing for every role<a class="citation-ref" href="#cite-tuf-spec">[2]</a>. We aren't doing it in v1.0 (operational complexity is real and we don't yet have a second trusted publisher), but the envelope schema's <code>sig</code> field is deliberately string-typed rather than fixed-length so a future schema can carry <code>sig: ["base64sig1", "base64sig2"]</code> with a <code>threshold</code> field in the corresponding <code>key</code> entry. The wire format won't break.
+    </p>
+
+    <p>
+      <strong>Key escrow.</strong> We will not escrow the root key with a third party — that's a phishing target. We will hold the root key offline on an air-gapped machine controlled by the maintainer, with a paper backup in a sealed envelope. This is identical to the operational posture of <a href="#cite-tuf-spec">TUF</a>'s reference deployment for PyPI<a class="citation-ref" href="#cite-pep-458">[12]</a>.
+    </p>
+
+    <p>
+      <strong>Revocation.</strong> <code>trust.toml</code> carries a <code>revoked_keys</code> array (list of <code>key_id</code> strings). A signed manifest whose <code>key_id</code> appears in <code>revoked_keys</code> is rejected even if the signature itself verifies. Revocation entries are sticky — once added, they never disappear from <code>trust.toml</code> (they accumulate). Clients with an old <code>trust.toml</code> that doesn't list the revocation are still protected by the freshness window — they can't be exploited indefinitely.
+    </p>
+
+    <h3 id="design-secrets">Secrets at rest — what the keyring is actually doing</h3>
+
+    <p>
+      I owe this section because secrets-architect will write the keyring trait but my section enumerates the cryptography happening one layer below. The user must be able to answer "what protects my GITHUB_TOKEN if my laptop is stolen?" without us shrugging.
+    </p>
+
+    <table class="compare">
+      <thead><tr><th>Platform</th><th>Backend</th><th>KDF (login → master)</th><th>Item encryption</th><th>Lock state</th></tr></thead>
+      <tbody>
+        <tr><td>macOS</td><td>Keychain Services (login keychain)</td><td>PBKDF2-HMAC-SHA256 over login password<a class="citation-ref" href="#cite-keychain-services">[7]</a></td><td>AES-256 (envelope) — per-item key wrapped by keychain master key</td><td>Locks on logout / sleep / configurable timeout</td></tr>
+        <tr><td>Linux (GNOME)</td><td>gnome-keyring via libsecret</td><td>PBKDF2-SHA256 (default 100k iterations)</td><td>AES-128-CBC + HMAC-SHA256 (encrypt-then-MAC)</td><td>Locks when D-Bus session ends</td></tr>
+        <tr><td>Linux (KDE)</td><td>KWallet via libsecret</td><td>Hash chain over login password (weaker)</td><td>BlowFish (legacy) or AES-256 (newer)</td><td>Per-wallet timeout</td></tr>
+        <tr><td>Linux (headless)</td><td>None safe</td><td>—</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Pedantic conclusions:
+    </p>
+    <ul>
+      <li>On macOS, set <code>kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly</code>. Never <code>kSecAttrAccessibleAlways</code>. Never iCloud Keychain sync (we don't want our secrets in your other devices' keychains without consent).</li>
+      <li>On Linux, prefer GNOME keyring; KWallet acceptable; detect headless and refuse with a clear error (<code>error: no secret backend available; install gnome-keyring or libsecret-1-0, or set MCPM_ALLOW_ENVVAR_BACKEND=1 to use env-passthrough mode</code>).</li>
+      <li>In-process: every plaintext secret travels in <code>secrecy::SecretString</code><a class="citation-ref" href="#cite-zeroize">[13]</a>. The <code>Drop</code> impl zeroes the backing memory. No <code>Debug</code>, no <code>Display</code>, no <code>Serialize</code> for the inner bytes.</li>
+      <li>At the spawn syscall boundary, we set the env-var via <code>Command::env</code> and immediately drop the <code>SecretString</code>. The child process inherits the env; our address space loses the bytes within microseconds.</li>
+      <li>We never write a secret to swap-space. <code>mlock(2)</code> the <code>SecretString</code> backing buffer? In v1.0 no — most users run without elevated capabilities. In v1.1 we can add <code>mlock</code> as a feature flag for users who have <code>RLIMIT_MEMLOCK</code> headroom.</li>
+    </ul>
+
+    <h3 id="design-audit">Audit hash chain (SHA-256, daily rotation, terminal-signature)</h3>
+
+    <p>
+      Each audit-log line is a JSON object. The bytes that <em>land on disk</em> are minified JSON, one record per line (JSONL). The hash construction:
+    </p>
+
+    <pre><code>// line N of file YYYY-MM-DD.jsonl
+{
+  "v": 1,
+  "ts": "2026-05-24T19:15:02.413Z",
+  "event": "server.spawn",
+  "actor": { "kind": "client", "id": "zed-1.234.5", "pid": 84219 },
+  "server": "github-mcp",
+  "outcome": "ok",
+  "details": { "singleton": true, "client_id": "shared" },
+  "prev_hash": "sha256:&lt;hash of canonical-JSON of line N-1, or "genesis" if N=0&gt;",
+  "seq": N
+}</code></pre>
+
+    <p>
+      Verification: walk the file from line 0 to line N, recomputing <code>prev_hash</code> for each. Any mismatch indicates tampering (or corruption). At rotation time (midnight UTC), mcpmanagerd:
+    </p>
+    <ol>
+      <li>Closes the current day's file.</li>
+      <li>Computes <code>terminal_hash = SHA-256(canonical-JSON(last_line))</code>.</li>
+      <li>Signs <code>terminal_hash</code> with an audit-only ed25519 key (separate from package signing, kept in OS keyring, generated on first start).</li>
+      <li>Writes line 0 of the next day's file with <code>prev_day_hash = terminal_hash</code> and <code>prev_day_sig = &lt;base64 sig&gt;</code>.</li>
+    </ol>
+
+    <p>
+      This buys cross-file tamper evidence with a single signing operation per day. The signing key lives in the keyring (the same one storing user secrets, in its own namespace <code>dev.mcp-manager.audit-key/private</code>) so it's not in process memory continuously. We could go further (sign every record) but the cost/benefit isn't there at v1.0 scale. The current design lets a forensic auditor say: "the chain from day X to day Y is intact and each daily rotation's terminal hash is signed by a key the user can verify against the keyring's audit-key entry."
+    </p>
+
+    <h3 id="design-supply-chain">Supply-chain pinning — Cargo.lock and the canonical entry hash</h3>
+
+    <p>
+      Our own binary is built reproducibly from a Cargo workspace. Reproducibility requires that <code>Cargo.lock</code> pins every transitive dependency by exact version and SHA-256 of the published crate tarball. <code>cargo</code> does this for us. Where we layer in <em>extra</em> protection:
+    </p>
+    <ul>
+      <li><strong>Vendored or pinned <code>Cargo.lock</code> in releases.</strong> Each release tarball ships its <code>Cargo.lock</code> alongside the binary. Users (or distros) building from source can verify they used the exact dep set we used.</li>
+      <li><strong><code>cargo-vet</code> or <code>cargo-deny</code> in CI</strong><a class="citation-ref" href="#cite-cargo-vet">[14]</a>. <code>cargo-vet</code> requires a human-recorded review for every dependency upgrade; <code>cargo-deny</code> enforces license and CVE policies. For the v1.0 dependency set (around 200 transitive crates), the one-time setup of <code>cargo-vet</code> is a weekend; the ongoing cost is one extra review note per dep bump.</li>
+      <li><strong>SBOM emission</strong>. Every release publishes a CycloneDX SBOM file (auto-generated by <code>cargo-cyclonedx</code>) listing every dep, its version, its license, and its checksum. This is the file SREs and security teams will ask for.</li>
+      <li><strong>No <code>build.rs</code> code execution at install time.</strong> We compile to a single static binary; users never run <code>cargo build</code>. The build-time supply-chain attack surface is moved entirely to <em>our</em> CI environment, which is isolated and minimal.</li>
+    </ul>
+
+    <p>
+      For runtime-fetched dependencies (Python via uvx, Node via bun): we depend on the upstream package manager's own integrity guarantees. uvx pins by hash via the lockfile mechanism; bun does the same. We re-verify the <em>final package tarball</em> against the registry's per-package <code>.minisig</code> file before handing it to uvx/bun. Belt-and-suspenders.
+    </p>
+
+    <h3 id="design-binaries">Binary code signing</h3>
+
+    <p>
+      Distinct from package signing. This is "is the <code>mcpmanagerd</code> binary itself authentic?"
+    </p>
+    <ul>
+      <li><strong>macOS.</strong> Apple Developer ID signature + notarization<a class="citation-ref" href="#cite-apple-notarization">[15]</a>. Without notarization, Gatekeeper refuses to launch from a curl install. The notarization ticket is RSA-2048 + SHA-256 under the hood (not our choice, Apple's). Worth noting in our docs that this is one place where the algorithm choice is Apple's, not ours.</li>
+      <li><strong>Linux.</strong> ed25519 via <code>minisign</code> on the release tarball. The publisher key is the same one that signs <code>trust.toml</code> (or a separate <code>mcpm-release-YYYYqN</code> key — actually, separating release-signing from trust-signing is good hygiene; let's do separate keys). Both <code>.tar.gz</code> and <code>SHA256SUMS</code> are signed. Users can verify with <code>minisign -V -P &lt;pubkey&gt; -m mcp-manager-1.0.0-x86_64-unknown-linux-gnu.tar.gz</code>. The installer script does this automatically against the baked-in pubkey<a class="citation-ref" href="#cite-curlpipe">[16]</a>.</li>
+      <li><strong>Why ed25519 over RSA-PSS for Linux?</strong> Smaller keys, faster verification, no parameter footguns (no choice of padding scheme, no hash-function choice, no MGF1 misconfig). ed25519 has exactly one mode of operation. RSA has dozens, half of which are broken in subtle ways. Latacora<a class="citation-ref" href="#cite-latacora">[3]</a> says ed25519; we say ed25519.</li>
+    </ul>
+
+    <h3 id="design-ipc">IPC auth and the cryptographic root-of-trust prompt</h3>
+
+    <p>
+      The IPC layer is one of the few places I think the v1.0 spec is exactly right. SO_PEERCRED (Linux) and LOCAL_PEERCRED (macOS) gives kernel-attested UID; we trust the kernel; no shared secrets exchanged. There's no cryptography in the IPC layer at all, and that's the correct outcome. I would not introduce HMAC framing, channel binding, or per-connection nonces — they would add complexity and attack surface without addressing any real adversary model in a single-user setting.
+    </p>
+
+    <p>
+      The one cryptographic UX moment that matters: <strong>first launch</strong>. The user's first <code>mcpm init</code> establishes the root of trust. We need a prompt that is honest about what's happening without being incomprehensible. Draft text:
+    </p>
+
+    <pre><code>$ mcpm init
+
+mcp-manager establishes a chain of trust:
+  - The binary you just ran is signed by the mcp-manager publisher key.
+  - That key authorizes the registry pubkeys baked into this binary.
+  - Those registry pubkeys authorize the MCP server packages you install.
+
+Publisher key fingerprint (baked in this binary):
+  RWQf6LRCGA9i23aNZqKEDxzZ6bC8x4Pw…  (ed25519, key_id mcpm-root-2026a)
+
+You can verify this fingerprint matches the one on:
+  https://mcp-manager.dev/keys/2026a
+
+Proceed? [Y/n]</code></pre>
+
+    <p>
+      Three honest things in that prompt: (1) we name the fingerprint, not just "a key"; (2) we name the algorithm; (3) we point to an out-of-band verification channel (the website over HTTPS). The user who skips verification at least knows what they skipped. Power users can compare the fingerprint against a GPG-signed announcement we make to the GitHub releases page.
+    </p>
+
+    <h3>Putting it all together</h3>
+
+    <p>
+      Eight crypto primitives, all standard, all bound by explicit envelopes:
+    </p>
+    <ol>
+      <li><strong>ed25519</strong> (RFC 8032<a class="citation-ref" href="#cite-rfc-8032">[17]</a>) — every signature: trust manifest, per-package, audit terminal-hash, binary release.</li>
+      <li><strong>SHA-256</strong> (FIPS 180-4<a class="citation-ref" href="#cite-fips-180">[8]</a>, RFC 6234<a class="citation-ref" href="#cite-rfc-6234">[18]</a>) — every hash: lockfile checksum, prior_hash CAS, audit chain, config trust gate.</li>
+      <li><strong>HMAC-SHA-256</strong> (RFC 2104<a class="citation-ref" href="#cite-rfc-2104">[19]</a>) — keyring internals (libsecret); we don't construct HMACs ourselves but require the keyring backend to use HMAC-SHA-256 or stronger.</li>
+      <li><strong>PBKDF2-SHA256 / Argon2id</strong> — keyring login-password derivation (OS-provided; we don't choose this but document it).</li>
+      <li><strong>AES-256-GCM</strong> — OS keyring item encryption (OS-provided).</li>
+      <li><strong>BLAKE2b</strong> — minisign's pre-hash (transparent to us; minisign builds it in).</li>
+      <li><strong>JCS (RFC 8785<a class="citation-ref" href="#cite-rfc-8785">[11]</a>)</strong> — canonicalization of every signed payload.</li>
+      <li><strong>X.509 / RSA-2048</strong> — macOS notarization (Apple's choice, not ours).</li>
+    </ol>
+
+    <p>
+      Every one of those has a published specification, multiple audited implementations, and a known threat model. We sit at the top of the stack and compose them; we never reach inside.
+    </p>
+
+    <p>
+      Three properties any future contributor must preserve:
+    </p>
+    <ul>
+      <li><strong>Algorithm names appear in signed messages.</strong> Never trust a verifier that picks the algorithm from context.</li>
+      <li><strong>Timestamps and expirations appear in signed messages.</strong> Never trust freshness from the transport.</li>
+      <li><strong>The bytes we hash are canonical.</strong> JCS for JSON, parse-then-canonicalize for TOML, no string-concat hashing of structured data.</li>
+    </ul>
+
+    <p>
+      If we hold the line on those three, every other security claim in this document degrades gracefully when something inevitably surprises us.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+
+    <ol>
+      <li id="cite-minisign">
+        <strong>minisign — small, secure signing tool by Frank Denis.</strong>
+        ed25519 with a built-in BLAKE2b pre-hash; the verifier is a few hundred lines of code.
+        <div class="src"><a href="https://jedisct1.github.io/minisign/">https://jedisct1.github.io/minisign/</a></div>
+      </li>
+      <li id="cite-tuf-spec">
+        <strong>The Update Framework (TUF) specification.</strong>
+        Roles (root/targets/snapshot/timestamp), threshold signing, key rotation procedures, and the threat model TUF is engineered against.
+        <div class="src"><a href="https://theupdateframework.io/specification/latest/">https://theupdateframework.io/specification/latest/</a></div>
+      </li>
+      <li id="cite-latacora">
+        <strong>Cryptographic Right Answers — Latacora (2018, with updates).</strong>
+        The canonical "which primitive should I use" cheat sheet. ed25519, SHA-256, HMAC-SHA-256, ChaCha20-Poly1305, Argon2id.
+        <div class="src"><a href="https://www.latacora.com/blog/2018/04/03/cryptographic-right-answers/">https://www.latacora.com/blog/2018/04/03/cryptographic-right-answers/</a></div>
+      </li>
+      <li id="cite-nist-keymgmt">
+        <strong>NIST SP 800-57 — Recommendation for Key Management.</strong>
+        Key-rotation cadences, threshold-signing guidance, escrow vs. backup, and crypto-period definitions.
+        <div class="src"><a href="https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final">https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final</a></div>
+      </li>
+      <li id="cite-sigstore">
+        <strong>Sigstore / cosign documentation.</strong>
+        Keyless signing via OIDC + Fulcio + Rekor; the model we'd use if and when we go beyond minisign for OCI artifacts.
+        <div class="src"><a href="https://docs.sigstore.dev/cosign/overview/">https://docs.sigstore.dev/cosign/overview/</a></div>
+      </li>
+      <li id="cite-bubblewrap">
+        <strong>bubblewrap (bwrap) — unprivileged sandboxing for Linux.</strong>
+        Used as the primary isolation layer; orthogonal to but mentioned alongside cryptographic trust.
+        <div class="src"><a href="https://github.com/containers/bubblewrap">https://github.com/containers/bubblewrap</a></div>
+      </li>
+      <li id="cite-keychain-services">
+        <strong>Apple Keychain Services Programming Guide.</strong>
+        AES-256 item encryption, PBKDF2 master-key derivation, accessibility constants (<code>kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly</code>).
+        <div class="src"><a href="https://developer.apple.com/documentation/security/keychain_services">https://developer.apple.com/documentation/security/keychain_services</a></div>
+      </li>
+      <li id="cite-fips-180">
+        <strong>FIPS PUB 180-4 — Secure Hash Standard (SHS).</strong>
+        The normative reference for SHA-256.
+        <div class="src"><a href="https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf">https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf</a></div>
+      </li>
+      <li id="cite-nist-pqc">
+        <strong>NIST Post-Quantum Cryptography Standardization — ML-DSA (FIPS 204).</strong>
+        Future-direction reading. Why our algorithm-agility envelope matters: the day ed25519 is deprecated, ML-DSA is the named successor and we want to switch without breaking on-disk artifacts.
+        <div class="src"><a href="https://csrc.nist.gov/publications/detail/fips/204/final">https://csrc.nist.gov/publications/detail/fips/204/final</a></div>
+      </li>
+      <li id="cite-jwt-alg-none">
+        <strong>"None" algorithm vulnerability in JWT libraries — Auth0 advisory.</strong>
+        Cautionary tale for any verifier that dispatches on an <code>alg</code> field from the message itself.
+        <div class="src"><a href="https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/">https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/</a></div>
+      </li>
+      <li id="cite-rfc-8785">
+        <strong>RFC 8785 — JSON Canonicalization Scheme (JCS).</strong>
+        The serialization rules we adopt for "what bytes do we hash when we say 'sign this JSON.'"
+        <div class="src"><a href="https://www.rfc-editor.org/rfc/rfc8785">https://www.rfc-editor.org/rfc/rfc8785</a></div>
+      </li>
+      <li id="cite-pep-458">
+        <strong>PEP 458 — Securing PyPI downloads with TUF.</strong>
+        The reference deployment of TUF for a real package index; key ceremony, role separation, threshold signing in production.
+        <div class="src"><a href="https://peps.python.org/pep-0458/">https://peps.python.org/pep-0458/</a></div>
+      </li>
+      <li id="cite-zeroize">
+        <strong><code>zeroize</code> and <code>secrecy</code> Rust crates — RustCrypto.</strong>
+        In-memory secret carriers with <code>Drop</code>-time zeroing; the right primitives for plaintext-in-transit.
+        <div class="src"><a href="https://docs.rs/zeroize/latest/zeroize/">https://docs.rs/zeroize/latest/zeroize/</a></div>
+      </li>
+      <li id="cite-cargo-vet">
+        <strong>cargo-vet — Mozilla.</strong>
+        Human-recorded audit-trail for every dependency upgrade. The minimum viable supply-chain-review system for Rust projects.
+        <div class="src"><a href="https://mozilla.github.io/cargo-vet/">https://mozilla.github.io/cargo-vet/</a></div>
+      </li>
+      <li id="cite-apple-notarization">
+        <strong>Notarizing macOS software before distribution — Apple Developer.</strong>
+        The unavoidable step for any binary distributed outside the App Store; X.509 signature + Apple's notarization ticket.
+        <div class="src"><a href="https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution">https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution</a></div>
+      </li>
+      <li id="cite-curlpipe">
+        <strong>"curl | sh considered harmful" — discussions and mitigations.</strong>
+        Including signature verification inside the installer script, version-pinning, and reproducible-tarball strategies.
+        <div class="src"><a href="https://www.idontplaydarts.com/2016/04/detecting-curl-pipe-bash-server-side/">https://www.idontplaydarts.com/2016/04/detecting-curl-pipe-bash-server-side/</a></div>
+      </li>
+      <li id="cite-rfc-8032">
+        <strong>RFC 8032 — Edwards-Curve Digital Signature Algorithm (EdDSA).</strong>
+        Normative spec for Ed25519 and Ed448. No padding choice, no hash choice, no parameter footgun.
+        <div class="src"><a href="https://www.rfc-editor.org/rfc/rfc8032">https://www.rfc-editor.org/rfc/rfc8032</a></div>
+      </li>
+      <li id="cite-rfc-6234">
+        <strong>RFC 6234 — US Secure Hash Algorithms (SHA and SHA-based HMAC and HKDF).</strong>
+        SHA-256/384/512 reference implementation and test vectors.
+        <div class="src"><a href="https://www.rfc-editor.org/rfc/rfc6234">https://www.rfc-editor.org/rfc/rfc6234</a></div>
+      </li>
+      <li id="cite-rfc-2104">
+        <strong>RFC 2104 — HMAC: Keyed-Hashing for Message Authentication.</strong>
+        Why HMAC is the construction (not "hash the secret then the message"), test vectors, security analysis.
+        <div class="src"><a href="https://www.rfc-editor.org/rfc/rfc2104">https://www.rfc-editor.org/rfc/rfc2104</a></div>
+      </li>
+      <li id="cite-rmcp">
+        <strong>rmcp — official Rust SDK for Model Context Protocol.</strong>
+        Context for where tokio runtime and JSON-RPC framing come from; cryptographic concerns are layered on top of, not inside, this SDK.
+        <div class="src"><a href="https://github.com/modelcontextprotocol/rust-sdk">https://github.com/modelcontextprotocol/rust-sdk</a></div>
+      </li>
+    </ol>
+  </section>
+
+  <hr>
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Back to <a href="./overview.html">security overview</a> · <a href="../index.html">deep dive index</a> · <a href="../../technical-design.html">v1.0 spec</a>.
+  </p>
+</main>
+</body>
+</html>

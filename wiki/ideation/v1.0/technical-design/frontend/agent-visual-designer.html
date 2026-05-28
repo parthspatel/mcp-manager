@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visual Designer — Frontend deep dive — MCP Manager v1.0</title>
+<meta name="description" content="A visual / interaction designer's take on mcpm's CLI + TUI: panel proportions, theme palettes, Unicode glyph semantics, severity-aware error UX, and onboarding tone.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<style>
+  /* Local CSS hints to make samples render close to terminal palette.
+     These do not override theme tokens; they only colour pre.code-sample spans. */
+  pre.code-sample { line-height: 1.35; }
+  pre.code-sample .c-run    { color: #16a34a; font-weight: 600; }
+  pre.code-sample .c-stop   { color: #64748b; }
+  pre.code-sample .c-warn   { color: #d97706; font-weight: 600; }
+  pre.code-sample .c-err    { color: #dc2626; font-weight: 600; }
+  pre.code-sample .c-dim    { color: #94a3b8; }
+  pre.code-sample .c-accent { color: #4338ca; font-weight: 600; }
+  pre.code-sample .c-success{ color: #059669; font-weight: 600; }
+  pre.code-sample .c-focus  { background: rgba(67, 56, 202, 0.10); }
+  pre.code-sample .c-info   { color: #0369a1; }
+  pre.code-sample .c-bold   { font-weight: 700; }
+  pre.code-sample .c-under  { text-decoration: underline; }
+  pre.code-sample .c-italic { font-style: italic; }
+  table.swatch td.sw { width: 1.4rem; border-radius: 4px; }
+  table.swatch td.sw-bg { width: 1.4rem; }
+  table.swatch code { font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">frontend · visual-designer</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">frontend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Visual Designer's Frontend</h1>
+
+  <p class="lede">
+    Layout is craft. Colour is meaning. Unicode is the icon set. Misalignment is a sin. The other four
+    agents in this facet will argue about <em>what users do</em>; my job is to fight for <em>what users see</em> —
+    every pixel, every glyph, every column-boundary, every named hex value. A terminal is a 2-D canvas with
+    a rigid character grid; treating it like a stream of <code>println!</code>s is malpractice.
+  </p>
+
+  <p>
+    <span class="evidence-badge">3 bundled themes</span>
+    <span class="evidence-badge">30 / 70 panel split</span>
+    <span class="evidence-badge">12-row severity × glyph × colour matrix</span>
+    <span class="evidence-badge">ASCII fallback for every glyph</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts — why visual craft survives in a TUI</a></li>
+      <li><a href="#arguments">Arguments — against my four peers</a></li>
+      <li><a href="#design">Design — proportions, palettes, glyphs, error matrix, onboarding tone</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      Every objection I get to taking visual design seriously in a TUI follows the same pattern:
+      <em>"it's just text, why are you drawing colour swatches?"</em> The pattern is wrong. A terminal cell
+      is not a unit of text; it's a unit of visual real estate, sized by the user's font metrics, painted by
+      ANSI escape codes, framed by box-drawing characters, and read in the same Z-pattern as any other 2-D
+      layout. Lazygit, k9s, btop, helix, and zellij are not popular because they "work in a terminal"; they
+      are popular because they treat that terminal as a designed canvas. The crap in this category — the
+      tools that wrap <code>top</code> with a curses border — fail not on features but on visual literacy.
+    </p>
+
+    <p>
+      So what does visual literacy mean for mcpm?
+    </p>
+
+    <ol>
+      <li>
+        <strong>Panel proportions are decisions, not accidents.</strong> The spec hand-waves the layout as
+        "single-screen, lazygit/k9s style" but the actual split has to be measured. lazygit ships a 5-pane
+        sidebar that defaults to roughly 30% of width with a stacked-cards arrangement; k9s ships a single
+        primary table at ≈90% with command/log panels appearing on demand. Our domain (three concern groups
+        on the left, one log/detail pane on the right) sits between those — and I will defend
+        <strong>30 / 70</strong> at standard width (≥ 120 cols), collapsing to <strong>40 / 60</strong> on narrow
+        terminals (80–119 cols), and a stacked single-pane layout below 80 cols.
+        <a href="https://github.com/jesseduffield/lazygit/blob/master/docs/keybindings/Keybindings_en.md">[1]</a>
+        <a href="https://k9scli.io/topics/commands/">[2]</a>
+      </li>
+      <li>
+        <strong>Colour is meaning — and meaning needs a contract.</strong> Right now the UX spec says
+        "<code>●</code> running, <code>○</code> stopped, <code>⚠</code> failed". Good start, not a system. I
+        want a published, themed, eight-name palette where every name maps to a meaning, not a hue: <code>fg-default</code>,
+        <code>fg-muted</code>, <code>fg-faint</code>, <code>accent</code>, <code>success</code>, <code>warn</code>,
+        <code>danger</code>, <code>info</code>. Themes are mappings from those eight names to ANSI / truecolor
+        values. That's the same discipline IBM Carbon, GitHub Primer, Tailwind, and (in TUI-land) the
+        Catppuccin / Tokyo-Night / Solarized families all enforce.
+        <a href="https://www.ibm.com/design/language/color/">[3]</a>
+        <a href="https://github.com/catppuccin/catppuccin">[4]</a>
+      </li>
+      <li>
+        <strong>Unicode is the icon library.</strong> A terminal can't load SVG, but Unicode 15 has 149,000
+        codepoints and a generous slice of them are semantically perfect: box-drawing, block elements,
+        miscellaneous symbols, geometric shapes. I will pick a 30-glyph vocabulary and never deviate. If a
+        user has <code>NO_GLYPH=1</code> or runs with <code>--ascii</code>, every glyph has a fixed-width ASCII
+        fallback. Mixing emoji into a TUI is amateur hour — emoji are double-width on most fonts, break grid
+        alignment, and render inconsistently across Terminal.app, iTerm2, Alacritty, WezTerm and tmux.
+        <a href="https://unicode.org/charts/PDF/U2500.pdf">[5]</a>
+        <a href="https://www.nerdfonts.com/cheat-sheet">[6]</a>
+      </li>
+      <li>
+        <strong>Without colour, hierarchy still works.</strong> Bold for primary, default-weight for
+        secondary, dim for tertiary, italic for explanation, underline for the focused item or hyperlink. Any
+        screen I design must remain legible if you set <code>NO_COLOR=1</code> and run on a monochrome
+        terminal — that's not just an accessibility check, it's a structural check that hierarchy isn't
+        leaning on colour.
+        <a href="https://no-color.org">[7]</a>
+      </li>
+      <li>
+        <strong>The status line is a permanent reading surface.</strong> Whatever the user is doing, the
+        bottom of the screen must answer four questions: <em>what's focused</em>, <em>what keys apply</em>,
+        <em>is there work in flight</em>, <em>are we connected to mcpmanagerd</em>. Helix taught me this; so
+        did Vim's airline. The status line is not garnish; it's the persistent UI affordance.
+        <a href="https://docs.helix-editor.com/configuration.html">[8]</a>
+      </li>
+    </ol>
+
+    <p>
+      The good news: ratatui already gives us the primitives — <code>Style</code>, <code>Modifier::BOLD</code>,
+      <code>Modifier::DIM</code>, <code>Modifier::UNDERLINED</code>, <code>Color::Indexed</code> for the 256-colour
+      cube, <code>Color::Rgb</code> for truecolor, <code>Block::borders</code> with the box-drawing set of my
+      choice. ratatui's <code>Layout</code> system is a real constraint solver (percentages + min/max
+      lengths), not a guess. We can do this properly.
+      <a href="https://ratatui.rs/concepts/layout/">[9]</a>
+    </p>
+
+    <p>
+      The bad news: nobody else on this project has loaded "visual designer" as their primary frame. Without
+      a strong pull from this corner, mcpm will ship as another lazygit-shaped blob with the default ratatui
+      blue-on-black border style, looking like a Rust crate's <code>README</code> example. That would be a
+      crime; lazygit is good in spite of its default look, not because of it.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments</h2>
+
+    <h3>To the <code>vim-power-user</code>: density is your friend, not your goal</h3>
+    <p>
+      We agree on more than we disagree on. Modal navigation, hjkl/arrows, <code>:</code> command palette,
+      no mouse-required affordances — yes. But I want to push back on the implicit equation
+      <em>density = quality</em>. k9s at default density is a wall of evenly-weighted text; new users bounce
+      off it. The lazygit team explicitly chose lower density and a coloured "current selection" stripe;
+      that's what made it the gateway TUI for non-vim users.
+      <a href="https://github.com/jesseduffield/lazygit#cool-features">[10]</a>
+      For mcpm, density should be a <em>user setting</em>, not a hard-coded value. Bundled presets:
+      <code>density = "compact"</code> (k9s-equivalent: 1 row per server, no empty rows between sections),
+      <code>density = "comfortable"</code> (the default; 1 blank row between Servers / Toolchains / Secrets
+      sub-panes; sub-pane titles in bold underline), <code>density = "roomy"</code> (Helix-style; extra row
+      below each item showing the inline status). All three should be one-line changes in
+      <code>tui-theme.toml</code>.
+    </p>
+    <p>
+      You will also push for hiding the bottom hint bar to reclaim a row; I will fight you on this. The bar
+      <em>is</em> the discoverability layer. We can compromise: <code>hint_bar = "auto"</code> shows on first
+      24h of usage and hides after, but pressing <code>?</code> resurfaces it for the rest of the session.
+      That's a Helix-pattern. The bar should be one row, never two; rotating contents based on the focused
+      pane lets us fit everything.
+    </p>
+
+    <h3>To the <code>accessibility-advocate</code>: I'm your structural ally, not your competitor</h3>
+    <p>
+      We are perfectly aligned on <code>NO_COLOR</code> and colour-blind palettes; what I want to add is
+      <em>why those constraints make the design better for everyone</em>. The discipline of "every state must
+      survive both the colour-blind test and the monochrome test" is what forces us to ship glyphs alongside
+      colour. The discipline of "every pane border is high-contrast against its background" forces us to pick
+      a real border token, not a hue. The high-contrast theme isn't an alternate; it's the
+      <em>regression test</em> for the default theme.
+    </p>
+    <p>
+      Specific deliverables I'd commit to in your facet's favour:
+    </p>
+    <ul>
+      <li>
+        Bundled <code>monochrome</code> theme is identical to <code>default</code> with all eight semantic
+        tokens collapsed to <code>fg-default</code>/<code>fg-muted</code>/<code>fg-faint</code> on
+        <code>bg-default</code>/<code>bg-elev</code>. If <em>any</em> screen breaks in this mode, the screen
+        is wrong.
+      </li>
+      <li>
+        Bundled <code>high-contrast</code> theme uses pure black / pure white / pure ANSI primary colours,
+        all WCAG AA at 16 px or larger. No "elev-1" / "elev-2" backgrounds — flat surfaces only.
+        <a href="https://webaim.org/articles/contrast/">[11]</a>
+      </li>
+      <li>
+        A colour-blind safe palette (<code>theme = "okabe-ito"</code>) based on the eight-colour palette by
+        Okabe &amp; Ito that's tested across all three common dichromacies.
+        <a href="https://jfly.uni-koeln.de/color/">[12]</a>
+      </li>
+      <li>
+        Every glyph in the standard set has both a Unicode and an ASCII form. <code>--ascii</code> picks the
+        ASCII form for the CLI; <code>tui-theme.toml</code> sets <code>glyphs = "ascii"</code> for the TUI.
+        No "experimental" or "fancy nerd-font" mode in v1.0 — the standard set works in vanilla Terminal.app
+        on a fresh macOS install. (Nerd Fonts are wonderful but not portable.)
+      </li>
+    </ul>
+
+    <h3>To the <code>onboarding-novice</code>: visuals carry tone, and tone carries trust</h3>
+    <p>
+      You want examples, walkthroughs, and discoverable affordances; I want to argue that
+      <em>visual tone</em> does half your work for you. The four onboarding transcripts in the UX spec —
+      lucky-day interactive, full non-interactive, project-scope, cloned-project trust — each need a
+      <em>different</em> visual tone, and the tonal difference must be designed, not accidental.
+    </p>
+    <ul>
+      <li>
+        <em>Lucky-day interactive</em>: warm and chatty. Indented two spaces, default-weight text, accent
+        colour only on the prompt-arrow (<code>←</code>) and the <code>✓</code> success rows. Feels like a
+        helpful colleague. Tone-source: <code>npm init</code>, <code>aws configure</code>, Stripe CLI's first
+        run.
+      </li>
+      <li>
+        <em>Non-interactive</em>: terse, single line of confirmation. No banner, no welcome, no encouragement
+        — this is a CI / Nix surface and any garnish is friction.
+      </li>
+      <li>
+        <em>Project-scope</em>: same tone as lucky-day but framed as a "joining the project" ritual. A small
+        ASCII-box at the bottom telling the user to commit the file. The box says <em>"share with your team"</em>
+        — that framing communicates that <code>.mcp-manager.toml</code> is a team artefact.
+      </li>
+      <li>
+        <em>Cloned-project trust gate</em>: this one is <strong>visually different</strong>. Yellow warning
+        rule across the top. Bold heading. The list of changes is presented as a diff (colour-coded green/red
+        for added/removed servers). The choice prompt is right-aligned and bracketed: <code>[y/n/e]:</code>.
+        Tonally: an airlock, not a tutorial. The user must read this; the visuals make them slow down.
+      </li>
+    </ul>
+
+    <h3>To the <code>cli-unix-purist</code>: I respect your pipes, you respect my colours</h3>
+    <p>
+      I am with you on every pipeable surface. <code>--json</code> on every read command. Sysexits.h exit
+      codes. <code>--no-color</code> auto-detected when stdout is not a TTY. <code>--ascii</code> for grids
+      that need to survive <code>tr</code> and <code>awk</code> pipelines.
+      <a href="https://man.openbsd.org/sysexits.3">[13]</a>
+    </p>
+    <p>
+      Where we'll fight: I refuse to let the TTY surface degrade to your aesthetic. When the user runs
+      <code>mcpm status</code> in a real terminal, I want:
+    </p>
+    <ul>
+      <li>
+        A table with proper column alignment (using <code>tabwriter</code>-style padding, not naïve
+        <code>\t</code>).
+      </li>
+      <li>
+        Status glyphs in the first column (<code>●</code>/<code>○</code>/<code>⚠</code>/<code>✗</code>).
+      </li>
+      <li>
+        Server name in bold, registry source in dim, uptime in default weight.
+      </li>
+      <li>
+        The "last error" column truncated at column-width with a Unicode ellipsis (<code>…</code>); full text
+        is in <code>mcpm logs &lt;server&gt;</code>.
+      </li>
+    </ul>
+    <p>
+      That same command in a pipe — <code>mcpm status | grep github</code> — produces plain UTF-8 text with
+      no escape codes (auto-detected via <code>isatty(stdout)</code>), tab-separated columns, no glyphs (or
+      ASCII glyphs if the user pinned <code>--ascii</code>). That's <em>not</em> a degraded experience; it's
+      the correct experience for that context. Auto-detection means you never have to remember a flag.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3>1. TUI layout — measured to the column</h3>
+
+    <p>
+      Reference geometry: 120 columns × 36 rows. Every pane width and column position below is exact, so
+      ratatui's <code>Layout</code> constraint expressions can derive them programmatically.
+    </p>
+
+<pre class="code-sample"><code>┌─ mcpm ─────────────────────────────────── connected · v1.0.0 ─ <span class="c-dim">12:34:08</span> ─┐
+│ <span class="c-bold">Servers</span> <span class="c-dim">[3 running / 1 failed]</span>       │ <span class="c-bold">Logs · github</span>                                │
+│ <span class="c-dim">────────</span>                              │ <span class="c-dim">┌─[server]─┬─[mcpmanagerd]─┬─[audit]─┬─[combined]─┐</span> │
+│ <span class="c-focus">▸ </span><span class="c-bold c-focus">github      </span><span class="c-focus"><span class="c-run">●●</span> running   14h     </span> │ <span class="c-dim">12:34:01</span> <span class="c-info">INFO </span> connected to upstream         │
+│   filesystem  <span class="c-run">●●</span> running    3d      │ <span class="c-dim">12:34:02</span> <span class="c-info">INFO </span> initialize OK (spec 2025-06-18)│
+│   sqlite      <span class="c-stop">●○</span> stopped            │ <span class="c-dim">12:34:05</span> <span class="c-info">INFO </span> tools/list → 27 tools          │
+│   github-pr   <span class="c-warn">⚠ </span> failed (5/5)       │ <span class="c-dim">12:34:08</span> <span class="c-success">READY</span> 14h uptime, 0 retries          │
+│                                       │                                                │
+│ <span class="c-bold">Toolchains</span> <span class="c-dim">[3 projected]</span>            │                                                │
+│ <span class="c-dim">───────────</span>                           │                                                │
+│   <span class="c-success">✓ </span>claude-code  sync               │                                                │
+│   <span class="c-success">✓ </span>cursor       sync               │                                                │
+│   <span class="c-warn">⚠ </span>zed          drifted            │                                                │
+│                                       │                                                │
+│ <span class="c-bold">Secrets</span> <span class="c-dim">[2 set]</span>                     │                                                │
+│ <span class="c-dim">────────</span>                              │                                                │
+│   GITHUB_TOKEN  <span class="c-success">set</span>                  │                                                │
+│   SQLITE_PATH   <span class="c-success">set</span>                  │                                                │
+│                                       │                                                │
+│                                       │                                                │
+│                                       │                                                │
+│                                       │                                                │
+│                                       │                                                │
+│                                       │                                                │
+│                                       │                                                │
+├───────────────────────────────────────┴────────────────────────────────────────────────┤
+│ <span class="c-accent">?</span> help · <span class="c-accent">/</span> search · <span class="c-accent">↵</span> view · <span class="c-accent">l</span> logs · <span class="c-accent">d</span> stop · <span class="c-accent">r</span> restart · <span class="c-accent">e</span> edit · <span class="c-accent">q</span> quit  │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+</code></pre>
+
+    <h4>Pane proportions table</h4>
+    <table class="compare">
+      <thead>
+        <tr><th>Terminal width</th><th>Left pane</th><th>Right pane</th><th>Layout mode</th><th>ratatui constraints</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>≥ 120 cols (default)</td><td>40 cols fixed</td><td>flex</td><td>side-by-side, 30 / 70 visual feel</td><td><code>[Length(40), Min(40)]</code></td></tr>
+        <tr><td>100–119 cols</td><td>36 cols fixed</td><td>flex</td><td>side-by-side, narrower nav</td><td><code>[Length(36), Min(40)]</code></td></tr>
+        <tr><td>80–99 cols</td><td>32 cols fixed</td><td>flex</td><td>side-by-side, hidden secondary columns in nav</td><td><code>[Length(32), Min(40)]</code></td></tr>
+        <tr><td>&lt; 80 cols</td><td colspan="2">single-pane; <kbd>Tab</kbd> switches nav ⇄ detail</td><td>stacked</td><td><code>[Percentage(100)]</code> + modal swap</td></tr>
+      </tbody>
+    </table>
+    <p>
+      At standard width (120 cols), the left pane is 40 characters, which is <em>not</em> exactly 30% of
+      120 — it's 33%. The <em>visual</em> 30 / 70 split is achieved because the right pane has lower
+      character density (longer rows, more whitespace), making it feel proportionally larger. This is
+      deliberate: real readers don't measure columns, they sense weight. We tune to weight, not arithmetic.
+    </p>
+
+    <h4>Vertical rhythm</h4>
+    <table class="compare">
+      <thead><tr><th>Row range</th><th>Content</th><th>Style</th></tr></thead>
+      <tbody>
+        <tr><td>Row 0</td><td>Title bar: <code>┌─ mcpm ─ … connected · v1.0.0 · 12:34:08 ─┐</code></td><td>Single line, accent-coloured app name, dim timestamps, danger-coloured if daemon disconnected</td></tr>
+        <tr><td>Row 1</td><td>Sub-pane heading: <code>Servers [3 running / 1 failed]</code></td><td>Bold name, dim counter</td></tr>
+        <tr><td>Row 2</td><td>Underline rule: <code>────────</code></td><td>Dim foreground, U+2500 (box-drawing light horizontal)</td></tr>
+        <tr><td>Row 3..n</td><td>Entity rows</td><td>2-space indent; focused row shows arrow (<code>▸</code>) + accent background</td></tr>
+        <tr><td>1 blank row</td><td>Between sub-panes</td><td>Default background — explicit whitespace earns its row</td></tr>
+        <tr><td>Row n−1</td><td>Hint bar</td><td>Single line, key glyphs in accent colour, separators dim</td></tr>
+        <tr><td>Row n</td><td>Bottom border</td><td>U+2500 horizontal</td></tr>
+      </tbody>
+    </table>
+
+    <h3>2. Theme palette tables — three bundled themes</h3>
+
+    <p>
+      Every theme defines exactly the same eight semantic tokens plus six chrome tokens.
+      Themes are TOML files under <code>~/.config/mcp-manager/themes/</code>; the active theme is selected
+      via <code>tui-theme.toml</code>'s top-level <code>theme = "default"</code> key.
+    </p>
+
+    <h4>Default theme (truecolor; auto-light/auto-dark from terminal)</h4>
+    <table class="compare swatch">
+      <thead>
+        <tr><th>Token</th><th>Light</th><th>Dark</th><th>256-color fallback</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>fg-default</code></td><td><code>#0f172a</code></td><td><code>#e2e8f0</code></td><td>0 / 15</td><td>Primary body text</td></tr>
+        <tr><td><code>fg-muted</code></td><td><code>#475569</code></td><td><code>#94a3b8</code></td><td>8 / 7</td><td>Secondary text (timestamps, counts)</td></tr>
+        <tr><td><code>fg-faint</code></td><td><code>#94a3b8</code></td><td><code>#64748b</code></td><td>7 / 8</td><td>Tertiary text (rules, separators)</td></tr>
+        <tr><td><code>accent</code></td><td><code>#4338ca</code></td><td><code>#818cf8</code></td><td>4 / 12</td><td>App name, key hints, focused border</td></tr>
+        <tr><td><code>success</code></td><td><code>#059669</code></td><td><code>#34d399</code></td><td>2 / 10</td><td>Running, projected, ✓</td></tr>
+        <tr><td><code>warn</code></td><td><code>#d97706</code></td><td><code>#fbbf24</code></td><td>3 / 11</td><td>Drifted, retrying, ⚠</td></tr>
+        <tr><td><code>danger</code></td><td><code>#dc2626</code></td><td><code>#f87171</code></td><td>1 / 9</td><td>Failed, OOM-killed, ✗</td></tr>
+        <tr><td><code>info</code></td><td><code>#0369a1</code></td><td><code>#60a5fa</code></td><td>6 / 14</td><td>INFO log prefix, neutral notice</td></tr>
+        <tr><td><code>bg-default</code></td><td><code>#ffffff</code></td><td><code>#0b0f17</code></td><td>15 / 0</td><td>Canvas</td></tr>
+        <tr><td><code>bg-elev</code></td><td><code>#f1f5f9</code></td><td><code>#131822</code></td><td>15 / 0</td><td>Focused-row stripe</td></tr>
+        <tr><td><code>border</code></td><td><code>#e2e8f0</code></td><td><code>#2a3142</code></td><td>7 / 8</td><td>Unfocused pane border</td></tr>
+        <tr><td><code>border-focus</code></td><td><code>#4338ca</code></td><td><code>#818cf8</code></td><td>4 / 12</td><td>Focused pane border</td></tr>
+      </tbody>
+    </table>
+
+    <h4>High-contrast theme (WCAG AAA at 16 px)</h4>
+    <table class="compare swatch">
+      <thead>
+        <tr><th>Token</th><th>Value</th><th>Use</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>fg-default</code></td><td><code>#000000</code> on light, <code>#ffffff</code> on dark</td><td>Pure max-contrast body text</td></tr>
+        <tr><td><code>fg-muted</code></td><td>= <code>fg-default</code></td><td>No muted state; bold/dim modifiers carry hierarchy</td></tr>
+        <tr><td><code>accent</code></td><td><code>#0000ff</code> / <code>#ffff00</code></td><td>ANSI primary blue / yellow</td></tr>
+        <tr><td><code>success</code></td><td><code>#006400</code> / <code>#00ff00</code></td><td>ANSI primary green</td></tr>
+        <tr><td><code>warn</code></td><td><code>#a52a2a</code> / <code>#ffa500</code></td><td>Brown / orange</td></tr>
+        <tr><td><code>danger</code></td><td><code>#8b0000</code> / <code>#ff0000</code></td><td>Dark / bright red</td></tr>
+        <tr><td><code>bg-default</code></td><td><code>#ffffff</code> / <code>#000000</code></td><td>Pure background, no elevation</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Okabe-Ito colourblind-safe theme</h4>
+    <table class="compare swatch">
+      <thead><tr><th>Token</th><th>Value</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>accent</code></td><td><code>#0072B2</code></td><td>"Blue" — distinguishable across all 3 dichromacies</td></tr>
+        <tr><td><code>success</code></td><td><code>#009E73</code></td><td>"Bluish green"</td></tr>
+        <tr><td><code>warn</code></td><td><code>#E69F00</code></td><td>"Orange"</td></tr>
+        <tr><td><code>danger</code></td><td><code>#D55E00</code></td><td>"Vermillion" — chosen over pure red for protanopia readability</td></tr>
+        <tr><td><code>info</code></td><td><code>#56B4E9</code></td><td>"Sky blue"</td></tr>
+        <tr><td><code>fg-secondary</code></td><td><code>#CC79A7</code></td><td>"Reddish purple" — for secondary highlights, e.g. project-scope indicator</td></tr>
+      </tbody>
+    </table>
+
+    <h3>3. Unicode glyph reference table</h3>
+
+    <p>
+      The full standard set. Every glyph has a single meaning, an ASCII fallback (used under <code>--ascii</code>
+      or <code>glyphs = "ascii"</code>), a UTF-8 codepoint, and a colour token. No glyph appears with two
+      meanings; no meaning has two glyphs.
+    </p>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Glyph</th><th>U+</th><th>ASCII fallback</th><th>Colour token</th><th>Meaning</th><th>Where used</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>●●</code></td><td>U+25CF (×2)</td><td><code>[*]</code></td><td><code>success</code></td><td>Running, two slots filled = healthy</td><td>Server row</td></tr>
+        <tr><td><code>●○</code></td><td>U+25CF + U+25CB</td><td><code>[ ]</code></td><td><code>fg-muted</code></td><td>Stopped (intentional)</td><td>Server row</td></tr>
+        <tr><td><code>⚠</code></td><td>U+26A0</td><td><code>[!]</code></td><td><code>warn</code></td><td>Failed / degraded</td><td>Server row, toolchain row</td></tr>
+        <tr><td><code>✓</code></td><td>U+2713</td><td><code>[ok]</code></td><td><code>success</code></td><td>Action succeeded</td><td>Onboarding output, projection status</td></tr>
+        <tr><td><code>✗</code></td><td>U+2717</td><td><code>[X]</code></td><td><code>danger</code></td><td>Action failed</td><td>CLI errors, audit log</td></tr>
+        <tr><td><code>▸</code></td><td>U+25B8</td><td><code>&gt;</code></td><td><code>accent</code></td><td>Focused row arrow</td><td>TUI focus indicator</td></tr>
+        <tr><td><code>▾</code></td><td>U+25BE</td><td><code>v</code></td><td><code>fg-default</code></td><td>Expanded sub-pane</td><td>Sub-pane headers</td></tr>
+        <tr><td><code>▸</code></td><td>U+25B8</td><td><code>&gt;</code></td><td><code>fg-default</code></td><td>Collapsed sub-pane</td><td>Sub-pane headers</td></tr>
+        <tr><td><code>↵</code></td><td>U+21B5</td><td><code>RET</code></td><td><code>accent</code></td><td>Return / Enter</td><td>Hint bar</td></tr>
+        <tr><td><code>…</code></td><td>U+2026</td><td><code>...</code></td><td>inherit</td><td>Truncation marker</td><td>Column overflow</td></tr>
+        <tr><td><code>←</code></td><td>U+2190</td><td><code>&lt;-</code></td><td><code>accent</code></td><td>Prompt arrow</td><td>Onboarding</td></tr>
+        <tr><td><code>·</code></td><td>U+00B7</td><td><code>-</code></td><td><code>fg-faint</code></td><td>Separator between hint bar entries</td><td>Hint bar</td></tr>
+        <tr><td><code>─</code></td><td>U+2500</td><td><code>-</code></td><td><code>border</code></td><td>Horizontal pane border / sub-pane rule</td><td>Box drawing</td></tr>
+        <tr><td><code>│</code></td><td>U+2502</td><td><code>|</code></td><td><code>border</code></td><td>Vertical pane border</td><td>Box drawing</td></tr>
+        <tr><td><code>┌ ┐ └ ┘</code></td><td>U+250C / 2510 / 2514 / 2518</td><td><code>+</code></td><td><code>border</code></td><td>Pane corners</td><td>Box drawing</td></tr>
+        <tr><td><code>├ ┤ ┬ ┴ ┼</code></td><td>U+251C / 2524 / 252C / 2534 / 253C</td><td><code>+</code></td><td><code>border</code></td><td>Pane joins</td><td>Box drawing</td></tr>
+        <tr><td><code>▏ ▎ ▍ ▌ ▋ ▊ ▉ █</code></td><td>U+258F → U+2588</td><td><code>#</code></td><td><code>accent</code></td><td>Progress bar fractional fill</td><td><code>mcpm update</code> diff progress</td></tr>
+        <tr><td><code>◐ ◓ ◑ ◒</code></td><td>U+25D0..3</td><td><code>|/-\</code></td><td><code>accent</code></td><td>Spinner frames (4-step)</td><td>Async-in-flight indicator</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Box-drawing characters U+2500..U+257F are universally supported in Terminal.app, iTerm2, Alacritty,
+      WezTerm, Kitty, gnome-terminal, konsole, foot, and tmux. The geometric shapes (U+25xx) and arrows
+      (U+21xx, U+2190..U+21FF) are equally portable. We do <em>not</em> use Powerline glyphs, Nerd Font
+      private-use codepoints, or emoji.
+      <a href="https://en.wikipedia.org/wiki/Box-drawing_character">[14]</a>
+    </p>
+
+    <h3>4. CLI output samples</h3>
+
+    <h4>4.1 <code>mcpm status</code> — TTY mode</h4>
+<pre class="code-sample"><code>$ mcpm status
+<span class="c-bold">SERVER         STATE      UPTIME    REGISTRY        LAST ERROR</span>
+<span class="c-run">●●</span> <span class="c-bold">github     </span>  running    14h       official        <span class="c-dim">—</span>
+<span class="c-run">●●</span> <span class="c-bold">filesystem </span>  running     3d       official        <span class="c-dim">—</span>
+<span class="c-stop">●○</span> sqlite        stopped    <span class="c-dim">—</span>         official        <span class="c-dim">—</span>
+<span class="c-warn">⚠ </span> <span class="c-bold">github-pr  </span>  failed     <span class="c-dim">—</span>         official        E_SERVER_FAILED: 5/5 retries…
+</code></pre>
+
+    <h4>4.2 <code>mcpm status --no-color | cat</code> — pipe mode</h4>
+<pre class="code-sample"><code>$ mcpm status | cat
+SERVER       STATE      UPTIME  REGISTRY    LAST_ERROR
+github       running    14h     official    -
+filesystem   running    3d      official    -
+sqlite       stopped    -       official    -
+github-pr    failed     -       official    E_SERVER_FAILED: 5/5 retries in 60s window
+</code></pre>
+
+    <h4>4.3 <code>mcpm status --ascii</code></h4>
+<pre class="code-sample"><code>$ mcpm status --ascii
+SERVER         STATE      UPTIME    REGISTRY    LAST_ERROR
+[*] github       running    14h       official    -
+[*] filesystem   running    3d        official    -
+[ ] sqlite       stopped    -         official    -
+[!] github-pr    failed     -         official    E_SERVER_FAILED: 5/5 retries...
+</code></pre>
+
+    <h4>4.4 <code>mcpm help install</code> — visual hierarchy in the help output</h4>
+<pre class="code-sample"><code><span class="c-bold">mcpm install &lt;source&gt;</span>  <span class="c-dim">—  install an MCP server from a registry</span>
+
+<span class="c-bold c-under">USAGE</span>
+   mcpm install &lt;source&gt; [--scope user|project] [--name &lt;alias&gt;] [--runtime &lt;rt&gt;]
+
+<span class="c-bold c-under">FLAGS</span>
+   <span class="c-accent">--scope</span> &lt;scope&gt;        user (default) | project
+   <span class="c-accent">--name</span> &lt;alias&gt;         override the server name in canonical config
+   <span class="c-accent">--runtime</span> &lt;runtime&gt;    devenv (default) | docker | podman | uvx-npx | none
+   <span class="c-accent">--accept-unsigned</span>      install without minisign verification <span class="c-dim">(audit-logged)</span>
+   <span class="c-accent">--dry-run</span>              show what would happen; write nothing
+
+<span class="c-bold c-under">EXAMPLES</span>
+   <span class="c-dim"># Install latest 0.4.x of the official github MCP, user-scope</span>
+   $ mcpm install official/github-mcp@^0.4
+
+   <span class="c-dim"># Install at a specific version, project-scope, isolated under docker</span>
+   $ cd /work/acme-project
+   $ mcpm install acme-corp/internal-mcp@=0.2.1 --scope project --runtime docker
+
+<span class="c-bold c-under">SEE ALSO</span>
+   <span class="c-accent">mcpm search</span>     discover servers across registries
+   <span class="c-accent">mcpm test</span>       verify a newly-installed server is healthy
+   <span class="c-accent">mcpm registry</span>   manage upstream registries
+
+<span class="c-bold c-under">DOCS</span>
+   https://docs.mcp-manager.dev/cli/install
+</code></pre>
+    <p>
+      Visual logic: section headings are bold + underlined; flag names are accent-coloured (so the eye finds
+      them); inline comments above example commands are dim; example commands themselves are default
+      foreground. No section dividers are needed — typography carries the hierarchy. The output renders
+      acceptably in <code>NO_COLOR</code> mode because bold + underline survive.
+    </p>
+
+    <h3>5. Severity × glyph × colour matrix — error UX</h3>
+
+    <p>
+      The 12-row error taxonomy from the UX spec, prioritized by visual presentation rules.
+    </p>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Code</th><th>Severity</th><th>Glyph</th><th>Colour</th><th>Modal?</th><th>Audit?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>E_SECRET_MISSING</code></td><td>Action-required</td><td><code>✗</code></td><td><code>danger</code></td><td>No — inline CLI block; TUI banner under server row</td><td>Yes</td></tr>
+        <tr><td><code>E_SERVER_OOM</code></td><td>Critical</td><td><code>⚠</code></td><td><code>danger</code></td><td>Yes — modal overlay; ✗ badge persists</td><td>Yes</td></tr>
+        <tr><td><code>E_SERVER_FAILED</code></td><td>Critical</td><td><code>⚠</code></td><td><code>danger</code></td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><code>E_CONFIG_INVALID</code></td><td>Action-required</td><td><code>✗</code></td><td><code>danger</code></td><td>Yes — modal with line/column pointer</td><td>No (user input)</td></tr>
+        <tr><td><code>E_CONFIG_CONFLICT</code></td><td>Action-required</td><td><code>⚠</code></td><td><code>warn</code></td><td>Yes — modal offers merge/discard</td><td>Yes</td></tr>
+        <tr><td><code>E_REGISTRY_UNREACHABLE</code></td><td>Informational</td><td><code>⚠</code></td><td><code>warn</code></td><td>No — status-line notice, cached index works</td><td>Yes</td></tr>
+        <tr><td><code>E_REGISTRY_SIGFAIL</code></td><td>Critical</td><td><code>⚠</code></td><td><code>danger</code></td><td>Yes — modal, blocks further registry use</td><td>Yes</td></tr>
+        <tr><td><code>E_SPEC_UNSUPPORTED</code></td><td>Action-required</td><td><code>✗</code></td><td><code>danger</code></td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><code>E_PROJECTION_DRIFT</code></td><td>Action-required</td><td><code>⚠</code></td><td><code>warn</code></td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><code>E_PROJECT_UNTRUSTED</code></td><td>Action-required</td><td><code>⚠</code></td><td><code>warn</code></td><td>Yes — trust-gate UI (see §6)</td><td>Yes</td></tr>
+        <tr><td><code>E_KEYCHAIN_UNAVAILABLE</code></td><td>Action-required</td><td><code>✗</code></td><td><code>danger</code></td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><code>E_DAEMON_VERSION</code></td><td>Action-required</td><td><code>✗</code></td><td><code>danger</code></td><td>Yes</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Anatomy of an error block — CLI</h4>
+<pre class="code-sample"><code>$ mcpm start github
+<span class="c-err">✗ Failed to start github</span>  <span class="c-dim">(E_SECRET_MISSING)</span>
+
+  The server requires a secret that isn't available:
+    <span class="c-bold">GITHUB_TOKEN</span>  <span class="c-dim">(not in keychain, not in environment)</span>
+
+  <span class="c-bold c-under">To fix</span>
+    $ <span class="c-accent">mcpm secret set GITHUB_TOKEN</span>
+
+  <span class="c-bold c-under">Then re-run</span>
+    $ <span class="c-accent">mcpm start github</span>
+
+  <span class="c-dim">Docs: https://docs.mcp-manager.dev/errors/E_SECRET_MISSING</span>
+</code></pre>
+
+    <h4>Anatomy of an error modal — TUI</h4>
+<pre class="code-sample"><code>┌─ <span class="c-err">✗ E_SERVER_FAILED</span> ──────────────────────────────────────────┐
+│                                                                  │
+│  <span class="c-bold">github-pr failed 5 times in 60 seconds</span>                       │
+│                                                                  │
+│  mcpmanagerd stopped retrying. The most common cause is a stale  │
+│  GITHUB_TOKEN or upstream API outage.                            │
+│                                                                  │
+│  <span class="c-bold c-under">Suggested next steps</span>                                          │
+│    • <span class="c-accent">l</span>  view logs for github-pr                                  │
+│    • <span class="c-accent">y</span>  copy suggested fix to clipboard                          │
+│    • <span class="c-accent">r</span>  restart github-pr (clears failed state)                  │
+│    • <span class="c-accent">Esc</span> dismiss                                                  │
+│                                                                  │
+│  <span class="c-dim">Docs: docs.mcp-manager.dev/errors/E_SERVER_FAILED</span>              │
+└──────────────────────────────────────────────────────────────────┘
+</code></pre>
+
+    <h3>6. Trust-gate prompts — visual clarity, not scary</h3>
+
+    <p>
+      The cloned-project trust gate is the single most security-sensitive UI in mcpm. It should feel like an
+      airlock: deliberate, slow, well-lit. Tone: clear and respectful, not alarmist. The user is about to
+      let a third-party config influence their environment; we want them to read it, not panic-press
+      <kbd>y</kbd>.
+    </p>
+
+<pre class="code-sample"><code>$ cd /work/cloned-from-github
+
+<span class="c-warn">┌─────────────────────────────────────────────────────────────────┐</span>
+<span class="c-warn">│  ⚠  New project config detected                                  │</span>
+<span class="c-warn">└─────────────────────────────────────────────────────────────────┘</span>
+
+  Path:       <span class="c-bold">/work/cloned-from-github/.mcp-manager.toml</span>
+  Hash:       <span class="c-dim">sha256:8a9f2d1b4c…</span>
+  Inherit:    <span class="c-bold">"all"</span> <span class="c-dim">(your user-scope servers will overlay)</span>
+
+  <span class="c-bold c-under">Changes vs. your user config</span>
+    <span class="c-success">+ server.acme-db          postgres-mcp@^0.3   (devenv)</span>
+    <span class="c-warn">~ server.github           overrides: allowed_paths</span>
+
+  <span class="c-bold c-under">Registries this config wants</span>
+    <span class="c-success">✓ official</span>   <span class="c-dim">(trusted, baked-in pubkey)</span>
+
+  <span class="c-bold c-under">Secrets referenced</span>
+    <span class="c-warn">⚠ ACME_DB_URL</span>  <span class="c-dim">(not yet in your keychain — will prompt on first start)</span>
+
+  This is the first time mcpm has seen this config. Trust it?
+
+    <span class="c-accent">y</span>   yes, trust this exact config <span class="c-dim">(records hash in trust.toml)</span>
+    <span class="c-accent">n</span>   no, ignore for this session
+    <span class="c-accent">e</span>   open in $EDITOR before deciding
+
+  [<span class="c-accent">y</span>/<span class="c-accent">n</span>/<span class="c-accent">e</span>]:
+</code></pre>
+
+    <p>
+      Visual choices: warning rule across the top (warn-coloured, not danger; this isn't a failure, it's a
+      decision); diff-style indicators for additions/overrides (familiar from <code>git</code>); the choice
+      prompt is bracketed and the three letters are accent-coloured so they pop. No flashing, no banner,
+      no "are you sure?". The visual weight matches the cognitive weight.
+    </p>
+
+    <h3>7. Onboarding tone — four transcripts, four visual moods</h3>
+
+    <h4>7.1 Lucky-day interactive (warm)</h4>
+<pre class="code-sample"><code>$ mcpm init
+
+  <span class="c-bold">Welcome to mcpm.</span>  <span class="c-dim">Three quick questions; defaults are fine.</span>
+
+  What's your name? <span class="c-dim">[Parth Patel]</span>   <span class="c-accent">←</span>
+  Scope: user or project? <span class="c-dim">[user]</span>   <span class="c-accent">←</span>
+  Detected: <span class="c-bold">Claude Code</span>, <span class="c-bold">Cursor</span>, <span class="c-bold">Zed</span>. Project into all three? <span class="c-dim">[Y/n]</span>   <span class="c-accent">←</span>
+  Detected: <span class="c-bold">Docker</span>. Enable Docker MCP Catalog? <span class="c-dim">[y/N]</span>   <span class="c-accent">←</span>
+  Register mcpmanagerd with launchd as a background service? <span class="c-dim">[y/N]</span>   <span class="c-accent">←</span>
+
+  <span class="c-success">✓</span> Wrote <span class="c-bold">~/.config/mcp-manager/config.toml</span>
+  <span class="c-success">✓</span> Wrote <span class="c-bold">~/.config/mcp-manager/trust.toml</span>
+  <span class="c-success">✓</span> Projected canonical state into <span class="c-bold">3</span> editor configs
+  <span class="c-success">✓</span> Refreshed trust.toml <span class="c-dim">(4 registry pubkeys, valid until 2027-…)</span>
+
+  <span class="c-bold">Next:</span> run <span class="c-accent">mcpm install &lt;server&gt;</span> to add an MCP server.
+</code></pre>
+
+    <h4>7.2 Non-interactive (terse)</h4>
+<pre class="code-sample"><code>$ mcpm init --defaults -y
+<span class="c-success">✓</span> Initialized <span class="c-dim">(user scope, default projections, no Docker, no service-register)</span>
+</code></pre>
+
+    <h4>7.3 Project-scope (ritual)</h4>
+<pre class="code-sample"><code>$ cd /work/acme-project
+$ mcpm project init
+
+  <span class="c-bold">Setting up project-scope mcpm.</span>  <span class="c-dim">This config will be committed to the repo.</span>
+
+  Project name: <span class="c-dim">[acme-project]</span>   <span class="c-accent">←</span>
+  Inherit user-level servers? <span class="c-dim">[all]</span>   <span class="c-accent">←</span>
+  Description: ACME data pipeline tooling                       <span class="c-accent">←</span>
+
+  <span class="c-success">✓</span> Wrote <span class="c-bold">.mcp-manager.toml</span>
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ <span class="c-bold">Share with your team</span>                                        │
+  │                                                             │
+  │   $ git add .mcp-manager.toml                               │
+  │   $ git commit -m "chore: add mcpm project config"          │
+  │                                                             │
+  │ Teammates run <span class="c-accent">mcpm project init</span> here to opt in.            │
+  └─────────────────────────────────────────────────────────────┘
+</code></pre>
+
+    <h4>7.4 Cloned-project trust gate — see §6 above</h4>
+
+    <h3>8. Project-scope layering — visualizing inheritance</h3>
+
+    <p>
+      The three inherit modes (<code>"all"</code> / allowlist / <code>"none"</code>) are an abstract concept
+      to most users. <code>mcpm config show --layered</code> renders them as a layered diff so the user can
+      see what's coming from where.
+    </p>
+
+<pre class="code-sample"><code>$ mcpm config show --layered
+
+<span class="c-bold c-under">github</span>                             <span class="c-dim">(project &lt;- user)</span>
+  registry      official            <span class="c-dim">[from user]</span>
+  package       github-mcp          <span class="c-dim">[from user]</span>
+  version       ^0.4                <span class="c-dim">[from user]</span>
+  <span class="c-success">allowed_paths [/work/acme-project] [from project]</span>
+
+<span class="c-bold c-under">acme-db</span>                            <span class="c-dim">(project only)</span>
+  <span class="c-success">registry      official            [from project]</span>
+  <span class="c-success">package       postgres-mcp        [from project]</span>
+  <span class="c-success">version       ^0.3                [from project]</span>
+
+<span class="c-bold c-under">filesystem</span>                         <span class="c-dim">(user only)</span>
+  <span class="c-info">registry      official            [from user]</span>
+  <span class="c-info">package       filesystem-mcp      [from user]</span>
+</code></pre>
+
+    <p>
+      Three semantic colours, three meanings: <span class="c-bold">bold heading</span> is the server name;
+      <span style="color:#059669;font-weight:600">success-green</span> marks values contributed by the
+      project (the closer scope, "winning" if there's a conflict);
+      <span style="color:#0369a1">info-blue</span> marks user-scope contributions that survive to the merged
+      view. The right column is dim, so the eye finds the colour first.
+    </p>
+
+    <h3>9. <code>$EDITOR</code> integration — preview mode</h3>
+
+    <p>
+      The TUI doesn't have a visual presence inside <code>$EDITOR</code>, but it owns the
+      <em>before-and-after</em> framing. When the user presses <code>e</code> in the TUI, we render a
+      one-line spinner row in the bottom hint bar:
+    </p>
+
+<pre class="code-sample"><code>│ <span class="c-accent">◐</span> editing github in nvim · save and quit to apply · <span class="c-accent">Esc</span> in nvim to cancel  │</code></pre>
+
+    <p>
+      On editor exit:
+    </p>
+
+<pre class="code-sample"><code>│ <span class="c-success">✓</span> github reloaded · 1 line changed · validation OK · audit-logged             │</code></pre>
+
+    <p>
+      …or, on validation failure, the modal-overlay form of <code>E_CONFIG_INVALID</code>, with the offending
+      line in <code>danger</code> colour and a <code>e retry</code> hint.
+    </p>
+
+    <h3>10. Density presets — one knob, three real configurations</h3>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Preset</th><th>Row height</th><th>Sub-pane spacing</th><th>Entity row content</th><th>Audience</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>compact</code></td><td>1 row</td><td>0 blank rows</td><td><code>● github  running 14h</code></td><td>vim-power-user, ≥ 50 servers</td></tr>
+        <tr><td><code>comfortable</code> <em>(default)</em></td><td>1 row</td><td>1 blank row between sub-panes</td><td><code>● github  running 14h  github-mcp@0.4.2</code></td><td>Most users, ≤ 20 servers</td></tr>
+        <tr><td><code>roomy</code></td><td>2 rows</td><td>1 blank row + sub-pane title in bold underline</td><td>Row 1: <code>● github  running 14h</code><br>Row 2: <code>   github-mcp@0.4.2 · 27 tools · official</code></td><td>Onboarding, first-week users</td></tr>
+      </tbody>
+    </table>
+
+    <h3>11. The status line — always four answers</h3>
+
+<pre class="code-sample"><code>│ <span class="c-success">●</span> daemon · <span class="c-accent">github</span> · <span class="c-dim">14h uptime · 27 tools</span> · <span class="c-accent">?</span> help · <span class="c-accent">/</span> search · <span class="c-accent">l</span> logs · <span class="c-accent">q</span> quit │
+        ↑          ↑                          ↑
+        |          focused entity             context-aware key affordances
+        daemon-health indicator (red ● if disconnected)
+</code></pre>
+
+    <p>
+      The four answers — daemon connection, focused entity, what's possible, what's universal — are
+      visually grouped left-to-right with U+00B7 (<code>·</code>) as the separator. When mcpmanagerd
+      disconnects, the leftmost <code>●</code> turns danger-red and the whole status line gets a
+      subtle red underline; the rest of the screen freezes its data display (dim) until reconnection.
+      This is the single most important visual signal in the app: <em>"my source of truth is gone"</em>.
+    </p>
+
+    <h3>12. What I am explicitly not doing</h3>
+
+    <ul>
+      <li><strong>No animations beyond a 4-frame spinner.</strong> No throbbers, no progress-bar shimmer.
+        Movement is reserved for the spinner and for genuine state transitions (a row colour-change when a
+        server goes from <code>running</code> to <code>failed</code>).</li>
+      <li><strong>No Nerd Font private-use codepoints.</strong> They are gorgeous; they are unsupported in
+        the macOS default Terminal. We are not making users install a font to use a system tool. (Side note:
+        the <code>nerd-fonts</code> theme can be a v1.x community contribution.)</li>
+      <li><strong>No emoji.</strong> Even where the standard glyph would be replaceable
+        (<code>⚠</code> vs <code>⚠️</code>), the emoji variation selector produces inconsistent grid
+        alignment across terminal emulators and font fallback chains.
+        <a href="https://www.unicode.org/reports/tr51/">[15]</a></li>
+      <li><strong>No truecolor-only design.</strong> Every screen degrades gracefully through truecolor →
+        256-color → 8-color → mono. We test on all four.</li>
+      <li><strong>No themes that override the eight semantic tokens with surprising mappings.</strong>
+        <code>success</code> is always a green-ish hue; <code>danger</code> is always a red-ish hue;
+        <code>warn</code> is always an orange/yellow hue. Themes vary saturation and lightness, not
+        semantics.</li>
+    </ul>
+
+    <h3>13. Tying it back to the v1.0 spec</h3>
+
+    <p>
+      The UX design page already lists three bundled themes (<code>default</code>, <code>high-contrast</code>,
+      <code>monochrome</code>) and commits to "color is never the only carrier of information." Good — my
+      contribution here is to <em>make that operational</em> with:
+    </p>
+
+    <ol>
+      <li>An eight-token semantic palette with three reference themes filled in to the hex value.</li>
+      <li>A 30-glyph standard set with codepoints, fallbacks, and assigned meanings.</li>
+      <li>A measured panel-proportion table by terminal width.</li>
+      <li>A severity × glyph × colour matrix for the 12-row error taxonomy.</li>
+      <li>Four onboarding visual tones, with concrete formatting choices for each.</li>
+      <li>A density-preset knob to defuse the lazygit-vs-k9s aesthetic argument.</li>
+      <li>A four-answer status line with an explicit daemon-disconnect failure mode.</li>
+    </ol>
+
+    <p>
+      None of this is gold-plating. Every item exists in lazygit, k9s, helix, btop, or zellij in some form.
+      The work here is to assemble the right subset and commit to it. The cost of <em>not</em> doing this
+      work is that mcpm ships looking like a Rust crate's example output — which would betray everything
+      else this project has decided about UX being a first-class concern.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+
+    <ol>
+      <li id="c1"><a href="https://github.com/jesseduffield/lazygit/blob/master/docs/keybindings/Keybindings_en.md">lazygit — keybindings &amp; panel layout reference</a>. Source of the 5-pane sidebar idiom.</li>
+      <li id="c2"><a href="https://k9scli.io/topics/commands/">k9s — commands reference</a>. The "dense table, command palette" school of TUI design.</li>
+      <li id="c3"><a href="https://www.ibm.com/design/language/color/">IBM Carbon Design — colour foundations</a>. Reference for semantic-token discipline.</li>
+      <li id="c4"><a href="https://github.com/catppuccin/catppuccin">Catppuccin — themed palette system across editors and terminals</a>. Reference for cross-tool theme distribution.</li>
+      <li id="c5"><a href="https://unicode.org/charts/PDF/U2500.pdf">Unicode — Box Drawing block (U+2500–U+257F)</a>. The full box-drawing vocabulary.</li>
+      <li id="c6"><a href="https://www.nerdfonts.com/cheat-sheet">Nerd Fonts cheat sheet</a>. Reference for what we are <em>not</em> using in v1.0 and why.</li>
+      <li id="c7"><a href="https://no-color.org">no-color.org — the <code>NO_COLOR</code> standard</a>. Specification for honouring the environment variable.</li>
+      <li id="c8"><a href="https://docs.helix-editor.com/configuration.html">Helix editor — configuration &amp; statusline</a>. Reference for context-aware persistent status lines.</li>
+      <li id="c9"><a href="https://ratatui.rs/concepts/layout/">ratatui — Layout concepts</a>. Constraint-solver-based pane proportions.</li>
+      <li id="c10"><a href="https://github.com/jesseduffield/lazygit#cool-features">lazygit — "cool features" README section</a>. Source for the deliberate-low-density choice as a UX win.</li>
+      <li id="c11"><a href="https://webaim.org/articles/contrast/">WebAIM — Contrast and Color Accessibility</a>. WCAG AA / AAA contrast ratios.</li>
+      <li id="c12"><a href="https://jfly.uni-koeln.de/color/">Okabe &amp; Ito — colourblind-safe palette</a>. The 8-colour reference used in scientific visualization.</li>
+      <li id="c13"><a href="https://man.openbsd.org/sysexits.3">OpenBSD <code>sysexits(3)</code></a>. Reference exit-code vocabulary for Unix CLI tools.</li>
+      <li id="c14"><a href="https://en.wikipedia.org/wiki/Box-drawing_character">Wikipedia — Box-drawing character</a>. History and cross-platform support overview.</li>
+      <li id="c15"><a href="https://www.unicode.org/reports/tr51/">UTS #51 — Unicode Emoji</a>. Why emoji variation selectors break grid alignment in TUIs.</li>
+      <li id="c16"><a href="https://www.daniel-higginbotham.com/blog/programming/2017/10/03/the-information-theory-of-ui-design.html">Daniel Higginbotham — "The Information Theory of UI Design"</a>. The intellectual frame for treating UI as information bandwidth.</li>
+      <li id="c17"><a href="https://invisible-island.net/ncurses/ncurses-intro.html">ncurses — programmer's introduction</a>. The original "terminal as designed canvas" reference; ratatui inherits its model.</li>
+      <li id="c18"><a href="https://github.com/aristocratos/btop">btop — README and screenshots</a>. Reference for high-density TUI that nonetheless retains hierarchy.</li>
+      <li id="c19"><a href="https://github.com/zellij-org/zellij">zellij — modern terminal multiplexer</a>. Reference for theme-able TUI with explicit semantic tokens.</li>
+    </ol>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Written as one of five adversarial stances in the <a href="./overview.html">frontend facet</a> of the
+    <a href="../index.html">deep-dive technical design</a>. The synthesis pass reconciles this essay
+    against the four peers (<a href="./agent-vim-power-user.html">vim-power-user</a>,
+    <a href="./agent-accessibility-advocate.html">accessibility-advocate</a>,
+    <a href="./agent-onboarding-novice.html">onboarding-novice</a>,
+    <a href="./agent-cli-unix-purist.html">cli-unix-purist</a>) and picks winners per sub-decision.
+  </p>
+</main>
+</body>
+</html>

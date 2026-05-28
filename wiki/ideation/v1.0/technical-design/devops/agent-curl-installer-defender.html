@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Curl Installer Defender — DevOps deep dive — MCP Manager v1.0</title>
+<meta name="description" content="A defense of the curl|sh installer for MCP Manager v1.0 — done responsibly with signed checksums, deterministic tarballs, fresh-VM test matrix, --dry-run, --prefix, and a paranoid uninstall path.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">devops · curl-installer-defender</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">devops overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Curl Installer Defender's DevOps</h1>
+  <p class="lede">
+    One line. Fresh macOS or Linux box. It works. The user types
+    <code>curl -fsSL https://mcp-manager.dev/install.sh | sh</code>, the script verifies
+    itself against a published signature, downloads a deterministic tarball, verifies it
+    against a minisign-signed SHA256SUMS, drops two binaries into <code>$PREFIX/bin</code>,
+    writes a PATH snippet to the right rc file, registers a launchd / systemd-user unit,
+    and prints a single helpful next-step. That is the entire UX contract. v1.0 ships it,
+    tests it on a fresh-VM matrix every release, and nobody — neither the Nix purist nor
+    the FHS packager nor the supply-chain-sec auditor — has yet shown me a 2026 install
+    flow with a better latency-to-first-success budget.
+  </p>
+
+  <p>
+    <span class="evidence-badge">Single binary download</span>
+    <span class="evidence-badge">Signed SHA256SUMS</span>
+    <span class="evidence-badge">--dry-run + --prefix</span>
+    <span class="evidence-badge">Fresh-VM CI matrix</span>
+    <span class="evidence-badge">Paranoid uninstall</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments vs. peers</a></li>
+      <li><a href="#design">Design — install.sh, tarball, VM matrix, uninstall</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      The "curl-pipe-shell considered harmful" essay is older than git's
+      <code>main</code>-default rename, and every junior security blogger reheats it once
+      a year. The core complaint — that an attacker who controls the install host can
+      ship code that runs as the current user — is true. It is also true of
+      <code>brew install</code>, of <code>nix profile install</code>, of every
+      <code>apt</code> mirror, of every container registry, and of every CI runner that
+      curls its own bootstrap. The argument from <em>"curl|sh is the worst"</em> proves
+      far too much; once you accept that you do, in fact, trust the upstream you are
+      installing software <em>from</em>, the question is no longer "should I trust this
+      transport" but "is this transport the most legible, the most inspectable, and the
+      most reproducible <em>given</em> the trust I have already extended?". For a single
+      static binary with no native compilation, no per-distro packaging dance, and no
+      runtime dependency graph, the answer is yes.
+    </p>
+
+    <p>
+      The genre I am defending is not the cowboy script that <code>sudo rm -rf</code>'s
+      half your <code>/usr</code> and writes random init files. The genre I am defending
+      is the <a href="https://sh.rustup.rs/">rustup</a> / <a href="https://get.starship.rs">starship</a>
+      / <a href="https://nvm.sh">nvm</a> / <a href="https://fly.io/docs/flyctl/install/">flyctl</a>
+      / <a href="https://tailscale.com/download/linux">tailscale</a>
+      style of installer: a hundred-and-fifty lines of POSIX shell, defensive
+      <code>set -eu</code>, an arch detector, a TLS-pinned fetch, a checksum verify, an
+      atomic <code>mv</code> into <code>$PREFIX/bin</code>, and a single
+      "you may need to <code>source ~/.zshrc</code>" stinger. Rustup has run this play
+      since 2016 on every major Linux distro, every macOS version, and inside every CI
+      provider on Earth without anyone losing sleep. The bar for "responsibly done
+      curl|sh" is high but it is not hypothetical — there are working models we can
+      borrow and improve.
+    </p>
+
+    <p>
+      My peers will try to drag this debate into the deep water of supply-chain
+      provenance and reproducible builds, and I will meet them there: I agree we should
+      publish a <code>SHA256SUMS</code>, sign it with minisign, optionally cross-sign
+      with cosign-keyless, attach an SBOM via syft/spdx, and notarize the macOS binaries
+      against Apple's notary service. None of that is in tension with curl|sh. All of it
+      can be done <em>inside</em> the installer's verification step, because the installer
+      itself is a tiny program whose entire job is "fetch one tarball, verify two
+      signatures, extract, atomic-move, register service, print next step." It is much
+      easier to audit a 200-line shell script than it is to audit a 12,000-line Nix
+      derivation that overrides three transitive C compilers because one of them
+      depends on Bash 5.2.15 instead of 5.2.21.
+    </p>
+
+    <p>
+      The other thing my peers will pretend not to notice is the user. The user is sitting
+      at a fresh macOS box at 11pm and just wants the demo to work. They will not
+      install Nix. They will not install Homebrew if they do not already have it. They
+      will not <code>sudo apt install mcpm</code> if we are not in their distro's repos —
+      and we will not be, because v1.0 cannot get into Debian stable in any reasonable
+      timeframe and getting into the AUR / Fedora COPR / homebrew-core involves social
+      processes that take months. The only install path that <em>works at the moment of
+      first contact</em> is curl|sh. Every other path requires that the user has already
+      bought into a meta-installer that, itself, was installed via — what do you suppose? —
+      a curl|sh script of someone else's design. Homebrew is literally installed by
+      <code>/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</code>.
+      Nix on macOS is installed by
+      <code>curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s</code>.
+      The argument that "curl|sh is irresponsible" cannot survive contact with the actual
+      ecosystem because the ecosystem is built on it.
+    </p>
+
+    <p>
+      So my position is not "curl|sh is fine, ship it and run." My position is
+      <em>"curl|sh, signed, verified, dry-runnable, with a published checksum of the
+      install.sh itself, with a fresh-VM CI matrix that catches regressions, with a clean
+      uninstall, is the right v1.0 transport — and the rest is engineering."</em> The rest
+      of this document is that engineering.
+    </p>
+
+    <h3>What "responsible" means in concrete terms</h3>
+    <ul>
+      <li>
+        <strong>The install.sh itself is reproducible.</strong> Each release publishes
+        <code>install.sh</code> alongside <code>install.sh.sha256</code> and
+        <code>install.sh.minisig</code> in the GitHub Release. Paranoid users
+        <code>curl … &gt; install.sh; minisign -V -P &lt;baked-pubkey&gt; -m install.sh; sh install.sh</code>.
+      </li>
+      <li>
+        <strong>Binaries are signed twice.</strong> macOS binaries are notarized via Apple
+        Developer Program (so Gatekeeper does not block them); Linux tarballs are
+        minisigned with a key whose fingerprint is published in the project README, in
+        the GitHub repo description, and in the website's TLS-served
+        <code>/.well-known/minisign-pubkey</code>.
+      </li>
+      <li>
+        <strong>The installer dry-runs.</strong>
+        <code>curl … | sh -s -- --dry-run</code> prints every action — every file it would
+        write, every directory it would create, every service-manager unit it would
+        register — and exits 0 without touching the filesystem.
+      </li>
+      <li>
+        <strong>The installer is overridable.</strong>
+        <code>--prefix=/opt/mcpm</code> sets install root.
+        <code>--no-service</code> skips launchd / systemd-user registration.
+        <code>--no-path</code> skips the rc-file PATH snippet.
+        <code>--version=1.0.3</code> pins a release.
+        <code>--no-modify-path</code> is an alias to match rustup's vocabulary, so users
+        with muscle memory don't have to learn ours.
+      </li>
+      <li>
+        <strong>The installer is reversible.</strong> Every file the installer touches is
+        recorded in <code>~/.local/share/mcp-manager/install-manifest.json</code>;
+        <code>mcpm self-uninstall</code> reads that manifest and removes exactly what was
+        installed — no shotgun <code>rm -rf</code>.
+      </li>
+      <li>
+        <strong>The installer is observable.</strong>
+        <code>MCPM_VERBOSE=1 curl … | sh</code> turns on <code>set -x</code>; every
+        downloaded URL, every checksum verify, every <code>mv</code>, every
+        <code>chmod</code> is printed to stderr. No telemetry — that's a permanent project
+        decision — but you can see what it did, in real time, in your terminal.
+      </li>
+    </ul>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments vs. peers</h2>
+
+    <h3>vs. nix-purist — "curl|sh is sketchy, flakes are reproducible"</h3>
+
+    <p>
+      My friend the Nix purist is going to say that <code>nix profile install
+      github:user/mcp-manager</code> gives them a content-addressed, bit-identical install
+      that the curl script cannot match. They are right on the technical claim and wrong
+      on its relevance. Nix is the second channel — v1.0 ships
+      <em>both</em>, this is not either-or. But Nix cannot be the <em>first</em> channel
+      because the on-ramp to Nix is itself a curl|sh installer. The Determinate Systems
+      installer that everyone actually uses on macOS in 2026 is
+      <a href="https://install.determinate.systems/nix">curl … | sh</a>. The official
+      Nix installer at <a href="https://nixos.org/download">nixos.org/download</a> is
+      also curl … | sh. If "curl|sh is sketchy" then Nix's own bootstrap is sketchy. Pick
+      one.
+    </p>
+
+    <p>
+      Reproducibility-for-the-user is a separate axis from
+      reproducibility-for-the-distributor. Our binaries <em>are</em> built reproducibly
+      from a pinned <code>rust-toolchain.toml</code>, a pinned cargo lockfile, and a
+      pinned Nix flake that produces the release artifact set. The curl installer fetches
+      <em>that exact artifact</em>. The user gets the same bytes as the Nix user — they
+      just don't have to install a 1.2GB store and a daemon to get them. The Nix channel
+      is for the 5% of users who want flake-pinned reproducibility for their own
+      CI/devshells; the curl channel is for the 95% who want a working binary in 8
+      seconds.
+    </p>
+
+    <p>
+      Also: <code>devenv</code> is great. It's also what we use for the per-MCP-server
+      isolation layer (see <a href="../../research/stoic-badger-sandbox/">stoic-badger-sandbox</a>).
+      The presence of Nix <em>inside the product</em> for sandboxing does not imply the
+      <em>installer</em> should be Nix-only. Different layers, different constraints.
+    </p>
+
+    <h3>vs. distro-packager — "ship deb/rpm/AUR, follow FHS, install manpages"</h3>
+
+    <p>
+      The distro-packager is going to argue that the One True Way is to get
+      into <code>apt</code>, <code>dnf</code>, <code>pacman</code>, and homebrew-core, so
+      that users on each platform use their native package manager. They will cite FHS,
+      <code>/usr/share/man/man1/mcpm.1.gz</code>, polkit policies, and the joys of
+      Debian's two-year stable cycle. Three problems:
+    </p>
+    <ol>
+      <li>
+        <strong>Cadence mismatch.</strong> v1.0 will iterate. We expect to ship patch
+        releases every 1–2 weeks for the first six months. Debian stable does not move at
+        that cadence; users would be a year out of date. Even rolling-release distros
+        (Arch, Fedora Rawhide) require a packager to update the spec, and the packager is
+        not us — it's a volunteer who may be on vacation when CVE-2026-X drops.
+      </li>
+      <li>
+        <strong>Per-distro fragmentation.</strong> A native .deb has to declare
+        <code>Depends:</code> on the libc version, on libsecret, on systemd. An .rpm has
+        to differentiate between RHEL 8, RHEL 9, Fedora 39, and openSUSE. We would either
+        ship 12 different packages or pick one and abandon the rest. The static-Rust
+        binary in a tarball solves this once.
+      </li>
+      <li>
+        <strong>FHS is fine but optional.</strong> We respect XDG for config
+        (<code>$XDG_CONFIG_HOME/mcp-manager/</code>), state
+        (<code>$XDG_STATE_HOME/mcp-manager/</code>), and runtime
+        (<code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code>). We default <code>$PREFIX</code>
+        to <code>$HOME/.local</code> (per XDG) on Linux and <code>/usr/local</code> on
+        macOS. Manpages can ship inside the tarball at
+        <code>share/man/man1/mcpm.1.gz</code>; the installer can drop them into
+        <code>$PREFIX/share/man</code> with a tiny <code>manpath</code> hint. The
+        distro-packager's <em>concerns</em> are addressed; their preferred <em>vehicle</em>
+        (distro repos) is not.
+      </li>
+    </ol>
+    <p>
+      If a third-party packager wants to ship us in the AUR or in nixpkgs or in MacPorts,
+      we welcome it. We will not block them. We will not <em>be</em> them in v1.0.
+    </p>
+
+    <h3>vs. sre-hawk — "observability, on-call, what happens at 3am?"</h3>
+
+    <p>
+      The SRE worries that without telemetry we won't know when installs fail. The
+      project decision is "no telemetry, ever" (locked) — so the SRE has to accept that
+      the failure-mode visibility we get is via voluntary user reports on the issue
+      tracker. Within that constraint, the curl installer is the most debuggable
+      install path possible: it is 200 lines of POSIX shell, every action is a single
+      command, <code>MCPM_VERBOSE=1</code> dumps <code>set -x</code> to stderr, and the
+      user can paste the entire trace into a GitHub issue. Compare that to debugging a
+      .deb postinst failure, which buries errors in
+      <code>/var/log/apt/term.log</code> behind two layers of dpkg trigger machinery.
+    </p>
+
+    <p>
+      For the daemon side, the installer registers a launchd plist on macOS / systemd-user
+      unit on Linux. Both come with native journaling — <code>log show --predicate
+      'subsystem == "dev.mcp-manager"'</code> on macOS,
+      <code>journalctl --user -u mcpmanagerd</code> on Linux. That's the on-call story:
+      users on-call for their own machine use OS-native tools; we don't reinvent a logging
+      pipeline; the SRE gets exactly the observability stack their OS already gives them.
+    </p>
+
+    <p>
+      The installer also writes <code>~/.local/share/mcp-manager/install.log</code>
+      with timestamps for every step — a poor-person's tracing for the install itself,
+      survivable across terminal closes. That's enough to debug 95% of install failures
+      from a user-pasted log.
+    </p>
+
+    <h3>vs. supply-chain-sec — "curl|sh is irresponsible, where's the SBOM, cosign-keyless this"</h3>
+
+    <p>
+      This is my dance partner. The supply-chain-sec critic and I actually want most of
+      the same things — we differ only on which knobs to turn. Let me concede the genuine
+      points and then push back on the rhetoric.
+    </p>
+
+    <p><strong>Conceded:</strong></p>
+    <ul>
+      <li>
+        We publish <code>SHA256SUMS</code> and <code>SHA256SUMS.minisig</code>. The
+        installer verifies the tarball's hash against SHA256SUMS, and verifies SHA256SUMS
+        against the baked-in minisign pubkey. Two-step verify, exactly as the
+        <a href="https://jsonresume.org/themes/">JSON Resume</a> ecosystem and the
+        <a href="https://github.com/jedisct1/minisign">minisign</a> upstream do.
+      </li>
+      <li>
+        We publish an SBOM (spdx-json) per release via
+        <a href="https://github.com/anchore/syft">syft</a>, attached to the GitHub
+        Release as <code>mcp-manager-1.0.0.spdx.json</code>.
+      </li>
+      <li>
+        We sign tarballs with cosign-keyless (Sigstore / Fulcio) in addition to minisign,
+        so users who already trust the Sigstore root of trust can verify via the
+        public-good transparency log. Both signatures are checked when both verifiers
+        are present; minisign is the required path because it has no network dependency.
+      </li>
+      <li>
+        macOS binaries are notarized via Apple's notary service. Gatekeeper does not
+        block them on first run.
+      </li>
+      <li>
+        The installer pins TLS 1.2+ (<code>curl --tlsv1.2 --proto '=https'</code>),
+        rejects redirects to non-HTTPS, and uses <code>--fail-with-body</code> to surface
+        HTTP errors loudly rather than piping HTML into <code>sh</code>.
+      </li>
+    </ul>
+
+    <p><strong>What I won't concede:</strong></p>
+    <ul>
+      <li>
+        That the user must have <code>cosign</code> or <code>gpg</code> already installed
+        for the installer to be "responsible." The minisign verification is performed by
+        a <em>statically linked verify-only helper</em> embedded in the installer (via a
+        signed sidecar binary that we fetch and run). No pre-existing crypto tooling
+        required. The supply-chain-sec critic loses the "users don't have minisign
+        installed" lever.
+      </li>
+      <li>
+        That distributing via curl|sh is meaningfully more risky than distributing via
+        Homebrew, Nix, or any other package manager. They all ultimately resolve to
+        "download bytes from a server controlled by the upstream, run code derived from
+        those bytes." The difference is layers of abstraction, not threat model. The
+        threat model collapses to "do you trust the publisher's signing key?" which is
+        identical across transports.
+      </li>
+      <li>
+        That we should require GPG. GPG's web of trust is dead, key servers are dead,
+        and the typical user cannot meaningfully participate in it. Minisign is a single
+        Ed25519 keypair with a published fingerprint — the simplest crypto that works.
+        See <a href="https://www.latacora.com/blog/2019/07/16/the-pgp-problem/">"The PGP Problem"</a>.
+      </li>
+    </ul>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3>install.sh — annotated outline</h3>
+
+    <p>
+      The installer is a single POSIX-sh file, ~250 lines, under
+      <code>website/install.sh</code> in the repo, served from
+      <code>https://mcp-manager.dev/install.sh</code> via the project's static site host.
+      It does no <code>sudo</code> by default (installs to <code>$HOME/.local</code> on
+      Linux, <code>/usr/local</code> on macOS where the user has write access via
+      <code>/usr/local/bin</code> being writable on macOS Apple-Silicon defaults — or to
+      <code>$HOME/.local</code> if not). It does no compilation. It does one
+      download-and-verify of a sidecar verifier, one of the SHA256SUMS+signature, and one
+      of the tarball.
+    </p>
+
+    <pre><code class="lang-bash">#!/bin/sh
+# install.sh — mcp-manager v1.0
+# https://mcp-manager.dev/install.sh
+# SPDX-License-Identifier: Apache-2.0
+
+set -eu
+
+# ----- Config -----------------------------------------------------------------
+MCPM_VERSION="${MCPM_VERSION:-latest}"
+MCPM_PREFIX="${MCPM_PREFIX:-}"          # auto-detected below
+MCPM_NO_SERVICE="${MCPM_NO_SERVICE:-0}"
+MCPM_NO_PATH="${MCPM_NO_PATH:-0}"
+MCPM_DRY_RUN="${MCPM_DRY_RUN:-0}"
+MCPM_VERBOSE="${MCPM_VERBOSE:-0}"
+MCPM_BASE_URL="${MCPM_BASE_URL:-https://github.com/mcp-manager/mcp-manager/releases}"
+MCPM_MINISIGN_PUBKEY="RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"
+# ^ baked-in trust anchor; rotation requires a new install.sh release
+
+# ----- Arg parsing ------------------------------------------------------------
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version=*)        MCPM_VERSION="${1#*=}";;
+    --prefix=*)         MCPM_PREFIX="${1#*=}";;
+    --no-service)       MCPM_NO_SERVICE=1;;
+    --no-path|--no-modify-path) MCPM_NO_PATH=1;;
+    --dry-run)          MCPM_DRY_RUN=1;;
+    --verbose|-v)       MCPM_VERBOSE=1;;
+    --help|-h)          usage; exit 0;;
+    *) err "unknown flag: $1"; exit 2;;
+  esac
+  shift
+done
+[ "$MCPM_VERBOSE" = "1" ] && set -x
+
+# ----- Detect OS + arch -------------------------------------------------------
+detect_target() {
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  arch=$(uname -m)
+  case "$os" in
+    darwin) os_triple="apple-darwin";;
+    linux)  os_triple="unknown-linux-gnu";;
+    *) err "unsupported OS: $os (only macOS and Linux are supported)"; exit 1;;
+  esac
+  case "$arch" in
+    x86_64|amd64)  arch_triple="x86_64";;
+    aarch64|arm64) arch_triple="aarch64";;
+    *) err "unsupported arch: $arch"; exit 1;;
+  esac
+  TARGET="${arch_triple}-${os_triple}"
+}
+
+# ----- Resolve version --------------------------------------------------------
+resolve_version() {
+  if [ "$MCPM_VERSION" = "latest" ]; then
+    # Follow the /latest redirect to get the tag
+    MCPM_VERSION=$(curl --tlsv1.2 --proto '=https' -fsSLI -o /dev/null \
+      -w '%{url_effective}' "$MCPM_BASE_URL/latest" | sed 's#.*/tag/##')
+  fi
+  case "$MCPM_VERSION" in v*) ;; *) MCPM_VERSION="v$MCPM_VERSION";; esac
+}
+
+# ----- Pick prefix ------------------------------------------------------------
+default_prefix() {
+  if [ -z "$MCPM_PREFIX" ]; then
+    case "$(uname -s)" in
+      Darwin) MCPM_PREFIX="/usr/local";;
+      Linux)  MCPM_PREFIX="$HOME/.local";;
+    esac
+  fi
+  BIN_DIR="$MCPM_PREFIX/bin"
+  MAN_DIR="$MCPM_PREFIX/share/man/man1"
+  STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/share}/mcp-manager"
+  # Writability check; fall back to ~/.local if not writable
+  if ! mkdir -p "$BIN_DIR" 2>/dev/null; then
+    warn "$BIN_DIR not writable; falling back to \$HOME/.local"
+    MCPM_PREFIX="$HOME/.local"
+    BIN_DIR="$MCPM_PREFIX/bin"
+    MAN_DIR="$MCPM_PREFIX/share/man/man1"
+    mkdir -p "$BIN_DIR"
+  fi
+}
+
+# ----- Fetch + verify ---------------------------------------------------------
+fetch() {
+  # $1 = URL, $2 = output path
+  curl --tlsv1.2 --proto '=https' --fail-with-body -sSL "$1" -o "$2"
+}
+
+download_artifacts() {
+  TMP=$(mktemp -d)
+  trap 'rm -rf "$TMP"' EXIT
+  TARBALL="mcp-manager-${MCPM_VERSION#v}-${TARGET}.tar.gz"
+  REL="$MCPM_BASE_URL/download/$MCPM_VERSION"
+  step "downloading tarball + signatures"
+  fetch "$REL/$TARBALL"             "$TMP/$TARBALL"
+  fetch "$REL/SHA256SUMS"           "$TMP/SHA256SUMS"
+  fetch "$REL/SHA256SUMS.minisig"   "$TMP/SHA256SUMS.minisig"
+  # Sidecar verify helper — tiny static binary that does minisign + sha256.
+  # Signed itself by the same trust anchor; we verify it against an embedded
+  # hash baked into install.sh at release time.
+  fetch "$REL/mcpm-verify-${TARGET}" "$TMP/mcpm-verify"
+  chmod +x "$TMP/mcpm-verify"
+  expected_verify_hash="$EMBEDDED_VERIFY_HASH"  # patched in by release pipeline
+  actual="$(shasum_256 "$TMP/mcpm-verify")"
+  [ "$expected_verify_hash" = "$actual" ] || die "verify-helper hash mismatch"
+}
+
+verify_artifacts() {
+  step "verifying SHA256SUMS signature"
+  "$TMP/mcpm-verify" minisign \
+      --pubkey "$MCPM_MINISIGN_PUBKEY" \
+      --signature "$TMP/SHA256SUMS.minisig" \
+      --message "$TMP/SHA256SUMS"
+  step "verifying tarball checksum"
+  "$TMP/mcpm-verify" sha256sum \
+      --sums "$TMP/SHA256SUMS" \
+      --target "$TMP/$TARBALL"
+}
+
+# ----- Extract + install ------------------------------------------------------
+install_files() {
+  step "extracting"
+  mkdir -p "$TMP/extract"
+  tar -xzf "$TMP/$TARBALL" -C "$TMP/extract"
+
+  manifest="$STATE_DIR/install-manifest.json"
+  mkdir -p "$STATE_DIR"
+  printf '{"version":"%s","files":[' "$MCPM_VERSION" > "$manifest.tmp"
+  first=1
+  install_one() {
+    src="$1"; dst="$2"; mode="$3"
+    if [ "$MCPM_DRY_RUN" = "1" ]; then
+      echo "  [dry-run] install $src -> $dst (mode $mode)"
+    else
+      install -m "$mode" "$src" "$dst"
+    fi
+    [ $first -eq 0 ] && printf ',' >> "$manifest.tmp"
+    printf '"%s"' "$dst" >> "$manifest.tmp"; first=0
+  }
+  install_one "$TMP/extract/bin/mcpm"          "$BIN_DIR/mcpm"          0755
+  install_one "$TMP/extract/bin/mcpmanagerd"   "$BIN_DIR/mcpmanagerd"   0755
+  mkdir -p "$MAN_DIR"
+  install_one "$TMP/extract/share/man/man1/mcpm.1.gz" "$MAN_DIR/mcpm.1.gz" 0644
+  printf ']}\n' >> "$manifest.tmp"
+  mv "$manifest.tmp" "$manifest"
+}
+
+# ----- PATH snippet -----------------------------------------------------------
+write_path_snippet() {
+  [ "$MCPM_NO_PATH" = "1" ] && return 0
+  case "$BIN_DIR" in
+    /usr/local/bin) return 0 ;;   # already on PATH virtually everywhere
+  esac
+  shell_name=$(basename "${SHELL:-/bin/sh}")
+  case "$shell_name" in
+    bash) rc="$HOME/.bashrc" ;;
+    zsh)  rc="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    fish) rc="$HOME/.config/fish/conf.d/mcp-manager.fish" ;;
+    *)    warn "unrecognised shell ($shell_name); add $BIN_DIR to PATH manually"; return 0 ;;
+  esac
+  snippet_begin="# &gt;&gt;&gt; mcp-manager &gt;&gt;&gt;"
+  snippet_end="# &lt;&lt;&lt; mcp-manager &lt;&lt;&lt;"
+  if [ -f "$rc" ] &amp;&amp; grep -q "$snippet_begin" "$rc"; then
+    return 0   # idempotent
+  fi
+  mkdir -p "$(dirname "$rc")"
+  if [ "$shell_name" = "fish" ]; then
+    cat &gt;&gt; "$rc" &lt;&lt;EOF
+$snippet_begin
+fish_add_path -g $BIN_DIR
+$snippet_end
+EOF
+  else
+    cat &gt;&gt; "$rc" &lt;&lt;EOF
+$snippet_begin
+case ":\$PATH:" in *":$BIN_DIR:"*) ;; *) export PATH="$BIN_DIR:\$PATH" ;; esac
+$snippet_end
+EOF
+  fi
+}
+
+# ----- Service-manager registration -------------------------------------------
+register_service() {
+  [ "$MCPM_NO_SERVICE" = "1" ] &amp;&amp; return 0
+  case "$(uname -s)" in
+    Darwin) register_launchd ;;
+    Linux)  register_systemd_user ;;
+  esac
+}
+
+# ----- Final message ----------------------------------------------------------
+print_next() {
+  cat &lt;&lt;EOF
+mcp-manager $MCPM_VERSION installed to $BIN_DIR.
+
+  next:  $BIN_DIR/mcpm init
+         (or restart your shell so '$BIN_DIR/mcpm' is on PATH)
+
+docs:    https://mcp-manager.dev/docs
+issues:  https://github.com/mcp-manager/mcp-manager/issues
+EOF
+}
+
+main() {
+  detect_target
+  resolve_version
+  default_prefix
+  download_artifacts
+  verify_artifacts
+  install_files
+  write_path_snippet
+  register_service
+  print_next
+}
+main "$@"
+</code></pre>
+
+    <p>
+      The script is wrapped in <code>main "$@"</code> at the end, so a partial download
+      (e.g. dropped connection mid-pipe) does not cause partial execution: <code>sh</code>
+      only invokes <code>main</code> once the whole file is read into memory. That's the
+      same defense rustup uses; see <a href="https://www.seancassidy.me/dont-pipe-to-your-shell.html">"Don't
+      pipe to your shell"</a> for the cautionary tale and rustup's own
+      <a href="https://github.com/rust-lang/rustup/blob/master/rustup-init.sh">rustup-init.sh</a>
+      for the canonical mitigation.
+    </p>
+
+    <h3>Tarball layout</h3>
+
+    <p>
+      Deterministic. Sorted file order. Pinned mtimes (1970-01-01) for reproducibility.
+      Two binaries, one manpage per command, plus a versioned README + LICENSE +
+      SBOM-pointer. No install-script-inside-the-tarball; the install logic lives
+      <em>only</em> in install.sh so it's auditable in one place.
+    </p>
+
+    <pre><code class="lang-bash">mcp-manager-1.0.0-aarch64-apple-darwin/
+├── bin/
+│   ├── mcpm                (statically-linked Rust binary, ~14 MB)
+│   └── mcpmanagerd         (statically-linked Rust binary, ~16 MB)
+├── share/
+│   ├── doc/
+│   │   ├── README.md
+│   │   ├── LICENSE.txt
+│   │   ├── CHANGELOG.md
+│   │   └── SBOM.spdx.json
+│   └── man/
+│       └── man1/
+│           ├── mcpm.1.gz
+│           └── mcpmanagerd.1.gz
+└── share/
+    └── mcp-manager/
+        ├── launchd/
+        │   └── dev.mcp-manager.mcpmanagerd.plist
+        └── systemd/
+            └── mcpmanagerd.service</code></pre>
+
+    <p>
+      Built via <code>tar --sort=name --owner=0 --group=0 --numeric-owner
+      --mtime='@0' -czf</code> on Linux, and an equivalent invocation on macOS via
+      <code>bsdtar</code>'s <code>--options gzip:compression-level=9</code> +
+      explicit-uid/gid flags. The release pipeline diffs every artifact byte-for-byte
+      against the previous build to catch non-determinism regressions
+      (see <a href="https://reproducible-builds.org/docs/archives/">reproducible-builds.org/docs/archives</a>).
+    </p>
+
+    <h3>Fresh-VM test matrix</h3>
+
+    <p>
+      Every release runs the installer end-to-end on fresh CI VMs across the matrix
+      below. Failure on any cell blocks the release. We pin VM images so test runs
+      are reproducible.
+    </p>
+
+    <table class="compare">
+      <thead><tr><th>OS</th><th>Arch</th><th>Shell</th><th>Network</th><th>What we verify</th></tr></thead>
+      <tbody>
+        <tr><td>macOS 13 Ventura</td><td>x86_64</td><td>zsh (default)</td><td>online</td><td>fresh install, daemon registers, <code>mcpm test fs</code> passes</td></tr>
+        <tr><td>macOS 14 Sonoma</td><td>aarch64</td><td>zsh</td><td>online</td><td>same, plus Gatekeeper notarization passes (no popup)</td></tr>
+        <tr><td>macOS 15 Sequoia</td><td>aarch64</td><td>zsh</td><td>online + offline</td><td>same, plus offline-after-install (daemon still runs)</td></tr>
+        <tr><td>Ubuntu 22.04 LTS</td><td>x86_64</td><td>bash</td><td>online</td><td>systemd-user unit registers, <code>journalctl --user -u mcpmanagerd</code> shows startup</td></tr>
+        <tr><td>Ubuntu 24.04 LTS</td><td>aarch64</td><td>bash</td><td>online</td><td>same on ARM</td></tr>
+        <tr><td>Debian 12</td><td>x86_64</td><td>bash</td><td>online</td><td>same; verifies libsecret available for keyring backend</td></tr>
+        <tr><td>Fedora 40</td><td>x86_64</td><td>bash</td><td>online</td><td>same; verifies cgroup-v2 path for OOM detection</td></tr>
+        <tr><td>Arch (latest)</td><td>x86_64</td><td>bash</td><td>online</td><td>rolling-release sanity; fish-shell variant subtest</td></tr>
+        <tr><td>Alpine 3.20</td><td>x86_64</td><td>ash (BusyBox)</td><td>online</td><td>installer's POSIX-sh portability check; expected: works with limitations doc</td></tr>
+        <tr><td>Ubuntu 22.04</td><td>x86_64</td><td>fish 3.7</td><td>online</td><td>fish PATH snippet writes to <code>~/.config/fish/conf.d/mcp-manager.fish</code></td></tr>
+        <tr><td>Ubuntu 22.04</td><td>x86_64</td><td>bash</td><td>online</td><td><code>--dry-run</code> exits 0 with zero filesystem mutations (verified by snapshot diff)</td></tr>
+        <tr><td>Ubuntu 22.04</td><td>x86_64</td><td>bash</td><td>online</td><td><code>--prefix=/opt/mcpm</code> custom prefix; PATH snippet honors it</td></tr>
+        <tr><td>Ubuntu 22.04</td><td>x86_64</td><td>bash</td><td>online</td><td>idempotent re-run of installer — no duplicate PATH snippet, no duplicate service unit</td></tr>
+        <tr><td>Ubuntu 22.04</td><td>x86_64</td><td>bash</td><td>online</td><td><code>mcpm self-uninstall</code> removes exactly the files in the manifest, leaves no orphans</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      The matrix runs on GitHub Actions for Linux + macOS-runners. Alpine runs in
+      Docker. Each cell takes ~90 seconds and they run in parallel; total wall-clock is
+      under 4 minutes. Cheaper than any equivalent test of "did our Debian .deb actually
+      install correctly" — that's the whole point.
+    </p>
+
+    <h3>PATH-rc snippet logic</h3>
+
+    <p>
+      Detect <code>$SHELL</code> via <code>basename</code>. Write a fenced snippet
+      (begin/end markers) into the right rc file. Idempotent — grep for the begin marker
+      before writing. The snippet uses POSIX <code>case</code> to guard against
+      re-adding to PATH on every shell start. For fish, write to
+      <code>~/.config/fish/conf.d/</code> (single-purpose file, no fencing needed). For
+      unrecognised shells (csh, nu, …), print a warning with the line the user should
+      add manually — do not write to a random rc file we don't understand.
+    </p>
+
+    <h3>--dry-run semantics</h3>
+
+    <p>
+      Every state-mutating function checks <code>$MCPM_DRY_RUN</code> and prints
+      <code>[dry-run]</code> + the action instead of executing. Read-only steps
+      (download to <code>$TMP</code>, verify signatures, detect arch, resolve version)
+      still run because the user wants to see them work. Exit code: 0 if dry-run reached
+      <code>print_next</code> without error, non-zero on any verification failure. The
+      net effect: <code>curl … | sh -s -- --dry-run</code> tells you "this is exactly
+      what I would have done, and yes, the signature was good."
+    </p>
+
+    <h3>--prefix semantics</h3>
+
+    <p>
+      <code>--prefix=/opt/mcpm</code> sets <code>$MCPM_PREFIX</code>, then
+      <code>$BIN_DIR=$PREFIX/bin</code>, <code>$MAN_DIR=$PREFIX/share/man/man1</code>.
+      Writability is tested; if the prefix is not writable by the current user, we
+      fall back to <code>$HOME/.local</code> with a warning. We never escalate to
+      <code>sudo</code> automatically — the user can pre-create the prefix with the
+      right perms if they want a system-wide install.
+    </p>
+
+    <h3>Service-manager registration</h3>
+
+    <p>
+      On macOS: install
+      <code>~/Library/LaunchAgents/dev.mcp-manager.mcpmanagerd.plist</code>, then
+      <code>launchctl bootstrap gui/$UID</code> it. The plist sets
+      <code>KeepAlive=false</code> because we want auto-spawn-from-mcpm-exec, not
+      always-running. <code>RunAtLoad=false</code>. The plist is templated by install.sh
+      to substitute <code>$BIN_DIR/mcpmanagerd</code> as the program path.
+    </p>
+
+    <p>
+      On Linux: install
+      <code>~/.config/systemd/user/mcpmanagerd.service</code>, then
+      <code>systemctl --user daemon-reload &amp;&amp; systemctl --user enable
+      mcpmanagerd.socket</code> (socket-activated; the daemon spawns only when
+      something connects to <code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code>).
+      Socket activation is the right primitive here — it matches the auto-spawn semantics
+      perfectly, and it's already what
+      <a href="https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html">systemd.socket(5)</a>
+      is designed for.
+    </p>
+
+    <p>
+      <code>--no-service</code> skips both. The user can run <code>mcpmanagerd</code> in
+      a terminal manually for development.
+    </p>
+
+    <h3>Auto-spawn confirmation</h3>
+
+    <p>
+      After registration, the installer runs <code>mcpm doctor</code> (a built-in
+      self-test). It verifies: (a) <code>mcpmanagerd</code> binary is launchable, (b)
+      socket path is writable, (c) for systemd: the .socket unit is enabled, (d) for
+      launchd: the LaunchAgent is loaded. If anything fails, the installer prints a clear
+      remediation and exits non-zero. The user is never left in a "installed but
+      mysteriously not working" state.
+    </p>
+
+    <h3>Update mechanism</h3>
+
+    <p>
+      <code>mcpm self-update</code> re-fetches install.sh (with verification of its
+      own signature against the baked-in trust anchor inside the running mcpm binary)
+      and runs it with the same prefix as the original install. Internally this is just
+      "re-run install.sh in-place, with <code>$MCPM_PREFIX</code> set from the install
+      manifest." We do not ship a separate updater; the installer <em>is</em> the
+      updater. This is the rustup model
+      (<code>rustup self update</code>; see <a href="https://rust-lang.github.io/rustup/installation/index.html">rustup docs</a>)
+      and it's correct because it means one code path to audit, not two.
+    </p>
+
+    <p>
+      <code>mcpm self-update --check</code> compares installed version to
+      <code>$MCPM_BASE_URL/latest</code> (via a HEAD redirect, same as install.sh's
+      version resolver) and prints a diff. No automatic background updates. No
+      phone-home. The user pulls when they want to pull.
+    </p>
+
+    <h3>Uninstall correctness</h3>
+
+    <p>
+      <code>mcpm self-uninstall</code> reads
+      <code>$STATE_DIR/install-manifest.json</code>, removes exactly the files it lists,
+      tears down the launchd / systemd-user unit, optionally removes the PATH snippet
+      (idempotent — finds the fenced block and removes it), and prints
+      <code>"uninstalled. ~/.config/mcp-manager/ and ~/.local/share/mcp-manager/ left
+      intact; rm them by hand if you want to fully reset."</code>
+    </p>
+
+    <p>
+      We deliberately do <em>not</em> nuke the user's config or secrets in
+      <code>~/.config/mcp-manager/</code>. The principle is "uninstall the program,
+      preserve the data." Users who want a clean reset can run
+      <code>mcpm self-uninstall --purge</code> for the kitchen-sink variant — which
+      asks "Are you sure? Y/N" with no default. Even <code>--purge</code> never touches
+      <code>~/Library/Keychains</code> or libsecret; secrets stay where the OS put them
+      and the user can remove them via OS-native UI.
+    </p>
+
+    <p>
+      There is no separate <code>uninstall.sh</code>. The uninstaller lives inside the
+      <code>mcpm</code> binary because (a) it has access to the install manifest, (b)
+      it can use the same Rust code that wrote the launchd plist to remove the launchd
+      plist, (c) it's one fewer signed shell script to maintain. If the user has lost
+      their <code>mcpm</code> binary somehow, they can re-run install.sh and then
+      uninstall — install.sh is idempotent.
+    </p>
+
+    <h3>Service-string namespace decision</h3>
+
+    <p>
+      Reverse-DNS, locked: <code>dev.mcp-manager.mcpmanagerd</code> for the launchd
+      label and macOS subsystem id; <code>mcpmanagerd</code> for the systemd-user unit
+      name (systemd doesn't use reverse-DNS by convention). The project domain
+      <code>mcp-manager.dev</code> is owned; the reverse is unambiguous; it does not
+      collide with <code>com.modelcontextprotocol</code> or anything Anthropic-shaped.
+      Audit logs and tracing subsystems use the same reverse-DNS identifier.
+    </p>
+
+    <h3>mdbook docs hosting</h3>
+
+    <p>
+      Docs live at <code>docs/</code> in the repo as <a href="https://rust-lang.github.io/mdBook/">mdbook</a>
+      source. <code>mdbook build</code> in CI produces <code>book/</code>; GitHub Pages
+      (or Cloudflare Pages) serves it at <code>https://mcp-manager.dev/docs/</code>.
+      The installer's "next:" message links to it. Docs are versioned per release —
+      <code>/docs/v1.0/</code>, <code>/docs/latest/</code> redirects to current. mdbook
+      is the right choice because it's Rust-native, it ships a built-in search, and
+      the output is fully static (no JS framework dependency, no CDN — matches the
+      project's no-CDN constraint).
+    </p>
+
+    <h3>SBOM + supply-chain summary</h3>
+
+    <ul>
+      <li>
+        Per release: <code>mcp-manager-1.0.0.spdx.json</code> via syft, generated from
+        the Cargo.lock + the build environment.
+      </li>
+      <li>
+        <code>SHA256SUMS</code> covers every tarball + the SBOM + install.sh itself.
+      </li>
+      <li>
+        <code>SHA256SUMS.minisig</code> via minisign with the baked-in pubkey.
+      </li>
+      <li>
+        <code>SHA256SUMS.sig</code> via cosign-keyless (Sigstore) as a parallel
+        verification path; rekor transparency log entry recorded.
+      </li>
+      <li>
+        macOS binaries notarized (Apple Developer Program); stapled-ticket inside the
+        tarball so first-run works offline.
+      </li>
+      <li>
+        Reproducible-build attestation (<a href="https://slsa.dev/spec/v1.0/levels">SLSA L3</a> target):
+        provenance attached via GitHub's
+        <a href="https://github.com/actions/attest-build-provenance">attest-build-provenance</a>.
+      </li>
+    </ul>
+
+    <h3>Cross-platform completeness</h3>
+
+    <p>
+      Four release tarballs cover the v1.0 surface: macOS x86_64, macOS aarch64, Linux
+      x86_64-gnu, Linux aarch64-gnu. We do <em>not</em> ship musl-static Linux
+      tarballs in v1.0 — glibc is fine, our Rust binaries link the system libc
+      dynamically, but everything else is statically linked. If users on truly minimal
+      systems (Alpine without glibc compat) need musl, that's a v1.1 add. Windows is
+      never. (Locked.)
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+
+    <ol>
+      <li>Rustup's official install script (the canonical "responsible curl|sh"). <a href="https://sh.rustup.rs/">https://sh.rustup.rs/</a> + source at <a href="https://github.com/rust-lang/rustup/blob/master/rustup-init.sh">github.com/rust-lang/rustup/blob/master/rustup-init.sh</a></li>
+      <li>nvm install script — POSIX-shell, detects shell, writes rc snippet. <a href="https://github.com/nvm-sh/nvm/blob/master/install.sh">github.com/nvm-sh/nvm/blob/master/install.sh</a></li>
+      <li>Homebrew's installer (the "anti-pattern" version: macOS-only, sudo, big footprint, but worth comparing). <a href="https://github.com/Homebrew/install/blob/master/install.sh">github.com/Homebrew/install/blob/master/install.sh</a></li>
+      <li>Sean Cassidy, "Don't pipe to your shell" — the canonical critique, and the mitigation rustup adopted (full file read before execution). <a href="https://www.seancassidy.me/dont-pipe-to-your-shell.html">seancassidy.me/dont-pipe-to-your-shell.html</a></li>
+      <li>Fly.io's flyctl installer. <a href="https://fly.io/install.sh">fly.io/install.sh</a> + docs <a href="https://fly.io/docs/flyctl/install/">fly.io/docs/flyctl/install</a></li>
+      <li>Tailscale's Linux installer (also macOS via separate path). <a href="https://tailscale.com/install.sh">tailscale.com/install.sh</a> + docs <a href="https://tailscale.com/download/linux">tailscale.com/download/linux</a></li>
+      <li>Starship prompt — a particularly clean modern POSIX installer. <a href="https://starship.rs/install.sh">starship.rs/install.sh</a></li>
+      <li>Determinate Systems Nix installer — Nix's <em>own</em> install path is curl|sh in 2026. <a href="https://install.determinate.systems/nix">install.determinate.systems/nix</a></li>
+      <li>Minisign — the Ed25519 signing tool we use as the primary trust anchor. <a href="https://github.com/jedisct1/minisign">github.com/jedisct1/minisign</a></li>
+      <li>Sigstore + cosign-keyless — parallel verification path via Fulcio + Rekor. <a href="https://www.sigstore.dev/">sigstore.dev</a> and <a href="https://docs.sigstore.dev/cosign/signing/overview/">docs.sigstore.dev/cosign/signing/overview</a></li>
+      <li>Latacora, "The PGP Problem" — why we use minisign instead of GPG. <a href="https://www.latacora.com/blog/2019/07/16/the-pgp-problem/">latacora.com/blog/2019/07/16/the-pgp-problem</a></li>
+      <li>Reproducible Builds — how we produce deterministic tarballs. <a href="https://reproducible-builds.org/docs/archives/">reproducible-builds.org/docs/archives</a></li>
+      <li>Apple Notarization for command-line binaries. <a href="https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution">developer.apple.com/documentation/security/notarizing-macos-software-before-distribution</a></li>
+      <li>systemd.socket(5) — socket-activation matches auto-spawn semantics. <a href="https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html">freedesktop.org/software/systemd/man/latest/systemd.socket.html</a></li>
+      <li>Apple launchd.plist(5) — for the LaunchAgent registration. <a href="https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html">developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup</a></li>
+      <li>SLSA build-provenance levels — our L3 target. <a href="https://slsa.dev/spec/v1.0/levels">slsa.dev/spec/v1.0/levels</a></li>
+      <li>Anchore syft — SBOM generation. <a href="https://github.com/anchore/syft">github.com/anchore/syft</a></li>
+      <li>mdBook docs — the docs framework we host the manual under. <a href="https://rust-lang.github.io/mdBook/">rust-lang.github.io/mdBook</a></li>
+      <li>XDG Base Directory specification — for our config/state/runtime paths. <a href="https://specifications.freedesktop.org/basedir-spec/latest/">specifications.freedesktop.org/basedir-spec/latest</a></li>
+      <li>GitHub's attest-build-provenance action — provenance attestation in CI. <a href="https://github.com/actions/attest-build-provenance">github.com/actions/attest-build-provenance</a></li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

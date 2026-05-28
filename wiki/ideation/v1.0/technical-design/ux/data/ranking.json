@@ -1,0 +1,111 @@
+{
+  "title": "How each UX stance scores against v1.0's user-facing priorities. Drag the sliders to re-weight.",
+  "options": [
+    "agent-empathy-led-designer",
+    "agent-data-driven-pm",
+    "agent-onboarding-specialist",
+    "agent-error-recovery-advocate",
+    "agent-mental-model-coach"
+  ],
+  "criteria": [
+    { "key": "time_to_value",   "label": "Time-to-first-MCP",     "weight": 0.20 },
+    { "key": "error_clarity",   "label": "Error message clarity", "weight": 0.15 },
+    { "key": "mental_model",    "label": "Mental-model fit",      "weight": 0.15 },
+    { "key": "emotional_tone",  "label": "Emotional tone",        "weight": 0.15 },
+    { "key": "measurement",     "label": "Local measurement value","weight": 0.10 },
+    { "key": "accessibility",   "label": "Accessibility",         "weight": 0.15 },
+    { "key": "discoverability", "label": "Discoverability",       "weight": 0.10 }
+  ],
+  "scores": {
+    "agent-empathy-led-designer": {
+      "time_to_value":   3,
+      "error_clarity":   5,
+      "mental_model":    3,
+      "emotional_tone":  5,
+      "measurement":     2,
+      "accessibility":   4,
+      "discoverability": 4,
+      "_evidence": {
+        "time_to_value":   ["../agent-empathy-led-designer.html#design"],
+        "error_clarity":   ["../agent-empathy-led-designer.html#design"],
+        "mental_model":    ["../agent-empathy-led-designer.html#arguments"],
+        "emotional_tone":  ["../agent-empathy-led-designer.html#design"],
+        "measurement":     ["../agent-empathy-led-designer.html#arguments"],
+        "accessibility":   ["../agent-empathy-led-designer.html#design"],
+        "discoverability": ["../agent-empathy-led-designer.html#design"]
+      }
+    },
+    "agent-data-driven-pm": {
+      "time_to_value":   3,
+      "error_clarity":   3,
+      "mental_model":    3,
+      "emotional_tone":  3,
+      "measurement":     5,
+      "accessibility":   3,
+      "discoverability": 4,
+      "_evidence": {
+        "time_to_value":   ["../agent-data-driven-pm.html#arguments"],
+        "error_clarity":   ["../agent-data-driven-pm.html#design"],
+        "mental_model":    ["../agent-data-driven-pm.html#arguments"],
+        "emotional_tone":  ["../agent-data-driven-pm.html#thoughts"],
+        "measurement":     ["../agent-data-driven-pm.html#design"],
+        "accessibility":   ["../agent-data-driven-pm.html#design"],
+        "discoverability": ["../agent-data-driven-pm.html#design"]
+      }
+    },
+    "agent-onboarding-specialist": {
+      "time_to_value":   5,
+      "error_clarity":   3,
+      "mental_model":    3,
+      "emotional_tone":  3,
+      "measurement":     3,
+      "accessibility":   4,
+      "discoverability": 5,
+      "_evidence": {
+        "time_to_value":   ["../agent-onboarding-specialist.html#design"],
+        "error_clarity":   ["../agent-onboarding-specialist.html#vs-recovery"],
+        "mental_model":    ["../agent-onboarding-specialist.html#vs-mental"],
+        "emotional_tone":  ["../agent-onboarding-specialist.html#vs-empathy"],
+        "measurement":     ["../agent-onboarding-specialist.html#vs-pm"],
+        "accessibility":   ["../agent-onboarding-specialist.html#design"],
+        "discoverability": ["../agent-onboarding-specialist.html#design"]
+      }
+    },
+    "agent-error-recovery-advocate": {
+      "time_to_value":   3,
+      "error_clarity":   5,
+      "mental_model":    3,
+      "emotional_tone":  3,
+      "measurement":     4,
+      "accessibility":   4,
+      "discoverability": 4,
+      "_evidence": {
+        "time_to_value":   ["../agent-error-recovery-advocate.html#arguments"],
+        "error_clarity":   ["../agent-error-recovery-advocate.html#design"],
+        "mental_model":    ["../agent-error-recovery-advocate.html#arguments"],
+        "emotional_tone":  ["../agent-error-recovery-advocate.html#arguments"],
+        "measurement":     ["../agent-error-recovery-advocate.html#arguments"],
+        "accessibility":   ["../agent-error-recovery-advocate.html#design"],
+        "discoverability": ["../agent-error-recovery-advocate.html#design"]
+      }
+    },
+    "agent-mental-model-coach": {
+      "time_to_value":   3,
+      "error_clarity":   4,
+      "mental_model":    5,
+      "emotional_tone":  4,
+      "measurement":     2,
+      "accessibility":   4,
+      "discoverability": 5,
+      "_evidence": {
+        "time_to_value":   ["../agent-mental-model-coach.html#arguments"],
+        "error_clarity":   ["../agent-mental-model-coach.html#design"],
+        "mental_model":    ["../agent-mental-model-coach.html#design"],
+        "emotional_tone":  ["../agent-mental-model-coach.html#arguments"],
+        "measurement":     ["../agent-mental-model-coach.html#arguments"],
+        "accessibility":   ["../agent-mental-model-coach.html#design"],
+        "discoverability": ["../agent-mental-model-coach.html#design"]
+      }
+    }
+  }
+}

@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backend Synthesis — MCP Manager v1.0 deep dive</title>
+<meta name="description" content="Synthesis of the five backend stance essays for MCP Manager v1.0: convergences, live tensions, per-component decisions, open questions, and a tunable ranking matrix.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/matrix.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">backend · synthesis</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="../synthesis.html">master synthesis</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Backend — Facet Synthesis</h1>
+  <p class="lede">
+    Where the five backend stances converge, where they diverge, and what gets adopted into the v1.0 build. The five
+    essays cover the same eleven-crate workspace from radically different angles — idiomatic async, sans-I/O purism,
+    public-API discipline, kernel-primitive maximalism, and ruthless scope-cutting — yet they agree on more than they
+    fight about. This page picks winners and writes them down.
+  </p>
+
+  <p>
+    <span class="evidence-badge">5 stance essays</span>
+    <span class="evidence-badge">10 components reconciled</span>
+    <span class="evidence-badge">live ranking matrix</span>
+    <span class="evidence-badge">honors locked v1.0 decisions</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#agreement">Points of agreement</a></li>
+      <li><a href="#disagreement">Points of disagreement</a></li>
+      <li><a href="#decisions">Per-component decisions</a></li>
+      <li><a href="#open">Open questions</a></li>
+      <li><a href="#matrix">Ranking matrix</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="agreement">
+    <h2>Points of agreement</h2>
+
+    <p>
+      A surprising amount. Four of the five essays were written to argue, but on the structural shape of the v1.0
+      backend they line up tightly. The disagreements are about <em>where</em> abstractions live, not <em>whether</em>
+      we adopt them.
+    </p>
+
+    <ol>
+      <li>
+        <strong>Tokio is the runtime; no alternatives.</strong> Five-for-five. The
+        <a href="./agent-tokio-pragmatist.html#thoughts">pragmatist</a> frames it as inheriting the runtime
+        <code>rmcp</code> chose; the <a href="./agent-systems-veteran.html#vs-tokio">veteran</a> wants tokio relegated
+        to a "shell" but still depends on it; the
+        <a href="./agent-library-author.html#vs-tokio-pragmatist">library-author</a> keeps tokio out of
+        <code>mcpm-protocol</code> but expects it in <code>mcpm-client</code>; the
+        <a href="./agent-kernel-hacker.html#vs-tokio">kernel-hacker</a> grumbles about its task-per-concern overhead
+        but uses <code>tokio::process::Command</code>; the
+        <a href="./agent-boring-tech-defender.html#vs-tokio-pragmatist">boring-tech-defender</a> picks tokio because
+        it is now the boring choice for async Rust.
+      </li>
+
+      <li>
+        <strong>JSON-RPC 2.0 over a UNIX domain socket.</strong> Nobody proposes gRPC, MessagePack, Cap'n Proto, or
+        binary framing. The pragmatist would frame with
+        <a href="./agent-tokio-pragmatist.html#vs-boring-tech-defender"><code>LengthDelimitedCodec</code></a>; the
+        defender prefers <a href="./agent-boring-tech-defender.html#design">line-delimited frames</a>; both agree the
+        wire format is plain JSON over UDS.
+      </li>
+
+      <li>
+        <strong><code>mcpm-protocol</code> is the only crate that must keep semver discipline.</strong> The
+        <a href="./agent-library-author.html#design">library-author</a> argues this loudest, but the
+        <a href="./agent-tokio-pragmatist.html#vs-library-author">pragmatist</a>, the
+        <a href="./agent-systems-veteran.html#vs-library">veteran</a>, and the
+        <a href="./agent-boring-tech-defender.html#vs-library-author">defender</a> all explicitly endorse the
+        split: tiny stable wire crate, churny convenience client. Even the
+        <a href="./agent-kernel-hacker.html#vs-library">kernel-hacker</a> concedes that
+        <code>mcpm-protocol</code> needs forward-compatible OOM-event payloads.
+      </li>
+
+      <li>
+        <strong>The supervisor needs an explicit state machine.</strong> The
+        <a href="./agent-systems-veteran.html#design">veteran</a> makes the strongest case, but the
+        <a href="./agent-tokio-pragmatist.html#vs-systems-veteran">pragmatist</a> agrees on enum-based modeling, the
+        <a href="./agent-library-author.html#design">library-author</a> wants the state types
+        <code>#[non_exhaustive]</code>, and the
+        <a href="./agent-kernel-hacker.html#vs-systems">kernel-hacker</a> wants a sans-I/O classifier so platform code
+        stays swappable. Five-for-five on "no hash map of magic strings."
+      </li>
+
+      <li>
+        <strong>cgroup v2 first, RLIMIT_AS fallback, macOS three-signal heuristic.</strong> The
+        <a href="./agent-kernel-hacker.html#design-oom-v2">kernel-hacker</a> owns the detail; everyone else aligns.
+        The locked v1.0 decision is already this; the synthesis just adopts the kernel-hacker's specific dispatch
+        (POLLPRI on <code>memory.events</code>, in-process polling with deltas).
+      </li>
+
+      <li>
+        <strong><code>SO_PEERCRED</code> for IPC auth, no bearer tokens, no TLS.</strong> Mentioned approvingly by
+        the <a href="./agent-tokio-pragmatist.html#design">pragmatist</a>, the
+        <a href="./agent-kernel-hacker.html#design-table">kernel-hacker</a>, and the
+        <a href="./agent-boring-tech-defender.html#vs-kernel-hacker">defender</a>. Locked. Owned by the security
+        facet, but the backend implements it as a <code>tower::Layer</code> or one syscall in the accept loop.
+      </li>
+
+      <li>
+        <strong>Atomic temp-rename for every config and projection write.</strong> Spec already says so. The
+        <a href="./agent-systems-veteran.html#design">veteran</a> tightens it (directory-fsync after rename;
+        <code>F_FULLFSYNC</code> on macOS for canonical paths); the
+        <a href="./agent-tokio-pragmatist.html#design">pragmatist</a> agrees and adds <code>sync_all</code> on the
+        temp file before rename; the
+        <a href="./agent-kernel-hacker.html#design-table">kernel-hacker</a> ratifies the same recipe. Five-for-five.
+      </li>
+
+      <li>
+        <strong><code>thiserror</code> in libraries, <code>anyhow</code> in binaries.</strong> The pragmatist
+        articulates this as the
+        <a href="./agent-tokio-pragmatist.html#design">error-type-discipline</a> rule; the library-author makes it
+        load-bearing for <code>mcpm-protocol</code>; the systems-veteran and boring-tech-defender both implicitly
+        accept it. Nobody wants <code>Box&lt;dyn Error&gt;</code> at module boundaries.
+      </li>
+
+      <li>
+        <strong>No SQLite, no RocksDB, no sled in v1.0.</strong> Even the veteran, who is the most
+        crash-recovery-paranoid voice, explicitly
+        <a href="./agent-systems-veteran.html#design">declines</a> to reach for an embedded database — JSONL plus
+        directory-fsync is enough at our scale. Five-for-five.
+      </li>
+
+      <li>
+        <strong>The audit log is JSONL with daily rotation, append-only, single-writer.</strong> All five agree on
+        the disk shape; the only dispute is whether the supervisor also <em>replays</em> it on boot (covered in
+        disagreements below).
+      </li>
+
+      <li>
+        <strong>Secrets stay typed and zeroed.</strong> <code>secrecy::SecretString</code> through the resolver;
+        plaintext only at the <code>execve</code> envp boundary. Mentioned by the
+        <a href="./agent-tokio-pragmatist.html#design">pragmatist</a>, the
+        <a href="./agent-library-author.html#design">library-author</a>, the
+        <a href="./agent-kernel-hacker.html#design-table">kernel-hacker</a>, and tacitly by everyone else.
+      </li>
+    </ol>
+  </section>
+
+  <section class="section" id="disagreement">
+    <h2>Points of disagreement</h2>
+
+    <p>
+      Six live tensions where the stances genuinely diverge. For each, the synthesis pick is recorded in the
+      <a href="#decisions">decisions</a> section below.
+    </p>
+
+    <h3>1. Should the daemon replay the audit log on boot to rebuild supervisor state?</h3>
+    <ul>
+      <li>
+        <a href="./agent-systems-veteran.html#design"><strong>Systems-veteran:</strong></a> Yes. The audit log is a
+        journal; <code>supervisor.*</code> events are replayable; recovery is "load checkpoint, replay events, probe
+        live PIDs, reattach or synthesize <code>ChildExited</code>." This is the only way "auto-spawn" is safe across
+        daemon crashes.
+      </li>
+      <li>
+        <a href="./agent-tokio-pragmatist.html#vs-systems-veteran"><strong>Tokio-pragmatist:</strong></a> No. At
+        10s-of-MCPs scale the supervisor state is small and re-derivable from <code>config.toml</code>; journaling
+        restart-attempt history is over-engineering. If the daemon dies, the children die with it
+        (<code>PR_SET_PDEATHSIG</code>) and we re-spawn fresh.
+      </li>
+      <li>
+        <a href="./agent-boring-tech-defender.html#vs-systems-veteran"><strong>Boring-tech-defender:</strong></a>
+        Agrees with the pragmatist. Canonical state is the TOML files; recovery is "re-read <code>config.toml</code>."
+        Coupling daemon boot to audit-log format is a Hyrum-rule trap.
+      </li>
+      <li>
+        <a href="./agent-library-author.html#vs-systems-veteran"><strong>Library-author</strong></a> and
+        <a href="./agent-kernel-hacker.html#vs-systems"><strong>kernel-hacker</strong></a> are neutral on the journal
+        but both want the supervisor's state machine to be pure and testable regardless.
+      </li>
+    </ul>
+
+    <h3>2. <code>tower::Service</code> dispatch vs a hand-rolled match</h3>
+    <ul>
+      <li>
+        <a href="./agent-tokio-pragmatist.html#design"><strong>Tokio-pragmatist:</strong></a> Full tower stack —
+        peer-cred auth, tracing span, audit emission, concurrency limit as composable
+        <code>Layer</code>s. Tests stack the service directly without going through UDS.
+      </li>
+      <li>
+        <a href="./agent-boring-tech-defender.html#vs-tokio-pragmatist"><strong>Boring-tech-defender:</strong></a>
+        A <code>HashMap&lt;&amp;'static str, fn(Request) -&gt; BoxFuture&lt;Result&gt;&gt;</code> wrapped in one
+        <code>tokio::spawn</code> per connection. Tower is for HTTP services at meaningful QPS; we have one user and
+        ten editors.
+      </li>
+      <li>
+        <a href="./agent-library-author.html#vs-boring-tech-defender"><strong>Library-author</strong></a> says the
+        dispatch mechanism is private and can be either — the wire types it accepts and returns are what matters.
+      </li>
+    </ul>
+
+    <h3>3. <code>cgroups-rs</code> crate vs raw pseudo-filesystem writes</h3>
+    <ul>
+      <li>
+        <a href="./agent-tokio-pragmatist.html#vs-kernel-hacker"><strong>Tokio-pragmatist:</strong></a> Use
+        <code>cgroups-rs</code> (or a maintained fork). Don't hand-parse the pseudo-FS unless we hit a real ceiling.
+      </li>
+      <li>
+        <a href="./agent-kernel-hacker.html#vs-boring"><strong>Kernel-hacker:</strong></a> Code directly to the
+        cgroup v2 ABI. <code>cgroups-rs</code> has had API churn; the pseudo-filesystem hasn't. <code>std::fs::write</code>
+        on <code>memory.max</code> is more boring than a crate that wraps the same write.
+      </li>
+      <li>
+        The defender is silent on which crate but would agree with the kernel-hacker that fewer transitive deps is
+        better; the library-author is silent.
+      </li>
+    </ul>
+
+    <h3>4. <code>SecretStore</code> as a trait at v1.0 vs a concrete struct</h3>
+    <ul>
+      <li>
+        <a href="./agent-library-author.html#design"><strong>Library-author:</strong></a> Ship the trait from day
+        one with defaulted methods so v1.1 backends (1Password, Bitwarden, Vault) can land without breaking
+        implementors. The trait is the one extension point we explicitly publish.
+      </li>
+      <li>
+        <a href="./agent-boring-tech-defender.html#design"><strong>Boring-tech-defender:</strong></a> Rule of Three.
+        One concrete <code>SecretStore</code> struct with an <code>env_passthrough: bool</code> field. Extract a
+        trait when the second backend actually arrives.
+      </li>
+      <li>
+        The <a href="./agent-tokio-pragmatist.html#design">pragmatist</a> and
+        <a href="./agent-systems-veteran.html#design">veteran</a> both assume the trait shape because they want
+        test doubles and <code>spawn_blocking</code> wrapping.
+      </li>
+    </ul>
+
+    <h3>5. JoinSet-driven concurrency vs a dedicated reactor thread for OOM</h3>
+    <ul>
+      <li>
+        <a href="./agent-tokio-pragmatist.html#design"><strong>Tokio-pragmatist:</strong></a> One
+        <code>JoinSet&lt;ChildOutcome&gt;</code> per supervisor; per-child task does
+        <code>tokio::select!</code> over cancel / oom-watch / <code>child.wait()</code>. Pure tokio idiom.
+      </li>
+      <li>
+        <a href="./agent-kernel-hacker.html#design-oom-v2"><strong>Kernel-hacker:</strong></a> A
+        <em>dedicated OS thread</em> owns <code>epoll</code>; <code>EPOLLPRI</code> on
+        <code>memory.events</code> is not exposed by tokio's <code>AsyncFd</code>, so wrestling the runtime to do
+        what a 50-line reactor thread does cleanly is wasted complexity. Forward events into tokio via mpsc.
+      </li>
+      <li>
+        Veteran is neutral (it's I/O-shell territory); library-author cares only that the OOM-event payload is
+        <code>#[non_exhaustive]</code>; defender would accept either if the surface area is small.
+      </li>
+    </ul>
+
+    <h3>6. Public surface for <code>mcpm-client</code></h3>
+    <ul>
+      <li>
+        <a href="./agent-library-author.html#design"><strong>Library-author:</strong></a>
+        <code>mcpm-client</code> is in-tree, may be <code>publish = true</code> for first-party docs but is
+        documented as "not stable across minor versions." Re-export <code>mcpm-protocol as wire</code> for
+        ergonomics.
+      </li>
+      <li>
+        <a href="./agent-boring-tech-defender.html#vs-library-author"><strong>Boring-tech-defender:</strong></a>
+        <code>publish = false</code> on everything except <code>mcpm-protocol</code> and possibly
+        <code>mcpm-cli</code> as a binary distribution. Polishing internal crates creates the wrong incentives.
+      </li>
+      <li>
+        <a href="./agent-tokio-pragmatist.html#vs-library-author"><strong>Tokio-pragmatist:</strong></a> Don't ship
+        two stable surfaces; <code>mcpm-client</code> churns. Aligned with the defender on the spirit.
+      </li>
+    </ul>
+  </section>
+
+  <section class="section" id="decisions">
+    <h2>Per-component decisions</h2>
+
+    <p>
+      For each of the eleven crates (we cover <code>mcpm-cli</code> only where it touches the backend), one
+      adoption call. Citations point back to the agent whose argument carried the day.
+    </p>
+
+    <h3>mcpm-core</h3>
+    <p>
+      <strong>Decision:</strong> Pure data + <code>tokio::fs</code> + the
+      <a href="./agent-systems-veteran.html#design">veteran's atomic-write recipe</a>: write to
+      <code>tmp</code>, <code>fsync</code> the temp file, <code>rename(2)</code>, <code>fsync</code> the parent
+      directory, on macOS additionally <code>F_FULLFSYNC</code> on the canonical config path. CAS guard
+      <code>prior_hash</code> stays as the wire shape; internally it is computed over the canonical-serialized
+      bytes (not the file bytes) to match the projection-sync invariant.
+    </p>
+    <p>
+      <strong>Carries the day:</strong> the
+      <a href="./agent-systems-veteran.html#design">systems-veteran</a> on durability; the
+      <a href="./agent-boring-tech-defender.html#design">boring-tech-defender</a> on "no schema migration
+      framework, just <code>mcpm migrate</code> when v1.1 needs it."
+    </p>
+
+    <h3>mcpm-daemon</h3>
+    <p>
+      <strong>Decision:</strong> Adopt the <a href="./agent-tokio-pragmatist.html#design">pragmatist's tower
+      stack</a> — <code>PeerCredAuthLayer</code>, <code>TraceLayer</code>, <code>AuditLayer</code>,
+      <code>ConcurrencyLimitLayer</code>, then handlers. <code>tower</code> earns its keep because audit + tracing
+      + peer-cred are three orthogonal concerns we already need; composing them as layers is cheaper than threading
+      them through 30+ method handlers. The <a href="./agent-boring-tech-defender.html#vs-tokio-pragmatist">defender's
+      objection</a> is acknowledged: we cap the stack at the four layers above and resist further "free middleware."
+    </p>
+    <p>
+      Signal handling and shutdown follow the
+      <a href="./agent-kernel-hacker.html#design-signals">kernel-hacker's signalfd/kqueue reactor</a> pattern but
+      wrapped in tokio's <code>signal::unix</code> API where it suffices (SIGTERM, SIGINT, SIGHUP); only the
+      <code>SIGCHLD</code> drain and <code>EPOLLPRI</code> on <code>memory.events</code> drop down to the dedicated
+      OS thread.
+    </p>
+    <p>
+      <strong>Carries the day:</strong>
+      <a href="./agent-tokio-pragmatist.html#design">tokio-pragmatist</a> for the dispatch shape;
+      <a href="./agent-kernel-hacker.html#design-signals">kernel-hacker</a> for the signal/reactor split.
+    </p>
+
+    <h3>mcpm-protocol</h3>
+    <p>
+      <strong>Decision:</strong> Follow the
+      <a href="./agent-library-author.html#design">library-author's discipline</a> verbatim. No tokio dep
+      (default-features = ["std"], alloc-only profile works for FFI consumers).
+      <code>#[non_exhaustive]</code> on every public enum and struct. Sealed traits for things only we should
+      implement (none in v1.0, but the pattern is reserved). Method names live as <code>pub const</code>
+      strings in a <code>method</code> module. The Cargo version equals <code>WIRE_VERSION</code>;
+      starts at <strong>0.1.0</strong> and stays 0.x through v1.2-ish of the binary. <code>cargo-semver-checks</code>
+      is a hard CI gate on this crate only.
+    </p>
+    <p>
+      Forward-compat tolerance: <code>#[serde(default)]</code> on optional params (per the
+      <a href="./agent-tokio-pragmatist.html#vs-library-author">pragmatist's asymmetry argument</a>) rather than
+      <code>deny_unknown_fields</code>. Validation lives at the daemon's handler boundary, not in the deserializer.
+    </p>
+    <p>
+      <strong>Carries the day:</strong>
+      <a href="./agent-library-author.html#design">library-author</a> on the discipline;
+      <a href="./agent-tokio-pragmatist.html#vs-library-author">pragmatist</a> on forward-compat.
+    </p>
+
+    <h3>mcpm-client</h3>
+    <p>
+      <strong>Decision:</strong> In-tree, <code>publish = true</code> (so docs.rs renders), but the crate-level
+      rustdoc says "not stable across minor versions; third parties wanting a stable surface depend on
+      <code>mcpm-protocol</code>." Re-export <code>mcpm_protocol as wire</code>. The dial-or-auto-spawn dance lives
+      here: <code>flock(2)</code> on <code>$XDG_RUNTIME_DIR/mcpmanagerd.spawn.lock</code> with
+      <code>LOCK_EX | LOCK_NB</code> to prevent the thundering-herd race, fork+exec the daemon, poll UDS for up to
+      5 seconds with 50ms sleeps. Per the
+      <a href="./agent-kernel-hacker.html#design-table">kernel-hacker</a> and
+      <a href="./agent-boring-tech-defender.html#design">defender</a>.
+    </p>
+    <p>
+      Streaming methods return <code>impl futures::Stream&lt;Item = Result&lt;LogLine&gt;&gt;</code>. No retry
+      policy is hidden behind config — the caller passes a <code>tower::retry</code> layer if they want one
+      (per <a href="./agent-library-author.html#vs-boring-tech-defender">library-author</a>).
+    </p>
+
+    <h3>mcpm-supervisor</h3>
+
+    <p>
+      This is the largest synthesis decision; the spec already locks the externals, so the synthesis is about
+      where each piece <em>lives</em>. The structure adopted is the
+      <a href="./agent-systems-veteran.html#design">veteran's</a>
+      sans-I/O core + I/O shell split, with the
+      <a href="./agent-tokio-pragmatist.html#design">pragmatist's JoinSet/CancellationToken</a> living
+      <em>inside</em> the shell, and the
+      <a href="./agent-kernel-hacker.html#design-spawn">kernel-hacker's syscalls</a> living
+      <em>inside</em> the shell's platform module.
+    </p>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Sub-decision</th><th>Adopted</th><th>Owner</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Process state machine</td>
+          <td>
+            Pure enum <code>ServerState</code> with explicit transitions; <code>fn step(state, event, policy) -&gt;
+            (NewState, Vec&lt;Action&gt;)</code>. Property-tested with proptest.
+          </td>
+          <td><a href="./agent-systems-veteran.html#design">systems-veteran</a></td>
+        </tr>
+        <tr>
+          <td>Concurrency primitive</td>
+          <td>
+            One <code>JoinSet&lt;ChildOutcome&gt;</code> per supervisor; per-child task does
+            <code>tokio::select!</code> over (cancel, oom-event-mpsc-recv, <code>child.wait()</code>). Drains
+            <code>Action</code>s emitted by <code>step</code>.
+          </td>
+          <td><a href="./agent-tokio-pragmatist.html#design">tokio-pragmatist</a></td>
+        </tr>
+        <tr>
+          <td>Cancellation</td>
+          <td>
+            <code>tokio_util::sync::CancellationToken</code> tree rooted at the signal handler; child tokens per
+            managed process. Graceful drain on root cancel with a 5s deadline.
+          </td>
+          <td><a href="./agent-tokio-pragmatist.html#design">tokio-pragmatist</a></td>
+        </tr>
+        <tr>
+          <td>Restart backoff</td>
+          <td>
+            <code>fn next_delay(attempt, base, cap, jitter)</code> as a pure function — base 200ms, exponential to
+            cap 60s, jitter ±30%. Tested for monotonicity and bounds. The shell calls
+            <code>tokio::time::sleep</code> against the returned duration.
+          </td>
+          <td>
+            <a href="./agent-systems-veteran.html#vs-kernel">systems-veteran</a> (purity) +
+            <a href="./agent-tokio-pragmatist.html#design">pragmatist</a> (concrete numbers)
+          </td>
+        </tr>
+        <tr>
+          <td>Max attempts</td>
+          <td>
+            <code>attempts_max</code> within <code>window_secs</code>; on exceed, transition to
+            <code>Failed</code>; surfaces in <code>server.list</code> as state <code>Crashed</code>. Defaults are the
+            v1.0 spec's 3 attempts / 60s window.
+          </td>
+          <td><a href="./agent-systems-veteran.html#design">systems-veteran</a></td>
+        </tr>
+        <tr>
+          <td>cgroup v2 OOM detection</td>
+          <td>
+            Dedicated OS thread owns <code>epoll</code>, registers <code>memory.events</code> with
+            <code>EPOLLPRI</code>, reads on wake, computes deltas (<code>oom_kill</code>,
+            <code>high</code> breach), forwards via mpsc into the supervisor. <em>Not</em> a tokio task — tokio's
+            <code>AsyncFd</code> doesn't expose <code>EPOLLPRI</code> cleanly and we don't want to block a worker
+            thread on <code>epoll_wait</code>.
+          </td>
+          <td><a href="./agent-kernel-hacker.html#design-oom-v2">kernel-hacker</a></td>
+        </tr>
+        <tr>
+          <td>cgroup library</td>
+          <td>
+            Raw filesystem ops on the cgroup v2 pseudo-FS. <code>std::fs::write</code> for
+            <code>memory.max</code> / <code>memory.high</code>; the cgroup ABI is the stable interface, not the
+            <code>cgroups-rs</code> crate. Tools the daemon needs (<code>clone3(CLONE_INTO_CGROUP)</code>) come from
+            <code>nix</code>.
+          </td>
+          <td><a href="./agent-kernel-hacker.html#vs-boring">kernel-hacker</a></td>
+        </tr>
+        <tr>
+          <td>RLIMIT_AS fallback</td>
+          <td>
+            On cgroup v1 / no-cgroup, set <code>RLIMIT_AS</code> in <code>pre_exec</code>. Crash classification on
+            <code>SIGKILL</code> uses the same three-signal heuristic as macOS (last RSS + recent pressure + signal).
+            Audit detail says "may have been OOM, no perfect signal on this kernel."
+          </td>
+          <td><a href="./agent-kernel-hacker.html#design-oom-v1">kernel-hacker</a></td>
+        </tr>
+        <tr>
+          <td>macOS jetsam inference</td>
+          <td>
+            Three-conjunction heuristic: <code>SIGKILL</code> without core dump
+            <em>and</em> <code>DISPATCH_SOURCE_TYPE_MEMORYPRESSURE</code> reported <code>CRITICAL</code> within 30s
+            <em>and</em> <code>proc_pid_rusage(RUSAGE_INFO_V4)</code> reports RSS &gt; 80% of configured limit.
+            <code>CrashOrOom::Oom { reason: "jetsam-inferred" }</code> on full conjunction; otherwise
+            <code>Crash { hint }</code>.
+          </td>
+          <td><a href="./agent-kernel-hacker.html#design-oom-mac">kernel-hacker</a></td>
+        </tr>
+        <tr>
+          <td>Idle TTL</td>
+          <td>
+            One <code>tokio::time::Sleep</code> per server (singleton) or per process (per-client). State carries
+            <code>idle_until: Option&lt;Instant&gt;</code>; refcount→0 sets it, refcount-up clears it. Negative
+            <code>idle_ttl_secs</code> = never; 0 = immediate graceful stop. Graceful stop: SIGTERM,
+            <code>graceful_timeout</code> wait (default 5s for idle, configurable), SIGKILL on overrun, then
+            <code>rmdir</code> the cgroup as a population check.
+          </td>
+          <td>
+            <a href="./agent-kernel-hacker.html#design-idle">kernel-hacker</a> on the boundaries;
+            <a href="./agent-systems-veteran.html#design">veteran</a> on the state-machine encoding
+          </td>
+        </tr>
+        <tr>
+          <td>Singleton vs per-client</td>
+          <td>
+            Process indexed by <code>ProcessKey = Singleton(ServerName) | PerClient { server, client_id }</code>.
+            <code>client_id</code> is a per-connection monotonic counter assigned at accept time, never a peer pid
+            (which reuses).
+          </td>
+          <td>
+            <a href="./agent-kernel-hacker.html#design-idle">kernel-hacker</a> +
+            <a href="./agent-tokio-pragmatist.html#design">pragmatist</a>
+          </td>
+        </tr>
+        <tr>
+          <td>Descendant lifetime guarantee</td>
+          <td>
+            Linux: <code>prctl(PR_SET_PDEATHSIG, SIGKILL)</code> in <code>pre_exec</code>. macOS: sentinel pipe held
+            by the daemon; child wrapper reads on it in a background thread and <code>kill(getpid(), SIGKILL)</code>
+            on EOF.
+          </td>
+          <td><a href="./agent-kernel-hacker.html#vs-tokio">kernel-hacker</a></td>
+        </tr>
+        <tr>
+          <td>Audit-log replay on boot</td>
+          <td>
+            <strong>No.</strong> Canonical state is <code>config.toml</code>; the daemon re-reads it on boot and
+            re-spawns required servers. The audit log stays as a security/observability record. The cost the
+            veteran flagged (drift between in-memory and on-disk truth) is bounded by always-rederive-from-config
+            and by the <code>PR_SET_PDEATHSIG</code> guarantee that children die with their parent.
+            <em>Reopened</em> at v1.1 if real-world telemetry shows we need it.
+          </td>
+          <td>
+            <a href="./agent-tokio-pragmatist.html#vs-systems-veteran">pragmatist</a> +
+            <a href="./agent-boring-tech-defender.html#vs-systems-veteran">defender</a>; 2 of 5 dissent but
+            scale wins
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>mcpm-registry</h3>
+    <p>
+      <strong>Decision:</strong> One internal <code>RegistrySource</code> trait, sealed in v1.0 (per
+      <a href="./agent-library-author.html#design">library-author</a>), three concrete implementations: official,
+      GitHub-curated, Docker. BM25 is hand-rolled over the cached index (~100 lines, per
+      <a href="./agent-boring-tech-defender.html#design">defender</a>); we do <em>not</em> pull
+      <code>tantivy</code> for a corpus of a few thousand entries. Network fetches use <code>reqwest</code> with
+      rustls; minisign verification happens before any temp-file is promoted via <code>rename(2)</code> (per
+      <a href="./agent-kernel-hacker.html#design-table">kernel-hacker</a>). Stale-while-revalidate semantics with an
+      explicit <code>freshness</code> field, per <a href="./agent-systems-veteran.html#design">veteran</a> — never
+      silently serve stale.
+    </p>
+
+    <h3>mcpm-secrets</h3>
+    <p>
+      <strong>Decision:</strong> Ship the <a href="./agent-library-author.html#design">trait from day one</a>, but
+      with a single concrete <code>LayeredSecretStore</code> backing it for v1.0. The boring-tech-defender's
+      objection (Rule of Three) loses to the
+      <a href="./agent-library-author.html#design">library-author's</a> argument that this is <em>the</em>
+      extension point we publish — third-party implementations are exactly the use case. Methods have defaults so
+      v1.1 can add <code>rotate</code> / <code>refresh</code> non-breakingly. Sync <code>keyring</code> calls are
+      wrapped in <code>spawn_blocking</code> (per
+      <a href="./agent-tokio-pragmatist.html#design">pragmatist</a>) so the trait surface stays async.
+      Plaintext lifetime is bounded: <code>SecretString</code> through the resolver, dropped (zeroed) immediately
+      after the <code>execve</code> envp is built (per
+      <a href="./agent-kernel-hacker.html#design-table">kernel-hacker</a>).
+    </p>
+
+    <h3>mcpm-projector</h3>
+    <p>
+      <strong>Decision:</strong> Stateless per-editor adapters, fenced managed-block sync, <code>quick-xml</code>
+      for JetBrains XML to avoid injection, atomic temp-rename with directory-fsync. Pure function
+      <code>fn compute_managed_block(canonical, current_file, tool) -&gt; (NewFileContents, DiffSummary)</code> in
+      the sans-I/O core (per <a href="./agent-systems-veteran.html#design">veteran</a>); the I/O shell drives
+      <code>tokio::fs</code>. <code>ProjectionTarget</code> trait stays sealed in v1.0 — third-party projection
+      targets are not a v1.0 use case (per
+      <a href="./agent-library-author.html#design">library-author</a>).
+    </p>
+
+    <h3>mcpm-logs</h3>
+    <p>
+      <strong>Decision:</strong> Three streams, one <code>tokio::sync::broadcast::Sender</code> per stream class.
+      Slow tail-clients see <code>BroadcastStreamRecvError::Lagged(n)</code> and the synthesis surfaces this as a
+      <code>LogLine::lagged(n)</code> sentinel rather than dropping silently (per
+      <a href="./agent-tokio-pragmatist.html#design">pragmatist</a>). Audit JSONL is single-writer via mpsc,
+      flushed every 100ms or 4KB. <code>O_APPEND</code> on the file plus a userspace mutex around the
+      buffer-flush; <code>fsync</code> every 1s on the audit log, on-shutdown only for per-server stdout/err (per
+      <a href="./agent-kernel-hacker.html#design-logs">kernel-hacker</a>'s discipline). Daily rotation logic
+      compares UTC date once per minute; rotation grabs the mutex only to swap the fd.
+    </p>
+
+    <h3>mcpm-trust</h3>
+    <p>
+      <strong>Decision:</strong> The <a href="./agent-boring-tech-defender.html#design">defender's "300-line
+      signed-document fetch"</a>, not a real TUF implementation. Baked-in root pubkey (one minisign 32-byte key);
+      fetch <code>trust.toml</code> from a known URL; verify with <code>minisign-verify</code> in-process; cache on
+      disk with 7-day TTL; periodic refresh task on a <code>CancellationToken</code> child (per
+      <a href="./agent-tokio-pragmatist.html#design">pragmatist</a>); on network failure, fall back to the
+      baked-in pubkeys for the three default registries. The pure verification function lives in a sans-I/O module
+      so the fetched-vs-fallback transition is itself a tiny state machine (per
+      <a href="./agent-systems-veteran.html#design">veteran</a>).
+    </p>
+
+    <p>
+      Crates not directly synthesized here (<code>mcpm-cli</code> and the binary-only
+      <code>mcpmanagerd</code> stanza of <code>mcpm-daemon</code>) are owned by the frontend and DevOps facets
+      respectively.
+    </p>
+  </section>
+
+  <section class="section" id="open">
+    <h2>Open questions</h2>
+
+    <p>
+      Items where the five essays disagreed strongly enough that the synthesis cannot pick a winner without human
+      judgment. Each lays out the trade-off; none block v1.0 alpha.
+    </p>
+
+    <h3>OQ-B-1. Do we ship <code>mcpm-client</code> to crates.io?</h3>
+    <p>
+      The <a href="./agent-library-author.html#design">library-author</a> wants it published with a
+      "not stable" disclaimer in the docs; the
+      <a href="./agent-boring-tech-defender.html#vs-library-author">defender</a> wants
+      <code>publish = false</code> until a third-party use case appears. <strong>Trade-off:</strong> publishing
+      gives us free docs.rs rendering and lets external CLI authors experiment without source-tree cloning. Not
+      publishing prevents the wrong incentive (treating it as a stable surface) and reduces accidental promises
+      under Hyrum's law. <em>Lean:</em> publish at <code>0.x</code> with a prominent README banner and a
+      module-level deprecation hint when matched against by external dependents — capture the docs.rs benefit
+      without committing.
+    </p>
+
+    <h3>OQ-B-2. Is the cost of property-test infrastructure worth it at 10s-of-MCPs scale?</h3>
+    <p>
+      The <a href="./agent-systems-veteran.html#design">veteran's</a> three-layer proptest harness (per-function,
+      sequential state-machine, crash-equivalence) is the single biggest engineering investment in this synthesis:
+      ~1300 LoC of pure-core + ~300 LoC of test harness. The
+      <a href="./agent-boring-tech-defender.html#vs-systems-veteran">defender</a> would argue that integration tests
+      with a real daemon (spawned in a tmpdir per the
+      <a href="./agent-library-author.html#design">library-author's</a> example) catch the same bugs at a
+      fraction of the engineering cost. <strong>Trade-off:</strong> proptest finds shrinkable failing sequences
+      that integration tests rarely surface; integration tests catch coupling bugs proptest misses.
+      <em>Lean:</em> proptest for the supervisor's <code>step</code> function and
+      <code>classify_exit</code> / <code>next_delay</code> (the three places with the highest combinatorial
+      surface); integration tests for everything else. Skip the crash-equivalence property until v1.1 because we
+      decided against audit-log-replay-on-boot.
+    </p>
+
+    <h3>OQ-B-3. How aggressively do we instrument with <code>tracing</code> spans in v1.0?</h3>
+    <p>
+      <a href="./agent-tokio-pragmatist.html#design">Pragmatist</a> wants <code>#[instrument]</code> on every
+      handler with structured fields (request id, client id, server name) so future
+      <code>tracing-opentelemetry</code> integration is "free." <a
+      href="./agent-boring-tech-defender.html#vs-tokio-pragmatist">defender</a> warns that span proliferation is the
+      tracing equivalent of premature optimization — every span is a runtime cost, and most never get queried.
+      <strong>Trade-off:</strong> spans are cheap (~50ns each on a release build) but the structured-fields
+      discipline costs review attention. <em>Lean:</em> spans on RPC handler boundaries and supervisor state
+      transitions; not on inner loops or the OOM-watch thread. Defer otel exporter wiring to v1.1 alongside
+      <a href="../../technical-design.html">the locked decision on telemetry</a> (currently locked off — only
+      reopened if user feedback demands it).
+    </p>
+
+    <h3>OQ-B-4. <code>tokio::sync::broadcast</code> vs per-subscriber bounded <code>mpsc</code> for <code>logs.tail</code>?</h3>
+    <p>
+      Broadcast gives lossy backpressure (<code>Lagged(n)</code>) cleanly per the
+      <a href="./agent-tokio-pragmatist.html#design">pragmatist</a>; the
+      <a href="./agent-boring-tech-defender.html#design">defender</a> argues that one bounded mpsc per subscriber
+      gives blocking backpressure with simpler semantics. <strong>Trade-off:</strong> with broadcast, a slow TUI
+      tail loses lines but never blocks the producer; with mpsc, a wedged subscriber wedges the producer. For a
+      log stream the former is correct; for an audit stream the latter is. <em>Lean:</em> broadcast for
+      stdout/stderr tails; single-writer mpsc for audit; this is already the synthesis above, but it's worth
+      flagging as an open call because the alternative reads simpler and a future maintainer may want to revisit.
+    </p>
+
+    <h3>OQ-B-5. Should <code>mcpm-protocol</code> ship a <code>no_std</code> + <code>alloc</code>-only profile from day one?</h3>
+    <p>
+      The <a href="./agent-library-author.html#design">library-author</a> argues yes — it costs little now and
+      protects future FFI / PyO3 / WASM consumers; the
+      <a href="./agent-boring-tech-defender.html#vs-library-author">defender</a> argues YAGNI — we have zero
+      embedded use cases on the roadmap. <strong>Trade-off:</strong> the cost is one feature flag and one
+      <code>cargo hack check --each-feature</code> CI job; the value is contingent on use cases that may never
+      materialize. <em>Lean:</em> ship the feature, add the CI job, accept the small overhead. Removing
+      <code>no_std</code> support later would be a breaking change; adding it later is harder than people think
+      because every accidental <code>std::collections</code> usage in a public type has to be unwound.
+    </p>
+
+    <h3>OQ-B-6. Sealed vs unsealed <code>RegistrySource</code> trait</h3>
+    <p>
+      The synthesis picked <strong>sealed in v1.0</strong> per
+      <a href="./agent-library-author.html#design">library-author</a>'s conservative direction. But the spec's
+      "3 default registries" lock could be read as forward-looking — if v1.1 wants community registries, unsealing
+      is non-breaking (<a href="./agent-library-author.html#design">cargo book confirms</a>) and we lose nothing
+      by leaving it sealed for now. <em>Lean:</em> hold the seal for v1.0; revisit at v1.1 if registry
+      pluggability becomes a real ask.
+    </p>
+  </section>
+
+  <section class="section" id="matrix">
+    <h2>Ranking matrix</h2>
+    <p>
+      Weights are tunable — drag the sliders to re-rank stances against your priorities. The default weights bias
+      toward reliability and simplicity, matching the v1.0 lock ("10s of MCPs, ship in a quarter, no telemetry").
+      Pushing performance up rewards the kernel-hacker; pushing API stability up rewards the library-author;
+      pushing simplicity up rewards the boring-tech-defender. The pragmatist is the centre of gravity at default
+      weights, which is consistent with how much of their design ended up in the
+      <a href="#decisions">decisions</a> above.
+    </p>
+    <div data-matrix-src="./data/ranking.json"></div>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Source essays:
+    <a href="./agent-tokio-pragmatist.html">tokio-pragmatist</a> ·
+    <a href="./agent-systems-veteran.html">systems-veteran</a> ·
+    <a href="./agent-library-author.html">library-author</a> ·
+    <a href="./agent-kernel-hacker.html">kernel-hacker</a> ·
+    <a href="./agent-boring-tech-defender.html">boring-tech-defender</a>.
+    Back to the <a href="../index.html">deep-dive index</a> or the
+    <a href="../../technical-design.html">v1.0 breadth spec</a>.
+  </p>
+</main>
+</body>
+</html>

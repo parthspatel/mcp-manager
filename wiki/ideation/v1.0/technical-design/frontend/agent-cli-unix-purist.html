@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLI Unix Purist — Frontend deep dive — MCP Manager v1.0</title>
+<meta name="description" content="A Unix-philosophy purist's view of the mcpm CLI surface: stdout for data, stderr for chatter, --json everywhere, sysexits-aligned exit codes, and full non-interactive parity.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">frontend · cli-unix-purist</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">frontend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+
+  <h1>The CLI Unix Purist's Frontend</h1>
+  <p class="lede">
+    <code>--json</code> everywhere. Meaningful exit codes aligned with <code>sysexits.h</code>.
+    <code>stdout</code> is for data; <code>stderr</code> is for chatter. <code>mcpm list | jq …</code>
+    must Just Work. Honor <code>NO_COLOR</code>, <code>PAGER</code>, <code>EDITOR</code>, and
+    <code>XDG_CONFIG_HOME</code>. The TUI is a feature, not a tax — never the default when
+    stdin isn't a TTY.
+  </p>
+
+  <p>
+    <span class="evidence-badge">19 subcommands, all pipeable</span>
+    <span class="evidence-badge">5 output formats: human · json · ndjson · yaml · tsv</span>
+    <span class="evidence-badge">sysexits-aligned exit codes</span>
+    <span class="evidence-badge">Bash · Zsh · Fish · Elvish · PowerShell completions</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments against my peers</a></li>
+      <li><a href="#design">Design — concrete decisions</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      The UX design page shows a CLI with good instincts: <code>--json</code> on the few places where
+      omitting it would be grossly negligent (<code>status</code>, <code>test</code>,
+      <code>search</code>, <code>outdated</code>), <code>NO_COLOR</code> respected, <code>$EDITOR</code>
+      spawned for edits, paranoid patterns for destructive ops. That's good — and nowhere near enough.
+    </p>
+
+    <p>
+      My stance is that <strong>every subcommand emits structured output on request</strong>. Not just
+      the ones the designers happened to think of. That includes <code>mcpm install</code> (return the
+      resolved version, package id, runtime, and projection targets), <code>mcpm secret set</code>
+      (return backend, key id, and a SHA-256 of the value for CI verification), <code>mcpm init</code>
+      (return the absolute paths of every file written for direnv-style wrappers), and yes, even
+      <code>mcpm tui</code> via <code>--list-keymap --json</code> so a11y tooling can derive an
+      alternative surface. The TUI itself isn't pipeable; the <em>knowledge it contains</em> is.
+    </p>
+
+    <p>
+      <code>mcpm</code> will live in other people's automation: Nix flakes, Makefiles, Dockerfiles,
+      devcontainer <code>postCreate</code> hooks, CI runners, project bootstrap scripts,
+      <code>direnv</code> hooks, <code>chezmoi</code> templates. None of those callers want to parse
+      colored, prompt-flavoured human prose. They want
+      <code>mcpm status --json | jq '.servers[] | select(.state == "failed")'</code> to Just Work in
+      v1.0 — not "deferred to v1.1." The Heroku CLI style guide<sup>[<a href="#c-heroku">5</a>]</sup>
+      says "Always have <code>--json</code>"; GitHub CLI does it with <code>--json field1,field2 --jq
+      ...</code><sup>[<a href="#c-gh">6</a>]</sup>; Stripe CLI returns JSON by default and renders
+      pretty only on TTY<sup>[<a href="#c-stripe">7</a>]</sup>. That's the bar.
+    </p>
+
+    <p>
+      The other thing that matters — and which the UX design page underplays — is
+      <strong>stdin/stdout/stderr discipline</strong>. The UX design's "lucky-day interactive" init
+      transcript writes "✓ Wrote ~/.config/mcp-manager/config.toml" to what looks like
+      <code>stdout</code>. It must not. That progress chatter belongs on <code>stderr</code>. The
+      thing on <code>stdout</code> — if anything — is the absolute path of the written file, one per
+      line, so a wrapper script can pipe them into <code>git add</code>, <code>chmod</code>, a
+      backup, or whatever. The Twelve-Factor App<sup>[<a href="#c-12factor">9</a>]</sup> and the
+      classic Unix-philosophy literature<sup>[<a href="#c-unixphil">1</a>]</sup> have been clear about
+      this since the 1970s: <strong>data goes to stdout; everything else goes to stderr.</strong>
+    </p>
+
+    <p>
+      Exit codes are the other place we can do better than the lazy default. Most CLIs exit
+      <code>0</code> on success and <code>1</code> on absolutely-anything-else, throwing away
+      information. <code>sysexits.h</code><sup>[<a href="#c-sysexits">2</a>]</sup> has been on every
+      Unix since BSD 4.3 and offers a perfectly serviceable taxonomy (64–78, full table below). A
+      Makefile that wants to retry on transient failures but fail loudly on config errors can do
+      <code>mcpm test foo; case $? in 0) ;; 75) retry ;; *) exit $? ;; esac</code>. That's a
+      legitimately useful workflow we'd deny users by exiting <code>1</code> for everything.
+    </p>
+
+    <p>
+      Finally: <strong>the TUI must not autolaunch.</strong> If <code>stdin</code> isn't a TTY, or
+      <code>$TERM=dumb</code>, or <code>$CI</code> is set, or <code>--no-tty</code> is passed, bare
+      <code>mcpm</code> prints help to <code>stderr</code> and exits <code>EX_USAGE</code>. Never
+      silently stall waiting for a key. The UX-design page is silent on this; I'm making it a tested
+      invariant.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments against my peers</h2>
+
+    <h3 id="arg-vim">vs. <code>vim-power-user</code> — keyboard-first, modal TUI</h3>
+    <p>
+      We agree 90% of the time. Where we diverge: vim-power-user's worldview assumes
+      <em>users live in the TUI</em>. Most heavy users will never open it — they'll invoke
+      <code>mcpm</code> from a Makefile, CI runner, or fresh shell out of <code>direnv</code>. The
+      TUI is a discoverability and power-debug tool; the CLI is the load-bearing surface.
+    </p>
+    <p>
+      Concretely: vim-power-user wants bare <code>mcpm</code> to drop you into the TUI. I want bare
+      <code>mcpm</code> to print help (to <em>stderr</em>) and exit <code>EX_USAGE</code>. If a user
+      wants the TUI they type <code>mcpm tui</code> — same as
+      <code>k9s</code><sup>[<a href="#c-k9s">11</a>]</sup>,
+      <code>lazygit</code><sup>[<a href="#c-lazygit">12</a>]</sup>, or <code>btop</code>. The cost
+      of the hijack is that <code>mcpm</code> on a non-TTY CI runner would stall or bail with a
+      vague error. Modal command lines inside the TUI (<code>:</code>-prefix) are fine, but every
+      TUI action must have a CLI sibling so I can pipe data in via
+      <code>mcpm projection apply --from-stdin</code>.
+    </p>
+
+    <h3 id="arg-a11y">vs. <code>accessibility-advocate</code> — NO_COLOR, screen readers</h3>
+    <p>
+      Near-total agreement. <code>NO_COLOR</code><sup>[<a href="#c-nocolor">3</a>]</sup> is sacred;
+      <code>$COLORTERM</code> for capability detection is fine; color is never the only carrier of
+      information. Where I push further: <strong><code>--json</code> is the screen reader's best
+      friend</strong>. A blind developer doesn't want to parse a colored table out of
+      <code>aria-live</code> regions — they pipe through <code>jq</code> and have a shell function
+      that reads aloud with <code>say</code> or <code>espeak</code>. Cheaper, more robust, and more
+      dignified than a special "accessible TUI mode" in v1.x. Every <code>--json</code> emitter is
+      implicitly an a11y feature, which lets blind users skip the TUI entirely with no loss of
+      functionality.
+    </p>
+
+    <h3 id="arg-onboarding">vs. <code>onboarding-novice</code> — discoverability, hand-holding</h3>
+    <p>
+      Sharpest disagreement. onboarding-novice's instinct is to make the interactive
+      <code>mcpm init</code> the primary path, with the non-interactive variant an afterthought for
+      "advanced users." I think it's the reverse: <strong>the non-interactive variant is the
+      contract</strong>; the interactive variant is a convenience wrapper that collects answers and
+      then calls the same underlying logic. The reason is testability — interactive flows can't be
+      tested for parity, so if 1,000 users onboard interactively and 10 via <code>--defaults -y</code>,
+      the non-interactive path bit-rots invisibly until Nix/devcontainer/CI users find it broken
+      weeks after release.
+    </p>
+    <p>
+      I'm also opposed to "auto-detection prompts" that surprise the user. The UX-design "Detected:
+      Docker. Enable Docker MCP Catalog as a registry? [y/N]" prompt is fine if it has a flag
+      equivalent — <code>--docker-enable=true|false|auto</code> — with <code>auto</code> as default.
+      Under <code>-y</code>, <code>auto</code> resolves to the registry's recommendation (likely
+      <code>false</code> for paranoid defaults), with the decision printed to <code>stderr</code> for
+      auditability. No silent enrollments.
+    </p>
+
+    <h3 id="arg-visual">vs. <code>visual-designer</code> — layout balance, color theory</h3>
+    <p>
+      I respect the work. My only ask: <strong>output is data first, visual second.</strong> The
+      status glyphs (<code>●</code>, <code>○</code>, <code>⚠</code>) are accessible and meaningful,
+      but the <code>--json</code> output must emit
+      <code>{"state":"running"|"stopped"|"failed"}</code>, not the Unicode character. The human
+      renderer derives the glyph from the data; the data is never the glyph. Second: pipes truncate
+      at terminal width. A 120-column padded table that looks great in iTerm becomes garbled in
+      <code>mcpm status | tee output.log</code> opened elsewhere. Default human output detects
+      <code>isatty(stdout)</code> and downgrades to plain when piped — what <code>ls</code>,
+      Stripe<sup>[<a href="#c-stripe">7</a>]</sup>, gh<sup>[<a href="#c-gh">6</a>]</sup>, and
+      <code>kubectl get</code><sup>[<a href="#c-kubectl">13</a>]</sup> all do.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design — concrete decisions</h2>
+
+    <h3 id="design-output">Output modes — one flag, five formats</h3>
+    <p>
+      Every command that produces structured output accepts <code>--format</code> (or its synonyms
+      <code>--json</code>, <code>--yaml</code>, <code>--ndjson</code>, <code>--tsv</code>). The
+      universal flag <code>--format=human|json|ndjson|yaml|tsv</code> wins over the convenience
+      aliases. Default is <code>human</code> when <code>isatty(stdout)</code>, otherwise
+      <code>tsv</code>. Rationale: a fresh user running <code>mcpm status</code> gets the pretty
+      table; a script running <code>mcpm status</code> through a pipe gets parseable TSV without
+      having to remember to pass a flag. This is the <code>ls</code> precedent, and it's been
+      uncontroversial for forty years.
+    </p>
+    <ul>
+      <li><strong><code>human</code></strong> — colorized, padded, glyph-rich. The current designs.</li>
+      <li><strong><code>json</code></strong> — a single JSON object or array, pretty-printed by default,
+        compact with <code>--compact</code>. Schema is stable per major version (<code>--schema</code>
+        prints the JSON Schema for the active command).</li>
+      <li><strong><code>ndjson</code></strong> — one JSON object per line. The right default for
+        streaming commands (<code>mcpm logs --follow --format=ndjson</code>); each log entry is one
+        line, ready for <code>jq</code> or Vector or Promtail.</li>
+      <li><strong><code>yaml</code></strong> — same shape as <code>json</code>, YAML serialization.
+        For users who pipe to <code>yq</code> or hand-edit the output. Optional; we can drop it if
+        anyone protests, but the implementation cost is &lt;200 LoC.</li>
+      <li><strong><code>tsv</code></strong> — tab-separated, one row per record, no header by
+        default (header with <code>--header</code>). The Unix-tool-friendly default. Tab-separated
+        because spaces appear in server names; commas appear in registry URLs; tabs are the safe
+        choice.</li>
+    </ul>
+
+    <h3 id="design-exit-codes">Exit codes — aligned with <code>sysexits.h</code></h3>
+    <p>
+      <code>sysexits.h</code><sup>[<a href="#c-sysexits">2</a>]</sup> defines exit codes 64–78. We
+      use those as the base layer and reserve 1–9 for the common-case codes a shell user expects.
+      <code>mcpm</code> never exits with values outside this table.
+    </p>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Code</th><th>Constant</th><th>When <code>mcpm</code> uses it</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>0</code></td><td><code>EX_OK</code></td><td>Success.</td></tr>
+        <tr><td><code>1</code></td><td>(generic)</td><td>Reserved for explicit policy-failure cases —
+          e.g. <code>mcpm test foo</code> returns <code>1</code> when the server failed its health
+          check but the CLI itself worked fine. Lets callers do <code>mcpm test foo || retry</code>
+          without confusing "the CLI broke" with "the server failed."</td></tr>
+        <tr><td><code>2</code></td><td><code>EX_USAGE</code></td><td>Argument parsing errors —
+          <code>clap</code> already exits with 2 by default<sup>[<a href="#c-clap">4</a>]</sup>. Keep it.</td></tr>
+        <tr><td><code>64</code></td><td><code>EX_USAGE</code></td><td>Same as 2 — but used by some
+          callers historically. We accept that there's overlap; <code>clap</code> wins.</td></tr>
+        <tr><td><code>65</code></td><td><code>EX_DATAERR</code></td><td><code>E_CONFIG_INVALID</code>
+          (canonical config failed validation) and any "input was syntactically wrong" error.</td></tr>
+        <tr><td><code>66</code></td><td><code>EX_NOINPUT</code></td><td>Project config file declared
+          but not on disk; <code>--secrets-from-file=PATH</code> file missing; etc.</td></tr>
+        <tr><td><code>67</code></td><td><code>EX_NOUSER</code></td><td><code>E_PROJECT_UNTRUSTED</code>
+          — semantically "the calling identity is not authorized for this project config."</td></tr>
+        <tr><td><code>68</code></td><td><code>EX_NOHOST</code></td><td><code>E_REGISTRY_UNREACHABLE</code> —
+          a remote we needed couldn't be resolved or reached.</td></tr>
+        <tr><td><code>69</code></td><td><code>EX_UNAVAILABLE</code></td><td><code>E_KEYCHAIN_UNAVAILABLE</code>
+          and <code>E_DAEMON_UNAVAILABLE</code> (mcpmanagerd not running and couldn't be spawned).</td></tr>
+        <tr><td><code>70</code></td><td><code>EX_SOFTWARE</code></td><td>Internal panic, unexpected
+          deserialization failure, anything that means "this is our bug, file a report."</td></tr>
+        <tr><td><code>71</code></td><td><code>EX_OSERR</code></td><td>OS-level failure —
+          <code>launchctl</code> / <code>systemctl</code> rejected our service registration, fork
+          failed, etc.</td></tr>
+        <tr><td><code>72</code></td><td><code>EX_OSFILE</code></td><td>A required OS file (e.g. the
+          UDS socket directory under <code>$XDG_RUNTIME_DIR</code>) is missing or wrong-permissioned.</td></tr>
+        <tr><td><code>73</code></td><td><code>EX_CANTCREAT</code></td><td>We tried to create
+          <code>~/.config/mcp-manager/config.toml</code> and couldn't (disk full, EACCES).</td></tr>
+        <tr><td><code>74</code></td><td><code>EX_IOERR</code></td><td>Read/write failure on a file
+          that exists and we own — usually disk full mid-write.</td></tr>
+        <tr><td><code>75</code></td><td><code>EX_TEMPFAIL</code></td><td>Transient failure; the
+          caller should retry. Registry index fetch returned 503, daemon was restarting, etc.
+          Distinguished from <code>EX_NOHOST</code> (which is "the remote isn't there at all").</td></tr>
+        <tr><td><code>76</code></td><td><code>EX_PROTOCOL</code></td><td><code>E_SPEC_UNSUPPORTED</code>
+          and <code>E_REGISTRY_SIGFAIL</code> — protocol-level rejection, the remote spoke wrong.</td></tr>
+        <tr><td><code>77</code></td><td><code>EX_NOPERM</code></td><td>Sandbox refused (Linux
+          bubblewrap dropped a capability we needed), Keychain access denied by TouchID, etc.</td></tr>
+        <tr><td><code>78</code></td><td><code>EX_CONFIG</code></td><td><code>E_CONFIG_CONFLICT</code>,
+          <code>E_PROJECTION_DRIFT</code>, <code>E_DAEMON_VERSION</code> — "the configuration of the
+          system as a whole is inconsistent."</td></tr>
+        <tr><td><code>130</code></td><td>(SIGINT)</td><td>User pressed Ctrl+C. Standard shell
+          convention (<code>128 + signal</code>); enforced by clean signal handling rather than
+          letting Rust panic with abort.</td></tr>
+        <tr><td><code>143</code></td><td>(SIGTERM)</td><td>Same convention, for daemons or other
+          termination signals.</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      The exit-code-to-error-code mapping is one-to-many: every error code from the UX-design
+      taxonomy maps to exactly one exit code (table above), but multiple error codes can share an
+      exit code. Callers who need fine-grained discrimination use <code>--format=json</code> and
+      read the <code>error.code</code> field. Shell users who want a quick "did it work? did it
+      maybe-fail?" can branch on the exit code alone.
+    </p>
+
+    <h3 id="design-stdout-stderr">stdout vs stderr discipline</h3>
+    <table class="compare">
+      <thead><tr><th>Content</th><th>Stream</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Command output (the data the user asked for)</td><td><code>stdout</code></td><td>Pipeable.
+          <code>mcpm search github --json | jq</code> must work.</td></tr>
+        <tr><td>Progress indicators, spinners, status chatter ("✓ Wrote …")</td><td><code>stderr</code></td><td>Not
+          data. A user piping <code>mcpm install foo</code> into another tool shouldn't get
+          progress dots mixed into the package id.</td></tr>
+        <tr><td>Confirmation prompts ("[y/N]")</td><td><code>stderr</code></td><td>So you can still
+          pipe stdout while seeing prompts.</td></tr>
+        <tr><td>Error messages (human-readable)</td><td><code>stderr</code></td><td>Always.</td></tr>
+        <tr><td>Error payload (when <code>--format=json</code>)</td><td><code>stdout</code></td><td>The
+          error <em>is</em> the structured output. Callers expect to <code>jq</code> it.
+          Exit code signals failure separately. (This is what <code>aws --output json</code> does and
+          why people can build robust scripts on top of it.)</td></tr>
+        <tr><td>Logs from <code>mcpm logs</code></td><td><code>stdout</code></td><td>The whole
+          point of the subcommand is to emit log data.</td></tr>
+        <tr><td>"You may want to run X next" hints</td><td><code>stderr</code></td><td>UI nicety,
+          not data.</td></tr>
+        <tr><td>Banner / version splash on first run of a session</td><td>never</td><td>No banners.
+          <code>mcpm</code> doesn't print "Welcome to mcpm 1.0!". <code>mcpm --version</code> exists
+          and is the only place that string appears.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="design-tty">TTY discipline — when (not) to launch the TUI</h3>
+    <p>
+      The TUI is opt-in via <code>mcpm tui</code>. Bare <code>mcpm</code> with no args prints help
+      to <code>stderr</code> and exits <code>2</code> — the <code>git</code> precedent. In
+      addition, <code>mcpm tui</code> itself refuses to launch when any of these are true:
+    </p>
+    <ul>
+      <li><code>!isatty(stdin)</code> or <code>!isatty(stdout)</code> — print to stderr
+        "<code>mcpm tui requires a TTY; use mcpm status --json for scripted access</code>" and exit
+        <code>EX_USAGE</code>.</li>
+      <li><code>$TERM=dumb</code> — same.</li>
+      <li><code>$CI</code>, <code>$BUILDKITE</code>, <code>$GITHUB_ACTIONS</code>, or
+        <code>$GITLAB_CI</code> is set — same. (Following the well-trodden
+        <code>is-ci</code> heuristic.)</li>
+      <li><code>--no-tty</code> is passed explicitly — same.</li>
+    </ul>
+    <p>
+      Conversely, <strong>no other subcommand</strong> implicitly launches the TUI. <code>mcpm
+      install</code> with a missing required secret does not "drop the user into the TUI to fix it";
+      it exits <code>EX_CONFIG</code> with a clear error and a suggested command. This is the
+      <code>cargo</code> model<sup>[<a href="#c-cargo">8</a>]</sup>: every subcommand is single-shot
+      and predictable.
+    </p>
+
+    <h3 id="design-non-interactive">Non-interactive flags — a complete table</h3>
+    <p>
+      Every interactive prompt must have a flag equivalent. This table is the contract. If a v1.0
+      contributor wants to add an interactive prompt, they MUST add the corresponding flag in the
+      same PR.
+    </p>
+
+    <table class="compare">
+      <thead><tr><th>Subcommand</th><th>Interactive prompt</th><th>Non-interactive flag</th></tr></thead>
+      <tbody>
+        <tr><td><code>mcpm init</code></td><td>"What's your name?"</td><td><code>--user-name=NAME</code> (defaults to <code>$USER</code>)</td></tr>
+        <tr><td><code>mcpm init</code></td><td>"Scope: user or project?"</td><td><code>--scope=user|project</code></td></tr>
+        <tr><td><code>mcpm init</code></td><td>"Project into detected editors?"</td><td><code>--projection=claude-code,cursor,zed</code> or <code>--projection=auto</code> or <code>--projection=none</code></td></tr>
+        <tr><td><code>mcpm init</code></td><td>"Enable Docker registry?"</td><td><code>--docker-enable=true|false|auto</code></td></tr>
+        <tr><td><code>mcpm init</code></td><td>"Register with launchd/systemd?"</td><td><code>--service-register=true|false</code></td></tr>
+        <tr><td><code>mcpm init</code></td><td>Accept all defaults</td><td><code>--defaults -y</code> (or <code>--defaults --no-confirm</code>)</td></tr>
+        <tr><td><code>mcpm install</code></td><td>"Choose version"</td><td><code>--version=^0.4</code></td></tr>
+        <tr><td><code>mcpm install</code></td><td>"Choose isolation"</td><td><code>--runtime=devenv|docker|podman|uvx-npx|none</code></td></tr>
+        <tr><td><code>mcpm install</code></td><td>"Unsigned package; continue?"</td><td><code>--accept-unsigned</code> (writes an audit-log entry)</td></tr>
+        <tr><td><code>mcpm secret set</code></td><td>"Enter secret value:"</td><td><code>--from-env=VAR</code>, <code>--from-file=PATH</code>, or <code>--from-stdin</code> (read until EOF)</td></tr>
+        <tr><td><code>mcpm secret unset</code></td><td>"Confirm by typing secret name:"</td><td><code>--force</code> (still audit-logged)</td></tr>
+        <tr><td><code>mcpm project allow</code></td><td>"Trust this config? [y/n/e]"</td><td><code>--trust-from-file=PATH</code> (file contains the expected SHA-256; CLI fails if mismatch) or <code>--force</code> (skip check entirely; audit-logged loudly)</td></tr>
+        <tr><td><code>mcpm update</code></td><td>"Apply diff? [Y/n]"</td><td><code>-y</code> / <code>--yes</code> / <code>--no-confirm</code></td></tr>
+        <tr><td><code>mcpm uninstall</code></td><td>"Type WIPE to confirm"</td><td><code>--purge --confirm=WIPE</code> (literal string match)</td></tr>
+        <tr><td><code>mcpm projection sync</code></td><td>"Editor config drifted; overwrite?"</td><td><code>--force</code> (overwrite) or <code>--bail-on-drift</code> (exit <code>EX_CONFIG</code>)</td></tr>
+        <tr><td><code>mcpm config edit</code></td><td>Spawns <code>$EDITOR</code></td><td><code>--in-place</code> (read from stdin, validate, write atomically)</td></tr>
+        <tr><td>any (Ctrl+C)</td><td>"Cancelled."</td><td>signal-clean exit <code>130</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="design-env">Honored environment variables</h3>
+    <table class="compare">
+      <thead><tr><th>Variable</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>NO_COLOR</code><sup>[<a href="#c-nocolor">3</a>]</sup></td><td>Disable all
+          ANSI color in all output streams.</td></tr>
+        <tr><td><code>CLICOLOR_FORCE</code></td><td>Force color even when stdout is not a TTY (BSD
+          convention; useful for <code>mcpm status | less -R</code>).</td></tr>
+        <tr><td><code>PAGER</code> / <code>MCPM_PAGER</code></td><td><code>mcpm help</code>,
+          <code>mcpm logs --tail</code> output piped through the user's pager when stdout is a TTY.
+          <code>MCPM_PAGER</code> wins; falls back to <code>PAGER</code>; falls back to
+          <code>less -FRX</code>. Set <code>MCPM_PAGER=cat</code> to disable.</td></tr>
+        <tr><td><code>LESS</code></td><td>If we exec <code>less</code>, we don't override existing
+          <code>LESS</code> opts. We only set <code>-FRX</code> when no env is set.</td></tr>
+        <tr><td><code>EDITOR</code> / <code>VISUAL</code> / <code>MCPM_EDITOR</code></td><td>For
+          <code>mcpm config edit</code> and <code>mcpm tui</code> <code>e</code> action.
+          <code>MCPM_EDITOR</code> wins; then <code>VISUAL</code>; then <code>EDITOR</code>; then
+          <code>vi</code>.</td></tr>
+        <tr><td><code>XDG_CONFIG_HOME</code></td><td>Canonical config location root. Defaults to
+          <code>~/.config</code> on Linux and macOS (per agreed cross-platform behavior).</td></tr>
+        <tr><td><code>XDG_STATE_HOME</code></td><td>Logs, audit, lockfiles. Defaults to
+          <code>~/.local/state</code>.</td></tr>
+        <tr><td><code>XDG_RUNTIME_DIR</code></td><td>UDS socket location on Linux. On macOS,
+          falls back to <code>~/Library/Application Support/mcp-manager/</code>.</td></tr>
+        <tr><td><code>XDG_CACHE_HOME</code></td><td>Registry index cache.</td></tr>
+        <tr><td><code>SHELL</code></td><td>For completion installation hints
+          (<code>mcpm completions --install</code> auto-detects target shell).</td></tr>
+        <tr><td><code>CI</code>, <code>GITHUB_ACTIONS</code>, etc.</td><td>Disable progress
+          spinners; disable TUI launch; assume <code>-y</code> on flags that
+          have an <code>--assume-yes-if-ci</code> opt-in.</td></tr>
+        <tr><td><code>TERM</code></td><td><code>dumb</code> disables color and ANSI
+          cursor moves regardless of <code>NO_COLOR</code>.</td></tr>
+        <tr><td><code>COLORTERM</code></td><td><code>truecolor</code> enables 24-bit color
+          palette.</td></tr>
+        <tr><td><code>MCPM_LOG</code></td><td><code>tracing-subscriber</code>-style filter for
+          internal diagnostics (e.g. <code>MCPM_LOG=debug</code> or
+          <code>MCPM_LOG=mcpm_client=trace</code>). Always to <code>stderr</code>.</td></tr>
+        <tr><td><code>MCPM_DAEMON_SOCKET</code></td><td>Override the auto-detected UDS path for
+          tests and dev sandboxes.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="design-jsonschema"><code>--json</code> schemas per command</h3>
+    <p>
+      Every <code>--json</code> response carries a wrapper:
+    </p>
+<pre><code>{
+  "schema":     "https://mcp-manager.dev/schemas/v1/<command>.json",
+  "version":    1,
+  "command":    "status",
+  "data":       <command-specific payload>,
+  "warnings":   [{ "code": "...", "message": "..." }],
+  "elapsed_ms": 42
+}</code></pre>
+
+    <p>On error, the same wrapper is emitted with <code>data</code> replaced by an <code>error</code>
+       field, and the process exits non-zero per the sysexits table.</p>
+
+<pre><code>// error payload
+{
+  "schema":  "https://mcp-manager.dev/schemas/v1/error.json",
+  "version": 1,
+  "command": "start",
+  "error": {
+    "code":       "E_SECRET_MISSING",
+    "exit_code":  78,
+    "message":    "Server requires GITHUB_TOKEN which is not in keychain or env.",
+    "details":    { "server": "github", "secret": "GITHUB_TOKEN" },
+    "suggested":  ["mcpm secret set GITHUB_TOKEN"]
+  }
+}</code></pre>
+
+    <p>The data payloads for each command's <code>--json</code> output:</p>
+
+<pre><code>// mcpm status --json
+{ "data": [
+  { "name": "github",     "state": "running", "uptime_s": 50400, "pid": 12345, "memory_mb": 87,  "last_error": null },
+  { "name": "filesystem", "state": "running", "uptime_s": 259200, "pid": 12399, "memory_mb": 42, "last_error": null },
+  { "name": "sqlite",     "state": "stopped", "uptime_s": null,   "pid": null,  "memory_mb": null,"last_error": null },
+  { "name": "github-pr",  "state": "failed",  "uptime_s": null,   "pid": null,  "memory_mb": null,
+    "last_error": { "code": "E_SECRET_MISSING", "message": "...", "attempts": 5 } }
+] }
+
+// mcpm search github --json
+{ "data": [
+  { "package": "official/github-mcp", "registry": "official", "version_latest": "0.4.2",
+    "license": "MIT", "language": "go", "signed": true, "score": 0.91 },
+  ...
+] }
+
+// mcpm install official/github-mcp --json
+{ "data": {
+  "package":   "official/github-mcp",
+  "resolved":  "0.4.2",
+  "checksum":  "sha256:9f4e2d...",
+  "runtime":   "devenv",
+  "projected": ["claude-code", "cursor", "zed"],
+  "files_written": [
+    "/home/p/.config/mcp-manager/config.toml",
+    "/home/p/.config/mcp-manager/.lock"
+  ]
+} }
+
+// mcpm test github --json
+{ "data": {
+  "server": "github",
+  "result": "pass",
+  "checks": [
+    { "name": "spawn",       "result": "pass", "duration_ms": 142 },
+    { "name": "initialize",  "result": "pass", "duration_ms": 89  },
+    { "name": "tools/list",  "result": "pass", "duration_ms": 12, "tool_count": 8 }
+  ],
+  "spec_advertised": "2025-06-18"
+} }
+
+// mcpm logs github --follow --format=ndjson
+{"ts":"2026-05-24T12:34:01Z","stream":"stdout","line":"connected","server":"github"}
+{"ts":"2026-05-24T12:34:02Z","stream":"stdout","line":"listed tools","server":"github"}
+{"ts":"2026-05-24T12:34:05Z","stream":"audit","event":"tools.list","server":"github"}
+
+// mcpm secret set GITHUB_TOKEN --from-stdin --json
+{ "data": {
+  "name":       "GITHUB_TOKEN",
+  "backend":    "OsKeyringStore",
+  "key_id":     "mcp-manager:GITHUB_TOKEN",
+  "sha256":     "8a9f2d1b4c...",  // SHA of the value, for verification
+  "audit_id":   "01J5M3..."
+} }
+
+// mcpm outdated --json
+{ "data": [
+  { "name": "github",     "current": "0.4.1", "latest": "0.4.2", "kind": "patch", "breaking": false },
+  { "name": "filesystem", "current": "0.2.0", "latest": "0.3.1", "kind": "minor", "breaking": false }
+] }
+
+// mcpm registry list --json
+{ "data": [
+  { "name": "official", "url": "https://registry.modelcontextprotocol.io",
+    "signed_by": "tuf-root", "last_refresh": "2026-05-24T08:00:00Z" },
+  ...
+] }
+
+// mcpm project allow --json
+{ "data": {
+  "path":       "/work/cloned-from-github",
+  "config_sha": "sha256:8a9f2d...",
+  "decision":   "trust",
+  "granted_by": "non-interactive",
+  "audit_id":   "01J5M4..."
+} }
+
+// mcpm trust status --json
+{ "data": {
+  "mode":           "fetched",
+  "trust_file":     "/home/p/.config/mcp-manager/trust.toml",
+  "last_refresh":   "2026-05-24T08:00:00Z",
+  "ttl_remaining_s": 547200,
+  "registries": [
+    { "name": "official", "pubkey": "RWQabc...", "rotated_at": null }
+  ]
+} }</code></pre>
+
+    <p>
+      Schemas live in <code>crates/mcpm-protocol/schemas/v1/</code> next to the wire-protocol
+      schemas. They're emitted from a single <code>schemars</code>-derive on the same Rust types the
+      CLI uses internally, so drift is impossible: if you change a field in the Rust struct, the JSON
+      schema regenerates on next build.
+    </p>
+
+    <h3 id="design-completions">Shell completions — generate, ship, install</h3>
+    <p>
+      <code>clap_complete</code><sup>[<a href="#c-clap">4</a>]</sup> handles this for free.
+      Completions for Bash, Zsh, Fish, Elvish, and PowerShell generated at build time and shipped
+      under <code>share/mcpm/completions/</code>; the installer script symlinks into the right
+      completion dir. <code>mcpm completions &lt;shell&gt;</code> emits to stdout for sourcing;
+      <code>mcpm completions install</code> auto-detects <code>$SHELL</code> and writes the file.
+    </p>
+    <p>
+      Completions are smart, not dumb. <code>mcpm install &lt;TAB&gt;</code> queries mcpmanagerd's
+      cached registry index (no network) and returns matching packages. <code>mcpm start
+      &lt;TAB&gt;</code> returns names of stopped servers. <code>mcpm secret set &lt;TAB&gt;</code>
+      returns secret names declared by installed servers but not yet set in the keychain.
+      <code>mcpm project allow &lt;TAB&gt;</code> auto-completes to the project config path
+      discovered by walking from <code>cwd</code>. Implementation:
+      <code>clap_complete::dynamic</code> with a 50ms-deadline UDS roundtrip to the daemon; falls
+      back to static completions when the daemon isn't up. This is the level <code>fly</code>,
+      <code>gh</code>, and <code>kubectl</code> ship; users expect it.
+    </p>
+
+    <h3 id="design-help"><code>mcpm help</code> vs. <code>--help</code> parity, and manpages</h3>
+    <p>
+      Two contracts:
+    </p>
+    <ol>
+      <li><code>mcpm help &lt;subcommand&gt;</code> and <code>mcpm &lt;subcommand&gt; --help</code>
+        produce <strong>byte-identical output</strong>. (Test enforced.) Reason: users come from
+        different traditions — git users type <code>git help X</code>, GNU-tools users type
+        <code>X --help</code>, BSD-tools users type <code>man X</code>. Don't make them learn ours.</li>
+      <li><code>mcpm</code> ships manpages. <code>mcpm(1)</code> is the top-level summary;
+        <code>mcpm-install(1)</code>, <code>mcpm-status(1)</code>, etc. for each subcommand.
+        Generated at build time from the same <code>clap</code> AST via
+        <code>clap_mangen</code>. Installed under <code>share/man/man1/</code>. The installer
+        script registers them with the user's <code>$MANPATH</code> or
+        <code>/usr/local/share/man/man1</code>.</li>
+    </ol>
+    <p>
+      <code>mcpm help</code> output goes through <code>$PAGER</code> when stdout is a TTY,
+      identical content to stdout when piped. Examples are real (with real arguments) — the UX
+      design already commits to this, I'm just ratifying.
+    </p>
+
+    <h3 id="design-pipe-recipes">Pipe-friendliness — recipes that must work in v1.0</h3>
+    <p>
+      Every line below is a tested invariant in CI:
+    </p>
+<pre><code># Restart every failed server
+mcpm status --json | jq -r '.data[] | select(.state == "failed") | .name' | xargs -r mcpm restart
+
+# Export a registry's full package catalog as TSV for a spreadsheet
+mcpm search --source=official '*' --format=tsv --header > catalog.tsv
+
+# Pipe logs into a structured log aggregator
+mcpm logs github --follow --format=ndjson | vector --config vector.toml
+
+# Diff your project config against your teammate's
+mcpm config get --scope=project --format=yaml > theirs.yaml
+diff theirs.yaml <(mcpm config get --scope=project --format=yaml)
+
+# Migrate secrets between machines (without ever printing the secret)
+ssh oldhost 'mcpm secret list --json' | jq -r '.data[].name' | \
+  while read s; do ssh oldhost "mcpm secret get $s --format=raw" | mcpm secret set "$s" --from-stdin; done
+
+# Trust a teammate's project config from a known-good SHA in a commit
+echo "sha256:$EXPECTED_SHA" > /tmp/expected
+mcpm project allow --trust-from-file=/tmp/expected || exit 78
+
+# Check if mcpm needs an update, machine-readable
+mcpm outdated --json | jq -e '.data | length == 0'  # exit 0 = all up to date
+
+# Tag a release: ensure all servers are healthy first
+mcpm status --json | jq -e '.data | all(.state == "running")' || exit 1</code></pre>
+
+    <h3 id="design-editor">$EDITOR integration — the rules</h3>
+    <ul>
+      <li>Resolution order: <code>$MCPM_EDITOR</code>, <code>$VISUAL</code>, <code>$EDITOR</code>,
+        <code>vi</code>. (<code>$VISUAL</code> before <code>$EDITOR</code> is POSIX precedent.)</li>
+      <li>Invoke via <code>$SHELL -c</code> only when the value contains shell metacharacters; else
+        direct exec. Pass exactly one argument: an absolute path to a temp file in
+        <code>$TMPDIR</code> at mode <code>0600</code> with a <code>.toml</code> suffix for syntax
+        detection.</li>
+      <li>On editor exit non-zero: treat as abort; temp-file path printed to stderr for recovery.
+        On exit zero with changed content: validate before commit. On validation failure: re-spawn
+        the editor with the error appended as a comment block at the top.</li>
+      <li>Non-interactive equivalent: <code>mcpm config edit --in-place</code> reads TOML from
+        stdin, validates, writes atomically. This is what CI uses.</li>
+    </ul>
+
+    <h3 id="design-project">Project-scope behaviors — pipeable diff/list</h3>
+    <p>
+      <code>mcpm project list --json</code> emits every <code>.mcp-manager.toml</code> in the trust
+      database, with paths, hashes, and last-allowed timestamps. <code>mcpm project diff
+      [&lt;path&gt;]</code> emits a unified diff (default) or a structured diff (with
+      <code>--format=json</code>) of the project config against the trusted-on-record version, so
+      you can detect drift in CI. Both commands return <code>EX_OK</code> (0) when there's no
+      drift and <code>EX_CONFIG</code> (78) when there is, so a shell-level <code>if
+      mcpm project diff; then …</code> Just Works.
+    </p>
+
+    <h3 id="design-trust">Trust-gate prompts — non-interactive equivalent</h3>
+    <p>
+      The interactive <code>[y/n/e]</code> prompt for "trust this project config" gets these
+      non-interactive variants:
+    </p>
+    <ul>
+      <li><code>mcpm project allow --trust-from-file=PATH</code> — the file contains the expected
+        SHA-256 (one line, format <code>sha256:&lt;hex&gt;</code>). CLI computes the project
+        config's actual hash, compares, exits <code>EX_OK</code> if match,
+        <code>EX_NOUSER</code> (67) if not. Audit-logged either way.</li>
+      <li><code>mcpm project allow --expected-sha=sha256:&lt;hex&gt;</code> — same semantics,
+        inline hex. Useful when the trust SHA comes from a git commit message or PR body.</li>
+      <li><code>mcpm project allow --force</code> — unconditional trust grant, audit-logged
+        loudly with <code>granted_by: "forced"</code>. Discouraged but available.</li>
+      <li><code>MCPM_AUTO_TRUST_PROJECTS=1</code> — environment-driven blanket auto-trust, only
+        respected if <code>mcpm</code> is also running with <code>--allow-auto-trust</code>. The
+        belt-and-suspenders is intentional: a malicious project README can set the env var, but it
+        can't set the CLI flag. (We follow the <code>direnv</code> precedent here.)</li>
+    </ul>
+    <p>
+      The <code>--trust-from-file</code> flag is the right one for CI runners and devcontainer
+      <code>postCreate</code> hooks: the expected SHA is committed to the repo in (say)
+      <code>.mcpm-trust</code>, the bootstrap script invokes
+      <code>mcpm project allow --trust-from-file=.mcpm-trust</code>, and if anyone tampers with
+      <code>.mcp-manager.toml</code> without updating <code>.mcpm-trust</code>, the bootstrap
+      fails loudly.
+    </p>
+
+    <h3 id="design-onboarding">Onboarding — the four transcripts as Unix shapes</h3>
+    <p>
+      The UX-design page documents four onboarding transcripts: lucky-day interactive, full
+      non-interactive, project-scope, and cloned-from-elsewhere. Mapped to my worldview, each one
+      has a stdout/stderr/exit-code contract:
+    </p>
+
+    <table class="compare">
+      <thead><tr><th>Transcript</th><th>stdout</th><th>stderr</th><th>Exit code</th></tr></thead>
+      <tbody>
+        <tr><td>Lucky-day interactive</td><td>(empty in human mode; absolute paths of files
+          written, one per line, when <code>--format=tsv</code>)</td><td>Prompts and "✓ Wrote …"
+          chatter</td><td>0 on success; sysexits on failure</td></tr>
+        <tr><td>Full non-interactive (<code>--defaults -y</code>)</td><td>One line: the canonical
+          config path</td><td>One line: "Initialized (user scope, default projections, no Docker,
+          no service-register)."</td><td>0 on success</td></tr>
+        <tr><td>Project-scope (<code>mcpm project init</code>)</td><td>The absolute path of
+          <code>.mcp-manager.toml</code></td><td>"✓ Wrote …" plus suggestion to commit</td><td>0</td></tr>
+        <tr><td>Cloned-from-elsewhere (trust gate)</td><td>(empty in human mode; JSON record of the
+          trust decision in <code>--format=json</code>)</td><td>The trust prompt, the decision,
+          the audit-id</td><td>0 on trust granted; <code>EX_NOUSER</code> (67) on refused</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      The most important property: <strong>the human and the script see the same exit code</strong>.
+      A user typing <code>echo $?</code> after a refused trust prompt sees <code>67</code>; a CI
+      runner running <code>mcpm project allow --trust-from-file=…</code> on a tampered project sees
+      the same <code>67</code>. No mode bifurcation.
+    </p>
+
+    <h3 id="design-error-codes">Error UX — machine-parseable error codes</h3>
+    <p>
+      I align with the UX design's <code>E_*</code> taxonomy but add a few invariants:
+    </p>
+    <ul>
+      <li>Every error code is documented in <code>mcpm help errors</code> and on the docs site
+        (<code>docs.mcp-manager.dev/v1.0/errors/E_SECRET_MISSING</code>).</li>
+      <li>The <code>--format=json</code> error wrapper (above) includes the <code>exit_code</code>
+        field redundantly so a single <code>jq</code> read can branch on it without invoking
+        <code>echo $?</code>.</li>
+      <li>The <code>suggested</code> array in the error payload is machine-readable: each entry is
+        a shell-quote-safe command. A user wrapper can do
+        <code>mcpm install foo --format=json || jq -r '.error.suggested[0]' | sh</code> if it wants
+        to chain the suggested fix.</li>
+      <li>Stack traces never appear in the user-facing error. They go to the daemon log
+        (<code>mcpm logs --daemon</code>) at trace level, and are surfaced only when
+        <code>MCPM_LOG=trace</code> is set.</li>
+    </ul>
+
+    <h3 id="design-pager">Pager and color discipline</h3>
+    <ul>
+      <li><code>mcpm help</code> and <code>mcpm logs --tail N</code> (without
+        <code>--follow</code>) pipe through <code>$PAGER</code> when stdout is a TTY, never
+        otherwise.</li>
+      <li>If <code>$PAGER</code> isn't set we use <code>less -FRX</code> — <code>F</code> = exit
+        immediately if output fits on one screen, <code>R</code> = pass through ANSI color codes,
+        <code>X</code> = don't init/deinit the terminal (preserves scrollback).</li>
+      <li>Color is on by default when stdout is a TTY and <code>NO_COLOR</code> is unset and
+        <code>$TERM</code> isn't <code>dumb</code>. We never write 256-color or truecolor escapes
+        when <code>$COLORTERM</code> says otherwise.</li>
+      <li><code>--no-color</code> as a flag is accepted and ratchets through to the daemon
+        (logs from <code>mcpm logs --daemon --no-color</code> are stripped server-side, since the
+        daemon also colorizes when it knows the receiving client wants colors).</li>
+    </ul>
+
+    <h3 id="design-summary">Summary — the 9-point CLI charter</h3>
+    <ol>
+      <li><strong>Every subcommand</strong> supports <code>--format=human|json|ndjson|yaml|tsv</code>.</li>
+      <li><strong>Exit codes follow <code>sysexits.h</code>;</strong> mapping documented and tested.</li>
+      <li><strong>stdout is data; stderr is chatter</strong> — incl. error cases (JSON error payload
+        goes to stdout so it can be piped).</li>
+      <li><strong>No banner, no telemetry, no surprises.</strong> Bare <code>mcpm</code> prints help
+        to stderr and exits 2.</li>
+      <li><strong>The TUI never autolaunches.</strong> <code>mcpm tui</code> is the only entry
+        point; it refuses to start when stdin isn't a TTY.</li>
+      <li><strong>Every interactive flow has a flag equivalent.</strong></li>
+      <li><strong>$EDITOR, $PAGER, $VISUAL, $NO_COLOR, $XDG_*</strong> honored. Documented in
+        <code>mcpm help env</code>.</li>
+      <li><strong>Shell completions for five shells</strong>, dynamically aware of daemon state.</li>
+      <li><strong><code>mcpm help X</code> ≡ <code>mcpm X --help</code></strong> byte-identical;
+        manpages generated and installed.</li>
+    </ol>
+    <p>
+      Ship that and <code>mcpm</code> sits on the same shelf as <code>gh</code>, <code>fly</code>,
+      <code>aws</code>, <code>stripe</code>. Skip any of it and it feels like an early-2010s npm
+      subcommand wrapper.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li id="c-unixphil">McIlroy, Pinson, Tague (1978). "Foreword" to the special issue of <em>Bell
+        System Technical Journal</em> on the UNIX time-sharing system — the founding statement of
+        the Unix philosophy: "Make each program do one thing well… Write programs to handle text
+        streams, because that is a universal interface." Mirrored at
+        <a href="https://www.tuhs.org/Archive/Documentation/Manuals/Unix7_Bell_BSTJ_v57_no6.pdf">tuhs.org</a>.
+        Modern restatement: ESR, <em>The Art of Unix Programming</em>, chapter 1.
+        <a href="https://www.catb.org/~esr/writings/taoup/html/ch01s06.html">catb.org/~esr/writings/taoup/html/ch01s06.html</a>.</li>
+      <li id="c-sysexits">FreeBSD project. <code>sysexits.h(3)</code> — Preferable exit codes for
+        programs. <a href="https://man.freebsd.org/cgi/man.cgi?sysexits(3)">man.freebsd.org/cgi/man.cgi?sysexits(3)</a>.
+        The canonical numeric ranges 64–78 used in this document.</li>
+      <li id="c-nocolor">Maddison, Tom (2018). NO_COLOR specification.
+        <a href="https://no-color.org/">no-color.org</a>. Adopted by clap, GNU coreutils, kubectl,
+        gh, stripe, and ~150 other tools.</li>
+      <li id="c-clap"><code>clap</code> crate documentation.
+        <a href="https://docs.rs/clap/latest/clap/">docs.rs/clap</a> — see "Builder vs Derive,"
+        the <code>ErrorKind</code> documentation (exit-code mapping), and the
+        <a href="https://docs.rs/clap_complete/latest/clap_complete/">clap_complete</a>
+        and <a href="https://docs.rs/clap_mangen/latest/clap_mangen/">clap_mangen</a> sibling
+        crates for completion and manpage generation.</li>
+      <li id="c-heroku">Heroku CLI Style Guide (Salesforce / Heroku, 2021).
+        <a href="https://devcenter.heroku.com/articles/cli-style-guide">devcenter.heroku.com/articles/cli-style-guide</a>.
+        "Always have <code>--json</code>" plus the canonical CLI-design rubric (idempotency,
+        progressive disclosure, "human vs machine readable").</li>
+      <li id="c-gh">GitHub CLI manual. <a href="https://cli.github.com/manual/gh">cli.github.com/manual/gh</a>.
+        See the <code>--json</code>, <code>--jq</code>, and <code>--template</code> flags as
+        implemented on every <code>gh</code> subcommand; the design rationale is in their
+        <a href="https://github.com/cli/cli/blob/trunk/docs/style.md">style guide</a>.</li>
+      <li id="c-stripe">Stripe CLI design (Stripe Engineering blog, 2020). <em>Designing a CLI for
+        Developers</em>. <a href="https://stripe.com/blog/stripe-cli">stripe.com/blog/stripe-cli</a>
+        — explicit discussion of JSON-by-default for piped output, ANSI color only on TTY,
+        meaningful exit codes per HTTP status class.</li>
+      <li id="c-cargo">The Cargo Book — design principles, the
+        <code>--message-format=json</code> flag.
+        <a href="https://doc.rust-lang.org/cargo/reference/external-tools.html">doc.rust-lang.org/cargo/reference/external-tools.html</a>.
+        The canonical Rust-ecosystem example of how to design a CLI for both humans and CI.</li>
+      <li id="c-12factor">Wiggins, Adam (2011). <em>The Twelve-Factor App</em>, Factor XI: "Logs."
+        <a href="https://12factor.net/logs">12factor.net/logs</a>. "A twelve-factor app never
+        concerns itself with routing or storage of its output stream. It should not attempt to
+        write to or manage logfiles. Instead, each running process writes its event stream,
+        unbuffered, to <code>stdout</code>." Combined with the Unix-philosophy stdout/stderr split,
+        this gives us "data → stdout, events → stderr."</li>
+      <li id="c-cmdcli">"Command Line Interface Guidelines."
+        <a href="https://clig.dev/">clig.dev</a> (Heroku/Aanand Prasad et al., 2022). The
+        consolidated modern restatement; matches my position point-for-point on
+        <code>NO_COLOR</code>, JSON-by-default, sysexits, TTY detection, and signal handling.</li>
+      <li id="c-k9s">k9s — terminal UI for Kubernetes.
+        <a href="https://k9scli.io/">k9scli.io</a>. Reference for "the TUI is a separate binary
+        invocation" — running <code>k9s</code> launches the TUI; <code>kubectl</code> remains the
+        single-shot CLI. The same separation principle we apply to <code>mcpm tui</code> vs.
+        <code>mcpm &lt;subcommand&gt;</code>.</li>
+      <li id="c-lazygit">lazygit — TUI for git. <a href="https://github.com/jesseduffield/lazygit">github.com/jesseduffield/lazygit</a>.
+        See its <code>--print-config-dir</code>, <code>--print-version</code> flags as examples
+        of "even the TUI has scriptable hooks."</li>
+      <li id="c-kubectl">kubectl CLI conventions.
+        <a href="https://kubernetes.io/docs/reference/kubectl/conventions/">kubernetes.io/docs/reference/kubectl/conventions/</a>.
+        The <code>-o json|yaml|wide|name|jsonpath=…</code> output-format flag, the
+        <code>--dry-run</code> convention, and the principle that
+        <code>kubectl get</code> downgrades human output to plain when piped.</li>
+      <li id="c-xdg">freedesktop.org XDG Base Directory Specification.
+        <a href="https://specifications.freedesktop.org/basedir-spec/latest/">specifications.freedesktop.org/basedir-spec/latest/</a>.
+        The <code>$XDG_CONFIG_HOME</code>, <code>$XDG_STATE_HOME</code>,
+        <code>$XDG_RUNTIME_DIR</code>, <code>$XDG_CACHE_HOME</code> conventions referenced
+        throughout this design.</li>
+      <li id="c-jq">jq manual. <a href="https://jqlang.github.io/jq/manual/">jqlang.github.io/jq/manual/</a>.
+        The de-facto JSON processor every <code>--json</code>-friendly CLI is designed to be piped
+        into. Every example in this document assumes <code>jq</code>-compatibility.</li>
+    </ol>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Stance: CLI Unix purist. 1 of 25 parallel debate agents — frontend facet.
+  </p>
+</main>
+</body>
+</html>

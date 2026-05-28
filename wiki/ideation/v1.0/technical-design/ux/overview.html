@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UX Synthesis — MCP Manager v1.0 deep dive</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/matrix.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ux · synthesis</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="../synthesis.html">master synthesis</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+<main class="container">
+
+<h1>UX — Facet Synthesis</h1>
+<p class="lede">Where the five UX stances converge, where they diverge, and what gets adopted into v1.0. The empathy-led designer, the data-driven PM, the onboarding specialist, the error-recovery advocate, and the mental-model coach each pulled on a different thread of the same garment. This page weaves them together, honors the locked v1.0 surface (TUI in <code>ratatui</code>, nineteen CLI subcommands, four onboarding transcripts, twelve-row error taxonomy, auto-spawn daemon, no telemetry, GUI deferred), and picks a position on the open naming fights.</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ul>
+    <li><a href="#agreement">Where the five agree</a></li>
+    <li><a href="#disagreement">Where they diverge</a></li>
+    <li><a href="#decisions">Decisions, by UX surface</a></li>
+    <li><a href="#open">Open questions for v1.1</a></li>
+    <li><a href="#matrix">Ranking matrix</a></li>
+  </ul>
+</nav>
+
+<section class="section" id="agreement">
+<h2>Where the five agree</h2>
+
+<p>Despite their different vantage points, all five stances converge on the same six commitments. These are not voted; they are recurrent. If any one of them is missing from v1.0, the agent who would have written it walks away unhappy — and so will the user.</p>
+
+<ol>
+  <li><strong>Preview-before-destruction is universal.</strong> The empathy-led designer wants it for safety (<a href="./agent-empathy-led-designer.html#design">empathy · design</a>); the onboarding specialist wants it as the central trust mechanism on first launch (<a href="./agent-onboarding-specialist.html#preview">onboarding · preview</a>); the error-recovery advocate wants it as the upstream remedy for "errors" that are really self-inflicted destructive commands (<a href="./agent-error-recovery-advocate.html#design">recovery · design</a>). The pattern: every mutating command shows a textual plan (files created, files modified, services touched, secrets referenced) before any write happens, with friction scaled to reversibility — Enter for reversible, <code>y/N</code> for moderate, typed literal (<code>UNINSTALL</code>, <code>WIPE</code>) for irreversible. <code>mcpm init</code> itself adopts this: the four detected-editor projection-targets and the demo-server install are surfaced on a single preview screen before any file is written.</li>
+
+  <li><strong>Detection beats prompting; prompts are explained.</strong> The onboarding specialist's "kindness is the inference" (<a href="./agent-onboarding-specialist.html#detect">onboarding · detect</a>) and the empathy-led designer's "one indented clause per default" (<a href="./agent-empathy-led-designer.html#design">empathy · design</a>) are the same move from two directions. <code>mcpm init</code> runs a cheap detector first — OS, shell, editors on disk, Docker daemon liveness, keychain availability, project context — and only asks questions whose answers it cannot infer. Every remaining prompt names <em>why</em> the default is what it is, in one indented sub-line.</li>
+
+  <li><strong>The error envelope is a four-field artifact.</strong> Code, what-happened, why, what-to-do — with the next command as a literal copy-pasteable string. The error-recovery advocate codifies it (<a href="./agent-error-recovery-advocate.html#design">recovery · design</a>); the empathy-led designer's tone-audit table is what fills the human-prose fields (<a href="./agent-empathy-led-designer.html#design">empathy · design</a>); the data-driven PM logs the code (never the body) so the user can self-diagnose in <code>mcpm doctor</code> (<a href="./agent-data-driven-pm.html#design">pm · design</a>); the mental-model coach insists the human title sits on the three-noun frame (<a href="./agent-mental-model-coach.html#arguments">coach · arguments</a>).</li>
+
+  <li><strong>No telemetry ever leaves the machine — but local measurement is welcome.</strong> The "no telemetry" lock is treated as non-negotiable by every agent, including the PM whose job would normally argue otherwise (<a href="./agent-data-driven-pm.html#thoughts">pm · thoughts</a>). Local NDJSON event logging exists strictly to make the user smarter about their own setup (via <code>mcpm doctor --history</code> and <code>mcpm support-bundle</code>) and is gated behind a privacy checklist whose key rule is "no field that could embarrass the user if leaked": no argv, no paths, no secret names, no error message bodies, no cross-session correlation IDs.</li>
+
+  <li><strong>Refusal is not failure.</strong> Trust-gate refusals, projection-drift refusals, and registry-signature failures are <em>policy succeeding</em>, not the system crashing. The recovery advocate splits this into a <code>status: refused | failed</code> envelope field (<a href="./agent-error-recovery-advocate.html#design">recovery · design</a>); the empathy-led designer splits glyphs (<code>⊘</code> for refusal, <code>✗</code> for failure) and colors (amber vs. red); the mental-model coach insists "Allow this project's MCP config" replaces ambient "trust" verbiage in the prompt body (<a href="./agent-mental-model-coach.html#design">coach · design</a>).</li>
+
+  <li><strong>Accessibility is a release blocker, not a polish item.</strong> Color-plus-glyph everywhere, <code>NO_COLOR</code> honored, keyboard-only operation, screen-reader-labelable glyphs, plain-text fallback for the boxed preview when <code>TERM=dumb</code> or <code>NO_COLOR</code> is set. The mental-model coach adds: every glyph has a one-word screen-reader label — <code>●</code> is "running", not "filled circle".</li>
+</ol>
+</section>
+
+<section class="section" id="disagreement">
+<h2>Where they diverge</h2>
+
+<p>Three real disagreements survive the agreement above. Each requires a position; deferring would mean shipping inconsistency.</p>
+
+<p><strong>1. How many prompts should <code>mcpm init</code> ask?</strong> The empathy-led designer wants four prompts with explained defaults (<a href="./agent-empathy-led-designer.html#design">empathy · design</a>). The onboarding specialist wants three with a preview screen replacing the projection-target question (<a href="./agent-onboarding-specialist.html#five">onboarding · five</a>). The error-recovery advocate wants the prompts wrapped in named, resumable stages even if there are fewer of them (<a href="./agent-error-recovery-advocate.html#design">recovery · design</a>). <strong>Resolution:</strong> three lucky-day prompts (demo-install, Docker registry only-if-detected, service-register) plus the always-present preview screen, with each prompt's default carrying an indented one-line "why this default" clause. The preview <em>replaces</em> the projection-target question on the lucky day; cloned-from-elsewhere and project-scope transcripts get their own trust prompt as the recovery advocate requires. Total user-visible questions: three on the lucky day, four max otherwise. This is fewer than the locked spec's Transcript 1 (which has four), and we want that compression — but each surviving prompt is explained.</p>
+
+<p><strong>2. Should v1.0 rename internal vocabulary on user-facing surfaces?</strong> The mental-model coach pushes a ten-row rename pass (<a href="./agent-mental-model-coach.html#design">coach · design</a>); the data-driven PM resists pre-data renaming on the grounds that v1.0 locks muscle memory once (<a href="./agent-data-driven-pm.html#arguments">pm · arguments</a>); the empathy-led designer is sympathetic but warns against name churn during the very first release. The synthesis takes a calibrated position, item by item, in <a href="#decisions">decisions</a>. Some renames are adopted (the ones that affect labels users read but not keys power users type); others are deferred to v1.1 (the ones that would create a compatibility scar); one is rejected (renaming the TOML key <code>projection</code>).</p>
+
+<p><strong>3. How heavy should first-launch error recovery be?</strong> The onboarding specialist argues for engineering errors <em>out</em> of the first 60 seconds by shipping a zero-secret demo server (<a href="./agent-onboarding-specialist.html#aha">onboarding · aha</a>); the error-recovery advocate argues that first-launch errors are the most teachable moments and deserve the <em>most</em> hand-holding via named resumable stages with <code>--resume --from-stage</code> (<a href="./agent-error-recovery-advocate.html#arguments">recovery · arguments</a>). <strong>Resolution:</strong> both. The demo server (a bundled <code>time</code> MCP with no secrets, no network, no permissions) ships in the binary and is installed by default during <code>mcpm init</code>; this engineers <code>E_SECRET_MISSING</code> and <code>E_REGISTRY_UNREACHABLE</code> out of the lucky-day first 60 seconds. The init flow is <em>still</em> broken into named idempotent stages (<code>preflight</code>, <code>keychain</code>, <code>service-register</code>, <code>registry-sync</code>, <code>scaffold-config</code>, <code>demo-install</code>, <code>project-trust-or-skip</code>) with <code>--resume --from-stage=&lt;name&gt;</code> so the worst-case branches (libsecret missing, no systemd permissions, registry unreachable) still recover cleanly. Structural prevention <em>and</em> graceful recovery — they are not exclusive.</p>
+</section>
+
+<section class="section" id="decisions">
+<h2>Decisions, by UX surface</h2>
+
+<h3>Onboarding flow (<code>mcpm init</code>, <code>--docker-enable</code>, first-launch UX)</h3>
+<p>The detector runs unconditionally at the top of <code>mcpm init</code> and writes its observations to <code>last-detect.json</code> for debug. Three lucky-day prompts: demo-server install (default Y, opt-out via <code>--no-demo</code>), Docker MCP Catalog registry (only asked if <code>docker info</code> returns 0; <code>--docker-enable=true</code>/<code>=false</code> overrides), background-service registration (default N, with the auto-spawn explanation). The preview screen sits between the last prompt and any disk write, listing every file we will create or modify with byte counts, and the install/skip lines for the demo server and service registration. Keystrokes on the preview: Enter applies; <code>e</code> opens <code>$EDITOR</code> on the plan TOML; <code>d</code> shows a unified diff; <code>q</code> aborts with zero files written. Non-interactive runs (<code>--defaults -y</code>) echo the preview to stderr and apply silently. After apply, the post-init message plants the three-noun model in six lines (Servers / Editors / Secrets) and gives one bridge sentence to the AHA-moment: "Open Claude Code (restart if it's already running) and ask it 'what time is it?' — that tool call goes through MCP Manager." The 60-second AHA target stands as an internal beta gate; we measure it locally from the user's own audit log.</p>
+
+<h3>TUI experience (the lazygit/k9s feel)</h3>
+<p>Three panes — Servers, Editors, Secrets — matching the three-noun mental model. The middle pane is renamed from "Toolchains" to "Editors" (adopted from the coach). Modifier-free single keys, <code>q</code> to quit, <code>?</code> to open contextual help, <code>Esc</code> universally cancels. Error modal layout follows the four-field shape: title at top, What/Why/What-to-do stacked, remedy command in a bordered box, <code>y</code> copies the command (k9s muscle memory), <code>l</code> jumps to relevant logs, <code>?</code> opens the runbook page. Glyphs: <code>●</code> running, <code>○</code> stopped, <code>⚠</code> crashed (renamed from "failed", per coach), <code>⊘</code> refused (new — for trust-gate refusals and projection-drift). Color decays from red to amber once the user has acknowledged a row by viewing logs (empathy add, lifted from Linear). Idle-stopped servers show as <code>idle</code> in a neutral tone, not an error tone.</p>
+
+<h3>CLI experience (discoverability, error messages, exit codes, completion)</h3>
+<p>Nineteen subcommands, verbs-in-imperative-present, noun-then-verb for sub-namespaces (<code>mcpm registry add</code>, <code>mcpm secret set</code>). One adopted rename from the coach: <code>mcpm outdated</code> → <code>mcpm check-updates</code>, with <code>outdated</code> retained as an alias for v1.0 (this is the deviation from "lock muscle memory once" the PM warned about; <code>outdated</code> is genuinely an adjective in a list of verbs, and the alias preserves any pre-v1.0 muscle memory). <code>delete</code> is rejected as a verb anywhere; <code>remove</code> is used throughout. Stable exit codes per <code>E_*</code>; <code>--json</code> swaps human prose for the RFC-7807-shaped envelope. <code>NO_COLOR</code> and stderr-not-a-TTY auto-strip ANSI. Shell completion ships for bash, zsh, fish, nu (generated by clap). Every command's <code>--help</code> ends with three "common next steps" lines, never with just usage.</p>
+
+<h3>Config files (TOML schemas, per-OS paths)</h3>
+<p>Paths follow XDG on Linux and Apple's Application Support convention on macOS, both already in the locked spec. Generated configs include a one-sentence why-comment per non-obvious field — <code>idle_ttl_secs = 1800  # auto-stop after 30 min idle; raise if your server is expensive to restart</code>. The TOML keys themselves stay technical (<code>singleton</code>, <code>idle_ttl_secs</code>, <code>projection</code>, <code>inherit</code>) because power users read them twice and grep them often; only the user-facing label changes. Field-level validation runs on every write; the validator emits line + column + the closest valid alternative (Levenshtein-detected typos), and an invalid edit never lands on disk.</p>
+
+<h3>The 12-row error taxonomy (clarity, recovery steps)</h3>
+<p>Twelve rows stays — the PM's warning against bloat carries the day against the recovery advocate's instinct to grow it. The shape inside each row is the recovery advocate's five-column contract: code, short title (mental-model-coach-approved noun-and-verb sentence), what-happened, why, remedy command + related diagnostic command. One code rename adopted: <code>E_DAEMON_VERSION</code> → <code>E_DAEMON_TOO_OLD</code> (self-describing; the coach's audit caught the ambiguity). One new category field on the JSON envelope: <code>external | input | internal | refusal</code> (coach + recovery, agreed). The mdbook commitment: every <code>E_*</code> in source has a matching <code>book/errors/E_*.md</code> page enforced by CI; no error code lands without a runbook page. Every error string ends with a literal command on its own line, separated by a blank line, ready to copy.</p>
+
+<h3>The four first-launch transcripts</h3>
+<p>The locked four transcripts (lucky-day, non-interactive, project-scope, cloned-from-elsewhere) are kept. The lucky-day transcript adopts the onboarding specialist's compression (three prompts + preview screen + post-init three-noun teach) and the empathy-led designer's explained defaults. The non-interactive (CI/Nix/Ansible) transcript echoes the preview to stderr and exits silently in &lt;2 s; <code>--defaults -y</code> is the contract. The project-scope transcript writes <code>.mcp-manager.toml</code> and <code>.mcp-manager.lock</code> and inherits the demo server so teammates re-AHA on every clone. The cloned-from-elsewhere transcript is the longest by design (the trust friction <em>is</em> the feature); it lists every local-executable server explicitly by path, offers <code>y/n/e/r</code> where <code>r</code> opens the local executable in <code>$EDITOR</code> for review before deciding, and records the granted-at timestamp + SHA256 in the trust file.</p>
+
+<h3>Trust gate UX</h3>
+<p>Adopted as the coach proposes at the prompt level: the verb stays <code>mcpm trust</code> at the subcommand layer (and <code>mcpm project allow</code> as the canonical alias the recovery advocate's remedies point at) but the user-facing prompt text in the cloned-from-elsewhere transcript is "Allow this project's MCP config?" with an explicit list of what's being allowed. The prompt body names the registry signer, the trust-manifest refresh date, what changed since the last time the user trusted a config from the same source. Refusal is glyphed <code>⊘</code> and styled amber, not red. Trust records SHA256 + path + granted-at; <code>mcpm trust status</code> shows the full ledger.</p>
+
+<h3>mcpm.toml inheritance UX</h3>
+<p>TOML key <code>inherit = "all" | [...] | "none"</code> stays unchanged. The init prompt phrases it as a question: "Use your global servers in this project?" with answers "all", "some" (drops into a multi-select), "none". The default is "all" because that matches the locked spec's stance that user-scope is the base layer and project-scope overlays. Project-scope conflicts (same server name in user and project) resolve project-wins with a one-line audit log entry every time it happens, so a confused user can run <code>mcpm logs --audit --grep inherit.override</code> to see which servers got overridden when.</p>
+
+<h3>$EDITOR integration</h3>
+<p>If <code>$EDITOR</code> is unset, the error message is the empathy-led designer's rewrite — "I tried to open your editor but $EDITOR isn't set. Try <code>export EDITOR=vim</code> (or your favorite), or pass --no-editor to print the config to stdout instead." If <code>$EDITOR</code> exits non-zero, the temp file persists at a documented path and the user is told where. If <code>$EDITOR</code> saves a file that fails validation, we re-enter the editor with the validation error injected as a TOML comment on the offending line; the user's edits are never lost without their explicit consent. <code>e</code> on the preview screen and <code>e</code> on the trust prompt both spawn <code>$EDITOR</code> on the pertinent artifact.</p>
+
+<h3>Idle TTL (when surfaced?)</h3>
+<p>Never surfaced during onboarding. The onboarding specialist's argument wins outright: the user does not yet know what a server <em>is</em>; surfacing the auto-stop policy is premature complexity. The TOML key remains <code>idle_ttl_secs</code>; the TUI displays the value as "Auto-stop after 30 min" (coach rename adopted on the label only). When an idle stop fires, the audit log records <code>server.idle_stop</code> and the TUI's status bar shows a one-line breadcrumb for 10 seconds — "Stopped github (idle 30m). It'll start again on next use." — converting a surprising silence into a known-quantity event. This is the empathy-led designer's idle-TTL notification, adopted verbatim.</p>
+
+<h3>Singleton vs. per-client (CLI surface, explanation; renaming?)</h3>
+<p>The TOML key <code>singleton = true</code> stays (no rename — implementer-facing, grep-friendly, already shipping). The TUI checkbox label uses the coach's plain-English form: "Share one process across editors" (with the inverse "Give each editor its own copy"). The init flow never asks about it; the default <code>singleton = true</code> serves 90%+ of users. The only error-path surface is <code>E_SERVER_SINGLETON_CONFLICT</code> (structural conflict between clients), and its remedy points at <code>mcpm config put server.&lt;name&gt;.singleton false</code> with a plain-English why: "this server keeps per-editor state and needs each editor to get its own process." A power-user reading the doc comment in their config TOML sees both the key and the explanation; a first-time user never has to learn the word "singleton" at all.</p>
+
+<h3>Position on the mental-model coach's proposed renames</h3>
+<p>The coach proposed ten user-facing renames. Synthesis position: <strong>adopt seven</strong>, <strong>defer two to v1.1</strong>, <strong>reject one</strong>.</p>
+<ul>
+  <li><strong>Adopted</strong> (TUI/prompt/error-title only, TOML keys unchanged):
+    <ul>
+      <li>"Toolchains" pane → "<strong>Editors</strong>" — restores the three-noun symmetry; no compat cost.</li>
+      <li><code>idle_ttl_secs = 1800</code> in TOML displayed as "<strong>Auto-stop after 30 min idle</strong>" in the TUI and prompts.</li>
+      <li><code>singleton = true</code> in TOML labelled "<strong>Share one process across editors</strong>" in TUI/prompts.</li>
+      <li><code>inherit</code> rephrased to "<strong>Use your global servers in this project?</strong>" in the init prompt; TOML key unchanged.</li>
+      <li>"failed" status word → "<strong>crashed</strong>" everywhere (TUI, error titles, audit log human prose).</li>
+      <li>"drifted" → "<strong>edited outside</strong>" (TUI status, error titles); audit-log enum stays <code>drift_detected</code>.</li>
+      <li><code>E_DAEMON_VERSION</code> → <code>E_DAEMON_TOO_OLD</code> (the only code-level rename — self-describingness wins; the lock isn't violated because no published release ships the old name).</li>
+    </ul>
+  </li>
+  <li><strong>Deferred to v1.1</strong> (locking muscle memory matters; revisit with local-event data):
+    <ul>
+      <li>"projection" → "sync" as a user-facing verb. The coach is right that "sync" is more familiar, but rebranding mid-stream while the locked spec, technical design, and audience docs all use "projection" creates documentation churn the PM rightly resists. We adopt the <em>label</em> "Editors" for the pane the projection touches, and we use "sync to editor" as a description verb in TUI hint lines, but the subcommand, the TOML key, the error code (<code>E_PROJECTION_DRIFT</code>), and the doc-page noun all stay "projection" for v1.0. v1.1 reconsiders with data.</li>
+      <li>Splitting "trust" into "allow" (project) and "keys" (registry). The recovery advocate's <code>mcpm project allow</code> remedy line is already in place; the subcommand alias <code>mcpm project allow</code> exists; full subcommand-rename to <code>mcpm keys</code> for registry pubkeys is deferred.</li>
+    </ul>
+  </li>
+  <li><strong>Rejected</strong>:
+    <ul>
+      <li>Renaming the TOML key <code>projection</code> itself. The technical design names this as the central data-model concept, and renaming a foundational key in v1.0 would ripple through architecture docs, schemas, and audit-log enums. The asymmetry the coach himself proposes (technical key + user-friendly label) is exactly the right ratio; we hold it firmly. The label-layer renames above carry the user-facing burden; the key carries the implementer-facing burden.</li>
+    </ul>
+  </li>
+</ul>
+
+<h3>mdbook docs site (information architecture)</h3>
+<p>The IA follows the coach's three-noun-first structure with the empathy-led designer's emotional-journey overlay. Top-level chapters:</p>
+<ol>
+  <li>What is MCP Manager? — one page, the three-noun diagram, &lt;90 seconds reading time.</li>
+  <li>Install MCP Manager — curl one-liner, Nix flake, verify with <code>mcpm status</code>.</li>
+  <li>Servers — full lifecycle: install, list, update, remove.</li>
+  <li>Editors — auto-detection, projection mechanics in user terms, drift recovery.</li>
+  <li>Secrets — OS keychain, env-var fallbacks for CI/headless, why we refuse the placeholder fallback.</li>
+  <li>Projects — per-repo configs, the trust gate, sharing with teammates.</li>
+  <li>The TUI — keymap, panes, log multiplexing.</li>
+  <li>If something's wrong — error codes (the 12 rows, one page each at <code>/errors/E_*</code>), what each means in plain English, recovery steps. (Empathy: name it the way users will phrase it, not "Troubleshooting".)</li>
+  <li>Reference — full TOML schema, all CLI flags, audit-log format, the NDJSON event schema, exit codes.</li>
+  <li>Concepts (optional reading) — daemon architecture, projection mechanics, refcounting, spec negotiation. Tagged "optional".</li>
+</ol>
+
+<h3>Update notifications/UX</h3>
+<p>When a newer <code>mcpm</code> is available, show it once on the next interactive run, in muted text, with the install command, never as a modal, never as a blocker. Never shown during <code>mcpm init</code> itself (a fresh user does not need "you should upgrade me" on first encounter). The phrasing avoids the daemon noun: "MCP Manager update available (v1.0.2 → v1.0.3). Run <code>mcpm update --self</code> to install." If the user hits <code>E_DAEMON_TOO_OLD</code> from a project config's <code>min_mcpd_version</code>, the error message names the version asymmetry concretely and gives the one-line install command, acknowledging that some users have their own install method (Nix, brew, asdf) without insisting on ours.</p>
+
+<h3>Accessibility commitments</h3>
+<p>Color-plus-glyph everywhere (no information conveyed by color alone). <code>NO_COLOR</code> honored, auto-stripped when stderr is not a TTY. Keyboard-only operation in the TUI. Every glyph has a one-word screen-reader label (●=running, ○=stopped, ⚠=crashed, ⊘=refused). Plain-text fallback for boxed previews when <code>TERM=dumb</code> or <code>NO_COLOR</code> is set or <code>$ACCESSIBILITY_MODE</code> is exported. No timed animations or spinners between detection and the first prompt — the status output is line-oriented so a screen reader reads it as it's written. High-contrast theme tested with a screen reader. The release-blocker commitment: a regression in screen-reader behavior is a release-blocker, not a "nice to have". <code>$LANG</code> is honored even though v1.0 ships English only; the post-init message includes a translations-welcome pointer.</p>
+
+<h3>Local-only measurement (the PM's contribution, scoped)</h3>
+<p>Local NDJSON event log at <code>$XDG_STATE_HOME/mcp-manager/events.ndjson</code> (Linux) or <code>~/Library/Application Support/mcp-manager/events.ndjson</code> (macOS). Mode 0600 on creation, 50 MB rotation cap. Schema frozen at v1.0, gated behind the PM's privacy checklist (no argv, no paths, no secret names, no error bodies, no cross-session correlation). The empathy-led designer's caveat is honored: this exists strictly to serve the user, not to seed a future telemetry pipeline. <code>mcpm doctor --history</code> reads the file and surfaces patterns (recurring errors, time-of-day clustering, abandoned onboarding, drift after edit, trust regret). <code>mcpm support-bundle</code> packages the events log + daemon ring buffer + version + trust status into a tarball the user inspects before attaching to a bug report. The user can disable the log with one TOML line; the act of disabling is itself audit-logged. The post-init message names the file path and invites the user to read it: "we logged seven events about your setup at <code>~/.local/state/mcp-manager/events.ndjson</code> — open it to see what was captured." The user is a co-author of their own observability, not a research subject.</p>
+</section>
+
+<section class="section" id="open">
+<h2>Open questions for v1.1</h2>
+<ul>
+  <li><strong>Does "projection" actually need to die in user-facing surfaces?</strong> Deferred above. Once we have local-event data on how often users edit the projected files (a signal the PM's schema captures via <code>config.field_edited</code> on the projected paths) and how often <code>E_PROJECTION_DRIFT</code> fires, we revisit. If drift is rare, the noun has earned its keep. If drift is frequent and users abandon recovery, the rename pays for itself.</li>
+  <li><strong>Should there be a single end-of-onboarding "did this help?" prompt?</strong> The PM rejected it; the empathy-led designer is sympathetic but unsure. v1.0 ships without it; v1.1 reconsiders if the local-event funnel shows a meaningful abandonment cliff between init-complete and first-tool-call.</li>
+  <li><strong>Sub-codes inside the 12-row taxonomy.</strong> The recovery advocate's instinct to add <code>E_KEYCHAIN_UNAVAILABLE.libsecret</code> / <code>.kwallet</code> / <code>.macos_locked</code> sub-codes is deferred until local-event evidence shows users actually need the disambiguation. The PM's discipline holds.</li>
+  <li><strong>An interactive "first server install" follow-on after the demo server.</strong> Once the demo-server AHA-moment lands, should we offer a guided <code>mcpm install official/github-mcp</code> flow on the same screen? The onboarding specialist wants to keep init's surface tight; the empathy-led designer wants to bridge to the second command. v1.0 ships a "Try: mcpm install ..." pointer; v1.1 evaluates whether to make it interactive.</li>
+  <li><strong>A "what changed in this release" summary on first run after update.</strong> The empathy-led designer's principle (never blocking, never modal) suggests yes; the PM wants it gated behind the local-event log so we don't show it to users who already saw the release notes elsewhere. Deferred.</li>
+  <li><strong>Internationalization beyond English.</strong> v1.0 ships English only with translations-welcome pointer. v1.1 considers a translation file mechanism that does not balloon the binary.</li>
+</ul>
+</section>
+
+<section class="section" id="matrix">
+<h2>Ranking matrix</h2>
+<p>Each stance scored 1-5 across seven UX criteria. Sliders re-weight in real time. The matrix is a tool for testing intuitions, not a verdict — every locked decision above is the result of synthesis across at least three of the five stances, not the highest-scoring single stance.</p>
+<div data-matrix-src="./data/ranking.json"></div>
+</section>
+
+</main>
+</body>
+</html>

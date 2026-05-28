@@ -1,0 +1,100 @@
+{
+  "title": "Security — five stances against the v1.0 lock-in",
+  "options": [
+    "agent-red-team",
+    "agent-crypto-pedant",
+    "agent-sandboxing-veteran",
+    "agent-secrets-architect",
+    "agent-audit-compliance"
+  ],
+  "criteria": [
+    { "key": "threat_coverage",     "label": "Threat coverage",            "weight": 0.20 },
+    { "key": "cryptographic_rigor", "label": "Cryptographic rigor",        "weight": 0.15 },
+    { "key": "isolation_strength",  "label": "Isolation strength",         "weight": 0.20 },
+    { "key": "secrets_safety",      "label": "Secrets safety",             "weight": 0.15 },
+    { "key": "auditability",        "label": "Auditability",               "weight": 0.15 },
+    { "key": "ux_friction",         "label": "UX friction (lower better)", "weight": 0.15 }
+  ],
+  "scores": {
+    "agent-red-team": {
+      "threat_coverage":     5,
+      "cryptographic_rigor": 3,
+      "isolation_strength":  4,
+      "secrets_safety":      4,
+      "auditability":        3,
+      "ux_friction":         3,
+      "_evidence": {
+        "threat_coverage":     ["./agent-red-team.html#threat-model-outline", "./agent-red-team.html#worst10"],
+        "cryptographic_rigor": ["./agent-red-team.html#vs-crypto-pedant"],
+        "isolation_strength":  ["./agent-red-team.html#default-deny"],
+        "secrets_safety":      ["./agent-red-team.html#vs-secrets-architect"],
+        "auditability":        ["./agent-red-team.html#vs-audit-compliance"],
+        "ux_friction":         ["./agent-red-team.html#first-launch"]
+      }
+    },
+    "agent-crypto-pedant": {
+      "threat_coverage":     3,
+      "cryptographic_rigor": 5,
+      "isolation_strength":  2,
+      "secrets_safety":      4,
+      "auditability":        4,
+      "ux_friction":         4,
+      "_evidence": {
+        "threat_coverage":     ["./agent-crypto-pedant.html#design-tuf-lite"],
+        "cryptographic_rigor": ["./agent-crypto-pedant.html#design-envelope", "./agent-crypto-pedant.html#design-canonical"],
+        "isolation_strength":  ["./agent-crypto-pedant.html#vs-sandboxing-veteran"],
+        "secrets_safety":      ["./agent-crypto-pedant.html#design-secrets"],
+        "auditability":        ["./agent-crypto-pedant.html#design-audit"],
+        "ux_friction":         ["./agent-crypto-pedant.html#design-ipc"]
+      }
+    },
+    "agent-sandboxing-veteran": {
+      "threat_coverage":     4,
+      "cryptographic_rigor": 2,
+      "isolation_strength":  5,
+      "secrets_safety":      3,
+      "auditability":        3,
+      "ux_friction":         3,
+      "_evidence": {
+        "threat_coverage":     ["./agent-sandboxing-veteran.html#design-table"],
+        "cryptographic_rigor": ["./agent-sandboxing-veteran.html#arg-crypto-pedant"],
+        "isolation_strength":  ["./agent-sandboxing-veteran.html#design-bwrap", "./agent-sandboxing-veteran.html#design-docker"],
+        "secrets_safety":      ["./agent-sandboxing-veteran.html#arg-secrets-architect"],
+        "auditability":        ["./agent-sandboxing-veteran.html#arg-audit-compliance"],
+        "ux_friction":         ["./agent-sandboxing-veteran.html#design-first-launch"]
+      }
+    },
+    "agent-secrets-architect": {
+      "threat_coverage":     3,
+      "cryptographic_rigor": 3,
+      "isolation_strength":  3,
+      "secrets_safety":      5,
+      "auditability":        4,
+      "ux_friction":         4,
+      "_evidence": {
+        "threat_coverage":     ["./agent-secrets-architect.html#vs-red-team"],
+        "cryptographic_rigor": ["./agent-secrets-architect.html#vs-crypto-pedant"],
+        "isolation_strength":  ["./agent-secrets-architect.html#injection-modes"],
+        "secrets_safety":      ["./agent-secrets-architect.html#trait", "./agent-secrets-architect.html#layered", "./agent-secrets-architect.html#redaction"],
+        "auditability":        ["./agent-secrets-architect.html#vs-audit-compliance"],
+        "ux_friction":         ["./agent-secrets-architect.html#fallback"]
+      }
+    },
+    "agent-audit-compliance": {
+      "threat_coverage":     3,
+      "cryptographic_rigor": 4,
+      "isolation_strength":  2,
+      "secrets_safety":      3,
+      "auditability":        5,
+      "ux_friction":         4,
+      "_evidence": {
+        "threat_coverage":     ["./agent-audit-compliance.html#vs-red-team"],
+        "cryptographic_rigor": ["./agent-audit-compliance.html#hash-chain"],
+        "isolation_strength":  ["./agent-audit-compliance.html#vs-sandboxing-veteran"],
+        "secrets_safety":      ["./agent-audit-compliance.html#vs-secrets-architect"],
+        "auditability":        ["./agent-audit-compliance.html#event-schema", "./agent-audit-compliance.html#verify-tool"],
+        "ux_friction":         ["./agent-audit-compliance.html#export"]
+      }
+    }
+  }
+}

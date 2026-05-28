@@ -211,6 +211,76 @@ const SIDEBAR_STREAMS = [
       { path: "version-management/recommendation-versioning-summary.html", label: "Versioning · recommendation", kind: "recommendation" },
     ],
   },
+  {
+    id: "backend",
+    n: 9,
+    title: "Deep dive · Backend",
+    parentDir: "technical-design/",
+    pages: [
+      { path: "overview.html", label: "Synthesis (winners)", kind: "recommendation" },
+      { path: "agent-tokio-pragmatist.html", label: "tokio-pragmatist", kind: "research" },
+      { path: "agent-systems-veteran.html", label: "systems-veteran", kind: "research" },
+      { path: "agent-library-author.html", label: "library-author", kind: "research" },
+      { path: "agent-kernel-hacker.html", label: "kernel-hacker", kind: "research" },
+      { path: "agent-boring-tech-defender.html", label: "boring-tech-defender", kind: "research" },
+    ],
+  },
+  {
+    id: "frontend",
+    n: 10,
+    title: "Deep dive · Frontend",
+    parentDir: "technical-design/",
+    pages: [
+      { path: "overview.html", label: "Synthesis (winners)", kind: "recommendation" },
+      { path: "agent-vim-power-user.html", label: "vim-power-user", kind: "research" },
+      { path: "agent-accessibility-advocate.html", label: "accessibility-advocate", kind: "research" },
+      { path: "agent-onboarding-novice.html", label: "onboarding-novice", kind: "research" },
+      { path: "agent-cli-unix-purist.html", label: "cli-unix-purist", kind: "research" },
+      { path: "agent-visual-designer.html", label: "visual-designer", kind: "research" },
+    ],
+  },
+  {
+    id: "devops",
+    n: 11,
+    title: "Deep dive · DevOps",
+    parentDir: "technical-design/",
+    pages: [
+      { path: "overview.html", label: "Synthesis (winners)", kind: "recommendation" },
+      { path: "agent-nix-purist.html", label: "nix-purist", kind: "research" },
+      { path: "agent-distro-packager.html", label: "distro-packager", kind: "research" },
+      { path: "agent-sre-hawk.html", label: "sre-hawk", kind: "research" },
+      { path: "agent-supply-chain-sec.html", label: "supply-chain-sec", kind: "research" },
+      { path: "agent-curl-installer-defender.html", label: "curl-installer-defender", kind: "research" },
+    ],
+  },
+  {
+    id: "security",
+    n: 12,
+    title: "Deep dive · Security",
+    parentDir: "technical-design/",
+    pages: [
+      { path: "overview.html", label: "Synthesis (winners)", kind: "recommendation" },
+      { path: "agent-red-team.html", label: "red-team", kind: "research" },
+      { path: "agent-crypto-pedant.html", label: "crypto-pedant", kind: "research" },
+      { path: "agent-sandboxing-veteran.html", label: "sandboxing-veteran", kind: "research" },
+      { path: "agent-secrets-architect.html", label: "secrets-architect", kind: "research" },
+      { path: "agent-audit-compliance.html", label: "audit-compliance", kind: "research" },
+    ],
+  },
+  {
+    id: "ux",
+    n: 13,
+    title: "Deep dive · UX",
+    parentDir: "technical-design/",
+    pages: [
+      { path: "overview.html", label: "Synthesis (winners)", kind: "recommendation" },
+      { path: "agent-empathy-led-designer.html", label: "empathy-led-designer", kind: "research" },
+      { path: "agent-data-driven-pm.html", label: "data-driven-pm", kind: "research" },
+      { path: "agent-onboarding-specialist.html", label: "onboarding-specialist", kind: "research" },
+      { path: "agent-error-recovery-advocate.html", label: "error-recovery-advocate", kind: "research" },
+      { path: "agent-mental-model-coach.html", label: "mental-model-coach", kind: "research" },
+    ],
+  },
 ];
 
 const SIDEBAR_STREAM_IDS = new Set(SIDEBAR_STREAMS.map((s) => s.id));
@@ -416,6 +486,27 @@ function buildSidebarUxDesignLink(loc) {
   );
 }
 
+function buildSidebarDeepDiveHubLink(loc) {
+  // Active when we're on the deep-dive index or synthesis, OR on any facet
+  // page (in which case the per-facet stream section also highlights below).
+  const active =
+    loc.relativeFromV1 === "technical-design/index.html" ||
+    loc.relativeFromV1 === "technical-design/synthesis.html";
+  return el(
+    "a",
+    {
+      href: loc.prefix + "technical-design/synthesis.html",
+      class: "sidebar-link sidebar-hub-link" + (active ? " is-active" : ""),
+      "aria-current": active ? "page" : null,
+      title: "Detailed technical design — 25-essay deep dive · master synthesis",
+    },
+    [
+      el("span", { class: "sidebar-link-badge kind-analysis", "aria-hidden": "true" }, ["D"]),
+      el("span", { class: "sidebar-link-label" }, ["Detailed design"]),
+    ]
+  );
+}
+
 function buildSidebarStreamSection(stream, loc, storedOpen) {
   const isCurrentStream = loc.streamId === stream.id;
 
@@ -432,9 +523,9 @@ function buildSidebarStreamSection(stream, loc, storedOpen) {
     const link = el(
       "a",
       {
-        // Streams live under research/. prefix takes us to v1.0 root; then
-        // research/<stream>/<page-path-within-stream>.
-        href: loc.prefix + "research/" + stream.id + "/" + page.path,
+        // Streams live under stream.parentDir (default "research/"). prefix
+        // takes us to v1.0 root; then <parentDir><stream>/<page-path>.
+        href: loc.prefix + (stream.parentDir || "research/") + stream.id + "/" + page.path,
         class:
           "sidebar-link sidebar-pagelink kind-" + page.kind + (active ? " is-active" : ""),
         "aria-current": active ? "page" : null,
@@ -499,6 +590,7 @@ function buildSidebar(loc) {
       buildSidebarProductOverviewLink(loc),
       buildSidebarTechnicalDesignLink(loc),
       buildSidebarUxDesignLink(loc),
+      buildSidebarDeepDiveHubLink(loc),
       buildSidebarFutureLink(loc),
       buildSidebarResearchHubLink(loc),
     ])
@@ -522,7 +614,7 @@ function buildSidebar(loc) {
 
   sidebar.appendChild(
     el("div", { class: "sidebar-footer" }, [
-      el("span", {}, ["53 pages · 266 citations"]),
+      el("span", {}, ["120 pages · 25 stance essays · 5 syntheses"]),
     ])
   );
 

@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security Synthesis — MCP Manager v1.0 deep dive</title>
+<meta name="description" content="Synthesis of the five security stances — red-team, crypto-pedant, sandboxing-veteran, secrets-architect, audit-compliance — over the locked v1.0 surface. Decisions per area, open questions, ranking matrix.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/matrix.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">security · synthesis</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="../synthesis.html">master synthesis</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Security — Facet Synthesis</h1>
+  <p class="lede">
+    Where the five security stances converge, where they diverge, and what gets adopted. The five essays — <a href="./agent-red-team.html#design">red-team</a>, <a href="./agent-crypto-pedant.html#design">crypto-pedant</a>, <a href="./agent-sandboxing-veteran.html#design">sandboxing-veteran</a>, <a href="./agent-secrets-architect.html#design">secrets-architect</a>, <a href="./agent-audit-compliance.html#design">audit-compliance</a> — were written against an already-locked v1.0 surface: TUF-lite trust manifest with baked-in fallback (7-day TTL), minisign indexes and cosign-when-present packages, direnv-style sha256-pinned project-config trust, <code>SecretStore</code> + <code>OsKeyringStore</code> + <code>EnvVarPassthrough</code> via a layered store, <code>SO_PEERCRED</code> on the UDS, five isolation modes (<code>devenv | docker | podman | uvx-npx | none</code>) per server, append-only JSONL audit, no telemetry. Synthesis adopts within that envelope; it does not reopen the lockdown.
+  </p>
+
+  <p>
+    <span class="evidence-badge">5 stances</span>
+    <span class="evidence-badge">12 decisions</span>
+    <span class="evidence-badge">default-deny baseline</span>
+    <span class="evidence-badge">testable mitigations</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#agreement">Where the five agree</a></li>
+      <li><a href="#disagreement">Where they diverge</a></li>
+      <li><a href="#decisions">Decisions</a>
+        <ul>
+          <li><a href="#decision-trust">Trust model end-to-end</a></li>
+          <li><a href="#decision-pkgsig">Per-package signature verification</a></li>
+          <li><a href="#decision-projtrust">Trust gate for project configs</a></li>
+          <li><a href="#decision-secrets">Secrets storage and access</a></li>
+          <li><a href="#decision-ipc">IPC auth (SO_PEERCRED + UID)</a></li>
+          <li><a href="#decision-sandbox">Sandbox/isolation per server</a></li>
+          <li><a href="#decision-network">Network egress controls</a></li>
+          <li><a href="#decision-fs">FS read/write scoping</a></li>
+          <li><a href="#decision-audit">Audit log integrity</a></li>
+          <li><a href="#decision-firstlaunch">First-launch security prompts</a></li>
+          <li><a href="#decision-binsig">Binary code signing</a></li>
+          <li><a href="#decision-supplychain">Supply-chain pinning</a></li>
+        </ul>
+      </li>
+      <li><a href="#open">Open questions</a></li>
+      <li><a href="#matrix">Ranking matrix</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="agreement">
+    <h2>Where the five agree</h2>
+    <p>
+      The agreement surface is wider than any single essay lets on. All five agents — adversarial as their stances are — converge on a small set of load-bearing properties for v1.0. Treat the list below as invariants the implementation must preserve; everything else in this document is how we get there.
+    </p>
+
+    <ol>
+      <li>
+        <strong>Default-deny everywhere a default exists.</strong> Network egress off, filesystem scoped, isolation on, project configs untrusted until pinned, registries refused unless signed. <a href="./agent-red-team.html#design">Red-team</a> frames this loudest; <a href="./agent-sandboxing-veteran.html#design">sandboxing-veteran</a> bakes it into the Docker/Podman flag template; <a href="./agent-crypto-pedant.html#design">crypto-pedant</a> mirrors it in the verifier (reject unknown <code>alg</code>, reject stale <code>trust.toml</code> for state-changing ops). Default-deny applies to bytes, namespaces, and algorithms uniformly.
+      </li>
+      <li>
+        <strong>Cryptographic primitives are off-the-shelf.</strong> ed25519 for signatures, SHA-256 for hashes, no hand-rolled code. <a href="./agent-crypto-pedant.html#design">Crypto-pedant</a> writes the rule; the other four endorse by reference. Where we wrap an OS facility (Keychain, libsecret), we accept its choice and document it.
+      </li>
+      <li>
+        <strong>The MCP server is the adversary, not the dependency.</strong> Every essay assumes the installed package could be hostile and designs from there. Friendly-and-buggy is a special case of hostile not yet observed — <a href="./agent-red-team.html#thoughts">red-team's framing</a>, echoed by <a href="./agent-sandboxing-veteran.html#thoughts">sandboxing-veteran's gradient</a> and <a href="./agent-secrets-architect.html#thoughts">secrets-architect's intake discipline</a>.
+      </li>
+      <li>
+        <strong>Secrets cross the process boundary exactly once, via env at <code>execve</code>.</strong> Locked invariant from <a href="../../technical-design.html">technical-design</a>; all five agree. <a href="./agent-secrets-architect.html#injection-modes">Secrets-architect</a> and <a href="./agent-sandboxing-veteran.html#arg-secrets-architect">sandboxing-veteran</a> coordinate the per-mode mechanism (env for level-0-to-2, <code>--env-file /dev/fd/n</code> for containers, fd-passing aspirational for v1.1).
+      </li>
+      <li>
+        <strong>Audit log is JSONL, append-only, daily-rotated, with a hash chain.</strong> Locked surface said "append-only JSONL"; <a href="./agent-audit-compliance.html#hash-chain">audit-compliance</a> raised it to a hash chain and <a href="./agent-red-team.html#vs-audit-compliance">red-team</a> + <a href="./agent-crypto-pedant.html#design-audit">crypto-pedant</a> agreed (SHA-256, per-line <code>prev_hash</code>, one signature per daily file). <a href="./agent-secrets-architect.html#vs-audit-compliance">Secrets-architect</a> drew a hard line on never logging secret values — fuzz-tested, not assumed.
+      </li>
+      <li>
+        <strong><code>SO_PEERCRED</code> + 0600 UDS perms suffices for IPC auth on a single-user laptop.</strong> No HMAC framing, no per-connection nonces over IPC itself. <a href="./agent-crypto-pedant.html#design-ipc">Crypto-pedant</a> and <a href="./agent-sandboxing-veteran.html#design-ipc">sandboxing-veteran</a> agree explicitly; <a href="./agent-red-team.html#ipc-auth">red-team</a> agrees with one caveat (a per-spawn nonce for <em>server-to-daemon</em> secret reads — see decisions below).
+      </li>
+      <li>
+        <strong>No telemetry. Local audit is the system of record.</strong> All five honor the lock; <a href="./agent-audit-compliance.html#thoughts">audit-compliance</a> makes the local log SIEM-exportable rather than treating absence-of-telemetry as a privacy floor.
+      </li>
+      <li>
+        <strong>Every mitigation maps to a CI-enforced test.</strong> <a href="./agent-red-team.html#threat-model-outline">Red-team's THREAT_MODEL.md table</a> codifies it; the others cite tests inline (no-secret-in-logs fuzz, sandbox-blocks-<code>~/.ssh</code> e2e, audit-chain replay).
+      </li>
+    </ol>
+  </section>
+
+  <section class="section" id="disagreement">
+    <h2>Where they diverge</h2>
+    <p>
+      Five honest disagreements remain. Each is resolved under <a href="#decisions">decisions</a>; the divergence is documented here so the trade-off is explicit.
+    </p>
+
+    <h3>1. How strict is "fail-closed" on stale trust manifests?</h3>
+    <p>
+      <a href="./agent-red-team.html#vs-crypto-pedant">Red-team</a> wants fail-closed everywhere: stale <code>trust.toml</code> means no work. <a href="./agent-crypto-pedant.html#vs-red-team">Crypto-pedant</a> proposes the "fail-soft on cache, fail-closed on install" compromise: stale manifests still serve read-only ops (<code>mcpm list</code>, <code>mcpm exec</code>) but block state-changing ones (<code>mcpm install</code>, <code>mcpm update</code>) until refresh; hard ceiling of <code>expires_at + 30d</code> grace beyond which nothing verifies. Implementation adopts crypto-pedant's compromise. Red-team's strict line is unworkable for travel; the 30-day ceiling preserves the "publisher silent for a month; something is wrong" tripwire.
+    </p>
+
+    <h3>2. Per-spawn <code>MCPM_INSTANCE_TOKEN</code> nonce — yes or no?</h3>
+    <p>
+      <a href="./agent-red-team.html#attack-trees">Red-team's Tree 2</a> identifies the cross-server secret-leak path: server A reading server B's secrets over the same UDS, because <code>SO_PEERCRED</code> only attests UID. Mitigation: 32-byte nonce in each spawned server's env, mapped server-side to <code>(token → server_name)</code>. <a href="./agent-crypto-pedant.html#design-ipc">Crypto-pedant</a> calls this "cargo-culted crypto" and resists. Implementation sides with red-team: ~64 bytes per spawn + HashMap lookup closes a real same-UID class <code>SO_PEERCRED</code> cannot. It is not wire crypto; it is a server-instance identifier.
+    </p>
+
+    <h3>3. Per-server keychain namespacing — load-bearing or convenience?</h3>
+    <p>
+      <a href="./agent-red-team.html#vs-secrets-architect">Red-team</a> argues per-server scoping is non-optional: keychain account is <code>dev.mcp-manager/&lt;server&gt;/&lt;name&gt;</code>; cross-server access requires <code>secrets_from</code> the user types by hand. <a href="./agent-secrets-architect.html#thoughts">Secrets-architect</a> draws the same line. Implementation adopts without compromise; the locked schema currently leaves the door open to global-scoped secrets, and this decision closes it.
+    </p>
+
+    <h3>4. Sandbox-policy logging granularity</h3>
+    <p>
+      <a href="./agent-audit-compliance.html#vs-sandboxing-veteran">Audit-compliance</a> wants both <code>sandbox.allow</code> and <code>sandbox.deny</code>. <a href="./agent-sandboxing-veteran.html#arg-audit-compliance">Sandboxing-veteran</a> objects that per-syscall logging is unworkable (thousands per second from a Node MCP). Negotiated: log at policy granularity, not syscall, with a per-session bloom filter to dedupe. First-touch of a new path or destination logs once. The <code>server.spawn</code> record captures the materialised policy (bwrap argv hash, SBPL profile sha256, Docker run flags) so a later auditor can reconstruct the exact policy in force.
+    </p>
+
+    <h3>5. macOS Keychain accessibility constant</h3>
+    <p>
+      <a href="./agent-crypto-pedant.html#design-secrets">Crypto-pedant</a> proposes <code>kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly</code>. <a href="./agent-secrets-architect.html#vs-crypto-pedant">Secrets-architect</a> proposes <code>kSecAttrAccessibleWhenUnlocked</code>. Implementation adopts secrets-architect's choice: threat model is stolen laptop, not remote-attacker-with-physical-access, and <code>WhenUnlocked</code> closes the "background reboot exposes secrets" gap. Both forbid iCloud Keychain sync — non-negotiable.
+    </p>
+  </section>
+
+  <section class="section" id="decisions">
+    <h2>Decisions</h2>
+
+    <h3 id="decision-trust">Trust model end-to-end</h3>
+    <p>
+      <strong>Adopt.</strong> <code>mcpm-trust</code> keeps the v1.0 baked-in ed25519 root pubkey plus a baked-in revocation-only pubkey. On first run <code>trust.toml</code> is fetched (<a href="./agent-crypto-pedant.html#design-tuf-lite">crypto-pedant's table</a>); on network failure mcpmanagerd enters <code>baked-in-fallback</code> with a one-line warning every CLI call until refresh. Routine root rotation every 12 months; emergency rotation within 24h via a new <code>trust.toml</code> whose <code>revoked_keys</code> names the compromised <code>key_id</code>. Catastrophic root loss requires a binary reinstall — accepted single-publisher cost; threshold signing is a v2.0+ migration with the envelope already prepared for multi-sig.
+    </p>
+    <p>
+      Verifier order: parse → signature verify → <code>now &gt;= signed_at - skew</code> → <code>now &lt; expires_at</code> → <code>version &gt; previous_version</code>. The monotonic-version check defends against replaying an old-but-valid <code>trust.toml</code>.
+    </p>
+
+    <h3 id="decision-pkgsig">Per-package signature verification (algorithm-agility, revocation, offline)</h3>
+    <p>
+      <strong>Adopt.</strong> Every signed payload uses the agility envelope from <a href="./agent-crypto-pedant.html#design-envelope">crypto-pedant's design</a>: explicit <code>alg</code> tied to a static allowlist (v1.0: <code>["ed25519"]</code>, never accept <code>"none"</code> — the JWT bug), <code>key_id</code>, <code>signed_at</code>, <code>expires_at</code>, <code>payload_hash</code>, <code>payload_hash_alg</code>. <code>trust.toml</code> records each key's <code>alg</code>; verification rejects on <code>envelope.alg != key.alg</code>.
+    </p>
+    <p>
+      Per-package signatures: minisign for tarball-and-index registries; cosign-when-present for OCI/Docker, with Rekor inclusion-proof required (<a href="./agent-red-team.html#vs-crypto-pedant">per red-team</a>) when the package's registry sets <code>required_signatures = true</code>. All three baked-in registries (<code>official</code>, <code>github</code>, <code>docker</code>) set it. Hash agility via string prefix (<code>"sha256:9f4e2d..."</code>) so SHA-512/256 / SHA-3 migration is per-record.
+    </p>
+
+    <h3 id="decision-projtrust">Trust gate for project configs (direnv-style sha256-pinning)</h3>
+    <p>
+      <strong>Adopt with enumerated failure modes.</strong> Project-scope <code>.mcp-manager.toml</code> never applies until the user runs <code>mcpm trust grant</code>. The trust key is <code>SHA-256(absolute-path) || SHA-256(canonical-JSON(parsed-TOML))</code>: moving the repo invalidates the grant, semantic-equivalent re-formatting does not (<a href="./agent-crypto-pedant.html#design-canonical">canonical-JSON over parsed-TOML</a>). The six failure modes from <a href="./agent-red-team.html#trust-gate">red-team's enumeration</a> ship as named tests:
+    </p>
+    <ul>
+      <li><strong>Fresh clone:</strong> refuse, prompt for <code>mcpm trust grant</code>.</li>
+      <li><strong>Previously trusted, file modified:</strong> refuse, show diff vs. last trusted version, re-prompt.</li>
+      <li><strong>Trusted file, path moved:</strong> trust invalidates (different path is different context).</li>
+      <li><strong>trust.toml itself tampered:</strong> daemon enters "trust-degraded" mode; user-scope only; audit <code>trust.tampered</code>.</li>
+      <li><strong>Project config requests an unsigned registry:</strong> refused. Project scope can <em>use</em> trusted registries; it cannot <em>add</em> new ones.</li>
+      <li><strong>Project config requests <code>isolation = "none"</code>:</strong> refused outright. <code>none</code> is user-scope only. Project author needs that, they put a note in the README; user opts in by setting <code>isolation = "none"</code> in their own user-scope config for that specific server.</li>
+    </ul>
+
+    <h3 id="decision-secrets">Secrets storage and access (SecretStore, layered store, redaction)</h3>
+    <p>
+      <strong>Adopt.</strong> The <code>SecretStore</code> trait from <a href="./agent-secrets-architect.html#trait">secrets-architect's design</a>: object-safe, async, returns <code>Option&lt;SecretString&gt;</code> from <code>get()</code>, never returns values from <code>list()</code>. <code>SecretRef::Named { server, name }</code> with <code>#[non_exhaustive]</code> so v1.1 can add <code>VaultPath</code>, <code>OnePasswordItem</code>, etc. without breaking external matches.
+    </p>
+    <p>
+      <strong>Layered chain:</strong> <code>EnvVarPassthroughStore</code> first (read-only override for CI), <code>OsKeyringStore</code> second (durable). Reads fall through; writes go to keyring only. Documented precedence — surprises kill secret hygiene.
+    </p>
+    <p>
+      <strong>Per-server scoping is mandatory.</strong> Keychain account is <code>dev.mcp-manager.mcpmanagerd/&lt;server&gt;/&lt;name&gt;</code>. A server can only request secrets in its own namespace. Cross-server access requires <code>secrets_from = ["other-server.NAME"]</code> in user-scope (not project-scope). Resolves <a href="./agent-red-team.html#vs-secrets-architect">red-team's "random-tool declares <code>secrets = ["AWS_SECRET_ACCESS_KEY"]</code>" footgun</a>.
+    </p>
+    <p>
+      <strong>In-memory:</strong> every plaintext travels in <code>secrecy::SecretString</code> with <code>zeroize</code> on drop. Function signatures inside the secrets boundary take <code>&amp;SecretString</code>, never <code>&amp;str</code>; <code>clippy::disallowed_types</code> warns on raw <code>String</code> in those crates. <code>tracing</code> redaction layer rewrites known-secret field names (<code>token</code>, <code>password</code>, <code>api_key</code>, <code>secret</code>, <code>authorization</code>) to <code>[REDACTED]</code> as belt-and-suspenders. CI fuzz test writes random byte strings as secrets and greps every emitted log/audit line; match fails the build.
+    </p>
+    <p>
+      <strong>Intake paths:</strong> TTY via <code>rpassword</code> (reads <code>/dev/tty</code>, never echoes), <code>--from-file</code>, <code>--from-env</code>, <code>--stdin</code>. No <code>--value=...</code>; argv is broadcast.
+    </p>
+    <p>
+      <strong>Backend availability:</strong> macOS Keychain uses <code>kSecAttrAccessibleWhenUnlocked</code>, never <code>Always</code>, never iCloud Keychain. Linux requires a reachable Secret Service (libsecret / KWallet). If none, daemon emits a startup audit entry <code>secret.backend.degraded</code> (<a href="./agent-crypto-pedant.html#vs-secrets-architect">per crypto-pedant's silent-degradation concern</a>) and refuses to write — the <code>EnvVarPassthroughStore</code> layer remains for the user who has explicitly exported secrets. No file-based fallback store; rolling our own keyring is the trap the OWASP cheat sheet warns about.
+    </p>
+
+    <h3 id="decision-ipc">IPC auth (SO_PEERCRED + UID + per-spawn instance token)</h3>
+    <p>
+      <strong>Adopt with one layered addition.</strong> UDS at <code>$XDG_RUNTIME_DIR/mcpmanagerd.sock</code> with 0600 perms. <code>SO_PEERCRED</code> (Linux) / <code>LOCAL_PEERCRED</code> (macOS) on every accept; mismatched UID closes the connection and audit-logs <code>auth.failed</code>. No HMAC framing on the JSON-RPC wire — the kernel is the source of truth.
+    </p>
+    <p>
+      <strong>Per-spawn instance token (red-team's addition):</strong> when mcpmanagerd spawns server B, it generates a random 32-byte nonce, injects it into B's environment as <code>MCPM_INSTANCE_TOKEN</code>, and stores the mapping <code>token → server_name</code> in memory. Secret-read RPCs from a wrapper (<code>mcpm exec</code>) must present a token matching their declared <code>server_name</code>; mismatch denies and audit-logs. This closes the cross-server-as-same-UID class that <code>SO_PEERCRED</code> alone cannot. <a href="./agent-red-team.html#attack-trees">Tree 2's fifth leaf</a>.
+    </p>
+    <p>
+      <strong>Bypass scenarios documented and tested:</strong> same-UID server-to-daemon spoofing (mitigated by the nonce above); PID reuse on Linux (we rely on UID, not PID, for auth — noted as a non-issue); macOS <code>LOCAL_PEERPID</code> race (same — UID-only); socket-file replacement (mitigated by O_EXCL on bind + sibling flock).
+    </p>
+
+    <h3 id="decision-sandbox">Sandbox / isolation per server (5 modes + escape paths)</h3>
+    <p>
+      <strong>Adopt the gradient.</strong> Five modes are not equivalents; they are levels on a gradient and the user must see which level a server runs at. Badge in the TUI; column in <code>mcpm list</code>; <code>mcpm install</code> echoes the resolved mode. <a href="./agent-sandboxing-veteran.html#thoughts">Sandboxing-veteran's gradient</a> is canon.
+    </p>
+    <table class="compare">
+      <thead><tr><th>Mode</th><th>Level</th><th>v1.0 default for?</th><th>Key invariants</th></tr></thead>
+      <tbody>
+        <tr><td><code>none</code></td><td>0</td><td>Never. Confirm-by-typing-the-name; red badge.</td><td>Project-scope cannot request. Audit-log <code>isolation.disabled</code> on every spawn.</td></tr>
+        <tr><td><code>uvx-npx</code></td><td>1 (package only)</td><td>Last-resort when Docker/Podman/Nix absent, and only if version is exact-pinned. Refuse-to-install otherwise.</td><td>Mitigates CVE-2025-6514-class via exact pin; not a process sandbox.</td></tr>
+        <tr><td><code>devenv</code></td><td>2 (process)</td><td>When Nix is installed and the package has a curated devenv profile. Always wrapped in bubblewrap (Linux) / sandbox-exec (macOS).</td><td>Devenv alone is build hermeticity, not run-time isolation — say it twice in docs. The wrapper is the boundary.</td></tr>
+        <tr><td><code>docker</code></td><td>4 (container)</td><td>Default for new servers if Docker daemon detected.</td><td>Flag template from <a href="./agent-sandboxing-veteran.html#design-docker">sandboxing-veteran</a>: <code>--read-only</code>, <code>--cap-drop=ALL</code>, <code>--security-opt=no-new-privileges:true</code>, <code>--user $(id -u)</code>, digest-pin not tag, <code>--env-file /dev/fd/3</code>.</td></tr>
+        <tr><td><code>podman</code></td><td>4+ (rootless)</td><td>Default if Podman present and Docker absent.</td><td>Same flag set as Docker; rootless by construction; <code>slirp4netns</code> for user-mode net.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      <strong>Default-mode selection algorithm</strong> ships as <a href="./agent-sandboxing-veteran.html#design-defaults">sandboxing-veteran's <code>pick_default_isolation</code></a>: manifest opinion → Docker → Podman → Devenv (with wrapper) → uvx-npx (only if version-pinned) → refuse to install. The refuse-to-install fall-through is load-bearing; without it, "we shipped a tool that defaults to whatever's on the path" is the failure mode.
+    </p>
+    <p>
+      <strong>FS deny-list in every mode that supports one:</strong> <code>~/.ssh</code>, <code>~/.aws</code>, <code>~/.config/gh</code>, <code>~/.gnupg</code>, <code>~/.netrc</code>, <code>~/.password-store</code>, <code>~/Library/Keychains</code> (macOS), <code>~/.docker/config.json</code>, <code>~/.kube</code>, <code>~/.config/mcp-manager</code> itself. Bubblewrap argv and SBPL profile templates ship pre-written in <a href="./agent-sandboxing-veteran.html#design-bwrap">sandboxing-veteran's design</a>; the SBPL profile is sha256-tracked in the lockfile so a swapped policy file is a tamper event (<a href="./agent-crypto-pedant.html#vs-sandboxing-veteran">crypto-pedant's content-addressed policy point</a>).
+    </p>
+    <p>
+      <strong>Escape paths documented per mode:</strong> kernel exploits (sandboxing-veteran); docker socket exposure (never mount <code>/var/run/docker.sock</code>, period); rootless subuid/subgid misconfig; sandbox-exec deprecation contingency (fall back to Docker on a future macOS that removes it).
+    </p>
+
+    <h3 id="decision-network">Network egress controls (per server, default deny)</h3>
+    <p>
+      <strong>Adopt default-deny with declared egress.</strong> All sandboxed modes start with <code>--unshare-net</code> (bwrap) / <code>(deny network*)</code> (SBPL) / <code>--network=none</code> (Docker/Podman). The manifest declares allowed destinations as host:port pairs; the daemon enforces via slirp4netns + nftables on Linux, SBPL <code>(allow network* (remote tcp "host:port"))</code> on macOS, bridge + nftables for Docker (with Docker Desktop's macOS Linux-VM bridge as a documented limitation). For <code>uvx-npx</code> and <code>none</code>, egress is unenforced — the level-0/1 label is the consent.
+    </p>
+    <p>
+      <strong>Egress proxy for the allowlist case:</strong> tiny <code>mcpm-egress-proxy</code> Rust binary spawned alongside the server inside its netns; resolves names itself, never trusts the child's DNS, forwards only to allowed hosts (<a href="./agent-red-team.html#default-deny">per red-team's allowlist design</a>). Accepted limitation: DNS-over-TXT exfil to an allowed host is still possible; documented, not solved.
+    </p>
+
+    <h3 id="decision-fs">FS read/write scoping (per server)</h3>
+    <p>
+      <strong>Adopt scoped-default with user-grantable extensions.</strong> Every sandboxed server sees <code>$XDG_DATA_HOME/mcpm/servers/&lt;name&gt;/</code> (rw) and a per-spawn tmpfs <code>/tmp/mcpm-&lt;name&gt;-XXXXXX/</code> (rw). Read-only: <code>/usr</code>, <code>/bin</code>, <code>/lib</code>, <code>/etc/ssl/certs</code>, <code>/etc/resolv.conf</code> (proxied), <code>/nix/store</code> (devenv only). Deny: the FS deny-list from the sandbox decision. Extra paths require explicit user grant at install time ("this server requests read access to <code>~/Documents/notes/</code>; allow?"), default no, audit-logged.
+    </p>
+    <p>
+      In <code>docker</code> / <code>podman</code>: image rootfs is read-only (<code>--read-only</code>), explicit <code>--mount</code>s only, tmpfs <code>/tmp</code> (size-bounded, <code>nosuid,nodev</code>). In <code>devenv</code>: bubblewrap binds <code>$PROJECT_ROOT</code> at <code>/work</code> read-write and presents a fake <code>$HOME</code> at <code>/tmp/home</code> — the real user home is invisible.
+    </p>
+
+    <h3 id="decision-audit">Audit log (append-only JSONL, hash chain, integrity)</h3>
+    <p>
+      <strong>Adopt the hash chain.</strong> Fourteen event types from <a href="./agent-audit-compliance.html#event-schema">audit-compliance's schema</a>: <code>daemon.start</code>, <code>daemon.stop</code>, <code>ipc.connect</code>, <code>trust.grant</code>, <code>trust.revoke</code>, <code>install.start</code>, <code>install.verify</code>, <code>install.commit</code>, <code>secret.set</code>, <code>secret.get</code>, <code>secret.unset</code>, <code>server.spawn</code>, <code>sandbox.deny</code>, <code>config.change</code>. Required fields on every event: <code>seq</code> (uint64 monotonic), <code>ts</code> (RFC 3339 UTC ms), <code>event</code>, <code>actor</code>, <code>outcome</code>, <code>details</code>, <code>prev_hash</code> (hex SHA-256 of canonical previous record), <code>v</code>.
+    </p>
+    <p>
+      <strong>Canonicalisation:</strong> RFC 8785 (JSC) over the record minus <code>prev_hash</code>, then <code>SHA-256(canonical_bytes || prev_hash_bytes)</code>. First line of each daily rotation file references the previous day's terminal hash, so the chain spans rotations transparently. Terminal hash of each closed daily file is signed once with an audit-only ed25519 key stored in the OS keychain under <code>dev.mcp-manager.audit-key/private</code> (<a href="./agent-crypto-pedant.html#vs-audit-compliance">crypto-pedant's compromise against per-line signing</a>): one signing operation per day, not per event, no live signing key in process memory.
+    </p>
+    <p>
+      <strong>Durability:</strong> fsync before ack on every <code>auth.failed</code>, <code>secret.get</code>, <code>secret.set</code>, <code>install.verify</code>, <code>trust.grant</code>. Other events batch with a 100ms or 4KB flush bound. <code>chattr +a</code> where available (Linux with appropriate capability); macOS <code>chflags uappnd</code> applied where the user permits.
+    </p>
+    <p>
+      <strong>Verification tool:</strong> <code>mcpm audit verify</code> walks the chain offline, recomputes hashes, checks <code>seq</code> increment and <code>ts</code> monotonicity, exits 0 or 2. <code>--json</code> emits a SIEM-friendly report. Plain-text recipe (<code>jq</code> + <code>sha256sum</code>) shipped in docs so an auditor without <code>mcpm</code> can still verify. <code>mcpm audit export --format=json|csv</code> produces the SIEM ingestion package with a sidecar manifest (export sha256, seq range, hostname, mcpm version) — the FedRAMP evidence-package convention.
+    </p>
+    <p>
+      <strong>Spawn record contents:</strong> the materialised sandbox policy goes into <code>details</code> — bwrap argv hash, SBPL profile sha256, Docker run flags. "Spawned <code>foo</code>, isolation=docker" is unauditable; the flag set is. Single most important detail per <a href="./agent-sandboxing-veteran.html#arg-audit-compliance">sandboxing-veteran</a>.
+    </p>
+    <p>
+      <strong>Out of scope for v1.0:</strong> external anchoring (Rekor, user-controlled remote). Daily anchor schema is reserved in the format so v1.1 can ship it without a schema version bump.
+    </p>
+
+    <h3 id="decision-firstlaunch">First-launch security prompts (<code>--docker-enable</code>, trust root)</h3>
+    <p>
+      <strong>Adopt four prompts</strong> — three from <a href="./agent-red-team.html#first-launch">red-team</a> plus the onboarding gradient picker from <a href="./agent-sandboxing-veteran.html#design-first-launch">sandboxing-veteran</a>:
+    </p>
+    <ol>
+      <li><strong>Trust the root manifest URL?</strong> Default yes; URL shown; fingerprint of the baked-in ed25519 root pubkey shown alongside (<a href="./agent-crypto-pedant.html#design-ipc">per crypto-pedant's draft prompt</a>) with a website verification path. "No" puts the user permanently in <code>baked-in-fallback</code> mode.</li>
+      <li><strong>Default isolation mode for new servers?</strong> Detection-driven default: Docker if present, Podman if not, Devenv if Nix present, refuse-to-install otherwise. User can override via <code>mcpm config set default_isolation</code> later.</li>
+      <li><strong>Enable Docker for the docker registry source?</strong> Default no. If yes, daemon verifies <code>docker info</code> and remembers consent. The locked v1.0 <code>--docker-enable</code> behaviour.</li>
+      <li><strong>Allow env-var passthrough store?</strong> Default no. Yes requires explicit consent; audit-logged.</li>
+    </ol>
+    <p>
+      No "trust this prompt → auto-trust future prompts" toggle. Each consent is per-action. On installing a server resolved to <code>isolation = "none"</code> or <code>"uvx-npx"</code> while stronger is available: warning panel showing "this server has full host access. If you wanted Docker, install Docker and re-run". Confirm by typing the server name.
+    </p>
+
+    <h3 id="decision-binsig">Binary code signing</h3>
+    <p>
+      <strong>Adopt per-platform.</strong> macOS: Apple Developer ID + notarization; hardened runtime; library validation; <code>spctl --assess</code> passes on every release. The notarization ticket's X.509/RSA-2048 layer is Apple's, documented. Linux: detached ed25519 minisign next to release tarball; both <code>.tar.gz</code> and <code>SHA256SUMS</code> signed; installer script verifies against baked-in pubkey. Release-signing key separate from <code>trust.toml</code>-signing key. Reproducible Linux build via Nix flake — the <code>github:user/mcp-manager</code> flake produces byte-identical to the official tarball.
+    </p>
+
+    <h3 id="decision-supplychain">Supply-chain pinning (Cargo.lock review)</h3>
+    <p>
+      <strong>Adopt the full hardening pass.</strong> <code>Cargo.lock</code> committed; <code>cargo audit</code> in CI on every push, blocks merge on RUSTSEC. <code>cargo deny</code> for license + advisory + ban policies; the policy file disallows <code>build.rs</code> network access (any transitive dep that adds a network-fetching build script is a blocker). <code>cargo vet</code> with audited entries for the <code>mcpm-secrets</code>, <code>mcpm-trust</code>, and JSON-RPC parser deps; broader deps inherit from Mozilla / Bytecode Alliance / Embark trust roots. SBOM emitted per release via <code>cargo cyclonedx</code> (CycloneDX JSON), shipped alongside the tarball.
+    </p>
+    <p>
+      Runtime-fetched packages (Python via uvx, Node via bun, containers) verify the upstream package manager's own checksums <em>plus</em> our per-package <code>.minisig</code> from the registry index — belt and suspenders. Tag-pinning is forbidden for container images; digest-pin in the lockfile only.
+    </p>
+  </section>
+
+  <section class="section" id="open">
+    <h2>Open questions</h2>
+    <p>
+      Items not resolved here, with the resolution path called out so v1.0 ships with the door open.
+    </p>
+
+    <ol>
+      <li>
+        <strong>TUF <code>timestamp</code> role for v1.1.</strong> v1.0 collapses TUF into a single signed <code>trust.toml</code> with a 7-day TTL; an attacker who controls the network can serve an old-but-valid manifest until expiry. v1.1 adds a separately-signed <code>timestamp.toml</code> (hours-to-days TTL) pointing at the current <code>trust.toml</code> hash. The envelope schema is forward-compatible; no wire break required.
+      </li>
+      <li>
+        <strong>fd-passing for secrets in the strong-isolation modes.</strong> v1.0 ships env injection in all five modes plus <code>--env-file /dev/fd/n</code> for Docker/Podman. The fd-passing convention (<code>MCPM_SECRETS_FD=3</code>) is documented for the rmcp SDK but not yet supported by it; once the SDK lands, secrets in bubblewrap / sandbox-exec stop touching <code>/proc/self/environ</code>.
+      </li>
+      <li>
+        <strong>Manifest-driven <code>requires_secrets</code> declaration.</strong> Red-team and secrets-architect both want the manifest to enumerate which secret names a server is permitted to request; mcpmanagerd would refuse a <code>secret.get</code> for a name not declared. v1.0 ships the per-server keyring namespace which closes the main attack class, but the manifest declaration would let the trust gate and the secret store share a single source of truth. Land in v1.1 with the same envelope.
+      </li>
+      <li>
+        <strong>SBPL <code>sandbox-exec</code> deprecation contingency.</strong> Apple deprecated <code>sandbox-exec</code> circa 2016 but it remains functional. v1.0 ships SBPL profiles plus a documented contingency to fall back to Docker on macOS if a future release removes it. Trigger: any macOS major release that breaks the profile loading; alert + auto-migration plan.
+      </li>
+      <li>
+        <strong>External audit-log anchoring.</strong> Audit-compliance proposed an optional daily <code>audit.anchor</code> event the user can mirror to a path of their choosing (Dropbox, iCloud Drive, private gist). v1.0 reserves the schema; the actual emission lands when there's a confirmed user demand and a chosen offsite convention. v2.0 may layer optional Rekor anchoring for true external transparency-log semantics.
+      </li>
+      <li>
+        <strong>Threshold root signing.</strong> A single root key is a single point of failure; the catastrophic-loss recovery is "users reinstall from the curl script". v2.0+ moves to <em>m-of-n</em> threshold signing via the algorithm-agility envelope's already-string-typed <code>sig</code> field. The condition for landing this is a second trusted publisher — until then, the operational complexity isn't justified.
+      </li>
+      <li>
+        <strong>Side-channel exfil via stdout.</strong> An MCP can re-emit allowed-read file contents into the host LLM's context. We cannot stop this without solving alignment. Documented as an accepted limitation; the path-scoping decision above is the best mitigation v1.0 has.
+      </li>
+    </ol>
+  </section>
+
+  <section class="section" id="matrix">
+    <h2>Ranking matrix</h2>
+    <p>
+      Each stance scored 1–5 across six criteria (threat coverage, cryptographic rigor, isolation strength, secrets safety, auditability, UX friction — with UX friction inverted so lower is better, encoded as higher-is-better in the matrix). Drag the weight sliders to see how the ranking shifts under different priorities; the default weighting reflects v1.0's lockdown ("threat coverage and isolation strength dominate, cryptographic rigor and secrets safety and auditability tied, UX friction is a real constraint but not the lead"). Evidence links point to the <code>#design</code> sections of each agent essay.
+    </p>
+    <div data-matrix-src="./data/ranking.json"></div>
+    <p style="font-size:0.85rem;color:var(--fg-faint);margin-top:1rem">
+      <strong>How to read this:</strong> no single stance wins on every axis, and that is the point. Red-team leads on threat coverage; crypto-pedant on cryptographic rigor; sandboxing-veteran on isolation; secrets-architect on secrets; audit-compliance on auditability. The implementation adopts each agent's strongest lane and reconciles where they conflict — that reconciliation is the <a href="#decisions">decisions section</a>.
+    </p>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Sibling essays: <a href="./agent-red-team.html">red-team</a> · <a href="./agent-crypto-pedant.html">crypto-pedant</a> · <a href="./agent-sandboxing-veteran.html">sandboxing-veteran</a> · <a href="./agent-secrets-architect.html">secrets-architect</a> · <a href="./agent-audit-compliance.html">audit-compliance</a>. Up to <a href="../index.html">deep-dive index</a>; across to the <a href="../synthesis.html">master synthesis</a>.
+  </p>
+</main>
+</body>
+</html>

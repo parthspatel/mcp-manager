@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detailed Technical Design — MCP Manager v1.0</title>
+<meta name="description" content="Deep-dive technical design: 5-facet × 5-agent adversarial debate, per-facet synthesis, and master consolidated design with explicit diffs against the v1.0 spec.">
+<link rel="stylesheet" href="../assets/styles.css">
+<script type="module" src="../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">deep-dive technical design · v1.0</span></div>
+    <div class="crumbs"><a href="../index.html">← v1.0 overview</a> · <a href="../technical-design.html">v1.0 spec</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Detailed Technical Design</h1>
+
+  <p class="lede">
+    The <a href="../technical-design.html">v1.0 spec</a> is the <strong>breadth pass</strong>: every major architectural choice pinned in tables, schemas, and ASCII diagrams. <em>This</em> sub-wiki is the <strong>depth pass</strong>: each component picked apart from five incompatible expert angles per facet, then reconciled into a single implementation-ready design.
+  </p>
+
+  <p>
+    <span class="evidence-badge">5 facets</span>
+    <span class="evidence-badge">25 stance essays</span>
+    <span class="evidence-badge">5 facet syntheses</span>
+    <span class="evidence-badge">1 master synthesis</span>
+    <span class="evidence-badge">28 explicit diffs vs v1.0 spec</span>
+  </p>
+
+  <div class="recommendation-callout" style="margin-block:1.5rem;padding:1rem 1.25rem;border-left:4px solid var(--accent);background:var(--bg-soft);border-radius:6px">
+    <p style="margin:0 0 0.5rem 0"><strong>Start here →</strong> <a href="./synthesis.html"><strong>Master synthesis</strong></a></p>
+    <p style="margin:0;font-size:0.9rem;color:var(--fg-faint)">
+      Consolidated detailed design covering all 11 crates, all 5 end-to-end flows, every facet's open questions,
+      and the all-important <a href="./synthesis.html#diffs"><strong>Diffs against v1.0 spec</strong></a> table —
+      the 28-row implementation handoff. The facet overviews and 25 stance essays are reference material
+      behind every decision the synthesis records.
+    </p>
+  </div>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#how-to-read">How to read this sub-wiki</a></li>
+      <li><a href="#facets">The five facets</a></li>
+      <li><a href="#highlights">Highlights from each facet</a></li>
+      <li><a href="#stats">Inventory</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="how-to-read">
+    <h2>How to read this sub-wiki</h2>
+
+    <p>Three nested layers. Each layer compresses the one below it.</p>
+
+    <ol>
+      <li>
+        <strong>Master <a href="./synthesis.html">synthesis.html</a></strong> — the consolidated detailed design.
+        Per-crate deep dive (11 crates), per-flow deep dive (5 flows: install, exec, secret-set, crash-restart,
+        TUI startup), per-facet pull-ups, consolidated open questions (12), and the
+        <a href="./synthesis.html#diffs">Diffs against v1.0 spec</a> table.
+        Read this for the conclusions.
+      </li>
+      <li>
+        <strong>Per-facet <code>overview.html</code></strong> (5 total) — one synthesis pass per facet
+        (<a href="./backend/overview.html">backend</a> · <a href="./frontend/overview.html">frontend</a> ·
+        <a href="./devops/overview.html">devops</a> · <a href="./security/overview.html">security</a> ·
+        <a href="./ux/overview.html">ux</a>). Each lists points of agreement, points of disagreement,
+        per-component decisions with rationale, open questions, and a live tunable ranking matrix.
+        Read these for the <em>reasoning</em> behind each synthesis decision.
+      </li>
+      <li>
+        <strong>Per-agent essays</strong> (25 total — 5 stances × 5 facets). Each agent commits to a single
+        deliberately-incompatible angle (e.g. <em>tokio pragmatist</em>, <em>red team</em>,
+        <em>vim power user</em>) and writes a self-contained essay with three sections:
+        <code>#thoughts</code> (initial reaction), <code>#arguments</code> (debate points against the other
+        4 stances in the same facet), <code>#design</code> (concrete proposal with schemas + diagrams +
+        code snippets). Read these only when you want to hear a specific stance defended at length.
+      </li>
+    </ol>
+
+    <p>
+      The locked v1.0 decisions (drop Windows, no telemetry, curl+Nix distribution, 11-crate workspace, etc.)
+      were inputs for all 25 agents. Nothing in this subtree re-opens the lockdown.
+    </p>
+  </section>
+
+  <section class="section" id="facets">
+    <h2>The five facets</h2>
+
+    <div class="cards">
+      <article class="card">
+        <h3><a href="./backend/overview.html">Backend</a> <span class="evidence-badge">5 stances</span></h3>
+        <p>Daemon, supervisor, protocol crate, registry, secrets, projector, logs, trust. The most complex facet.</p>
+        <ul>
+          <li><a href="./backend/agent-tokio-pragmatist.html">tokio-pragmatist</a> — idiomatic async, tower layers</li>
+          <li><a href="./backend/agent-systems-veteran.html">systems-veteran</a> — sans-I/O cores, state machines</li>
+          <li><a href="./backend/agent-library-author.html">library-author</a> — tiny <code>mcpm-protocol</code>, semver</li>
+          <li><a href="./backend/agent-kernel-hacker.html">kernel-hacker</a> — cgroups, RLIMITs, jetsam</li>
+          <li><a href="./backend/agent-boring-tech-defender.html">boring-tech-defender</a> — line-delimited JSON, ship</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h3><a href="./frontend/overview.html">Frontend</a> <span class="evidence-badge">5 stances</span></h3>
+        <p>CLI (clap derive), TUI (ratatui+crossterm), 19 subcommands, help system, error UX, onboarding transcripts.</p>
+        <ul>
+          <li><a href="./frontend/agent-vim-power-user.html">vim-power-user</a> — modal, dense, keyboard-first</li>
+          <li><a href="./frontend/agent-accessibility-advocate.html">accessibility-advocate</a> — NO_COLOR, screen readers</li>
+          <li><a href="./frontend/agent-onboarding-novice.html">onboarding-novice</a> — discoverability, hand-holding</li>
+          <li><a href="./frontend/agent-cli-unix-purist.html">cli-unix-purist</a> — pipeable, sysexits, --json</li>
+          <li><a href="./frontend/agent-visual-designer.html">visual-designer</a> — layout, color theory, glyphs</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h3><a href="./devops/overview.html">DevOps</a> <span class="evidence-badge">5 stances</span></h3>
+        <p>Distribution (curl + Nix), service-manager, releases, code signing, SBOM, mdbook docs, uninstall.</p>
+        <ul>
+          <li><a href="./devops/agent-nix-purist.html">nix-purist</a> — flake-as-build, devenv, cachix</li>
+          <li><a href="./devops/agent-distro-packager.html">distro-packager</a> — FHS, XDG, deb/rpm/AUR</li>
+          <li><a href="./devops/agent-sre-hawk.html">sre-hawk</a> — structured logs, audit hash chain, runbook</li>
+          <li><a href="./devops/agent-supply-chain-sec.html">supply-chain-sec</a> — minisign, cosign, SLSA L3, SBOM</li>
+          <li><a href="./devops/agent-curl-installer-defender.html">curl-installer-defender</a> — one-line install</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h3><a href="./security/overview.html">Security</a> <span class="evidence-badge">5 stances</span></h3>
+        <p>TUF-lite trust, signatures, 5-mode sandbox gradient, secrets, audit log integrity, IPC auth, supply chain.</p>
+        <ul>
+          <li><a href="./security/agent-red-team.html">red-team</a> — default-deny, THREAT_MODEL.md</li>
+          <li><a href="./security/agent-crypto-pedant.html">crypto-pedant</a> — ed25519, algorithm-agility envelope</li>
+          <li><a href="./security/agent-sandboxing-veteran.html">sandboxing-veteran</a> — bubblewrap, sandbox-exec, Docker</li>
+          <li><a href="./security/agent-secrets-architect.html">secrets-architect</a> — layered keyring, per-server scope</li>
+          <li><a href="./security/agent-audit-compliance.html">audit-compliance</a> — hash-chained JSONL, SIEM export</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h3><a href="./ux/overview.html">UX</a> <span class="evidence-badge">5 stances</span></h3>
+        <p>Onboarding, TUI feel, CLI ergonomics, error envelope, mental model, accessibility, local measurement.</p>
+        <ul>
+          <li><a href="./ux/agent-empathy-led-designer.html">empathy-led-designer</a> — tone audit, kind defaults</li>
+          <li><a href="./ux/agent-data-driven-pm.html">data-driven-pm</a> — local NDJSON event log (no telemetry)</li>
+          <li><a href="./ux/agent-onboarding-specialist.html">onboarding-specialist</a> — 60-second AHA, demo MCP</li>
+          <li><a href="./ux/agent-error-recovery-advocate.html">error-recovery-advocate</a> — four-field envelope</li>
+          <li><a href="./ux/agent-mental-model-coach.html">mental-model-coach</a> — Server / Editor / Secret</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="highlights">
+    <h2>Highlights from each facet</h2>
+
+    <p>
+      The most consequential single decision per facet. Full reasoning lives in each facet's
+      <code>overview.html#decisions</code>; the full list of changes from the v1.0 spec lives in
+      <a href="./synthesis.html#diffs">synthesis.html#diffs</a>.
+    </p>
+
+    <table class="compare">
+      <thead>
+        <tr><th>Facet</th><th>Headline decision</th><th>Why it matters</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a href="./backend/overview.html">Backend</a></td>
+          <td>Sans-I/O state-machine core (in <code>mcpm-core</code>) + <code>JoinSet</code>/<code>CancellationToken</code> shell + a dedicated OS thread for cgroup-v2 OOM (<em>not</em> a tokio task).</td>
+          <td>The supervisor is the most complex crate. This split makes the pure parts proptest-friendly while keeping the I/O parts idiomatic tokio.</td>
+        </tr>
+        <tr>
+          <td><a href="./frontend/overview.html">Frontend</a></td>
+          <td>Three output modes (TTY default → visual; pipe-auto → TSV; <code>--plain</code> → screen-reader prose). Doctor flow folds into <code>mcpm test --diagnostic</code> to preserve the 19-subcommand contract.</td>
+          <td>Pipe-friendliness without sacrificing visual polish; preserved API surface.</td>
+        </tr>
+        <tr>
+          <td><a href="./devops/overview.html">DevOps</a></td>
+          <td>Curl + Nix as <em>dual-primary</em> from the same flake-built artifact, with byte-identical CI gate. Reverse-DNS <code>dev.mcp-manager.mcpmanagerd</code> for macOS launchd / Keychain / libsecret namespaces.</td>
+          <td>Resolves the curl-vs-Nix tension; gives Nix users reproducibility without making curl users second-class.</td>
+        </tr>
+        <tr>
+          <td><a href="./security/overview.html">Security</a></td>
+          <td>Per-spawn <code>MCPM_INSTANCE_TOKEN</code> nonce on top of SO_PEERCRED, mandatory per-server keychain namespacing, and a SHA-256 hash-chained audit JSONL.</td>
+          <td>Closes the cross-server-as-same-UID secret-read class SO_PEERCRED alone cannot. Audit becomes tamper-evident.</td>
+        </tr>
+        <tr>
+          <td><a href="./ux/overview.html">UX</a></td>
+          <td>Bundle a zero-secret zero-network "time" MCP and install it by default during <code>mcpm init</code>. Four-field error envelope (code/what/why/remedy-as-literal-command). "Toolchains" pane renamed to "Editors".</td>
+          <td>First AHA-moment in &lt;60s without secrets or network; recovery becomes a feature, not an afterthought; the three-noun mental model (Servers/Editors/Secrets) becomes visible.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section" id="stats">
+    <h2>Inventory</h2>
+
+    <p>The deep-dive subtree as it sits on disk:</p>
+
+    <table class="compare">
+      <thead><tr><th>Artifact</th><th>Count</th><th>Location</th></tr></thead>
+      <tbody>
+        <tr><td>Master synthesis</td><td>1</td><td><a href="./synthesis.html">synthesis.html</a></td></tr>
+        <tr><td>Per-facet overviews</td><td>5</td><td>{backend,frontend,devops,security,ux}/overview.html</td></tr>
+        <tr><td>Per-agent stance essays</td><td>25</td><td>{facet}/agent-{stance}.html</td></tr>
+        <tr><td>Tunable ranking matrices</td><td>5</td><td>{facet}/data/ranking.json (rendered into each overview)</td></tr>
+        <tr><td>Sub-decisions with cited rationale</td><td>50+</td><td>across the 5 overviews</td></tr>
+        <tr><td>Live "Diffs vs v1.0 spec" rows</td><td>28</td><td><a href="./synthesis.html#diffs">synthesis.html#diffs</a></td></tr>
+        <tr><td>Consolidated open questions for v1.1</td><td>12</td><td><a href="./synthesis.html#open">synthesis.html#open</a></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Reads upward to the <a href="../index.html">v1.0 hub</a> and the
+    <a href="../technical-design.html">v1.0 breadth spec</a>. Reads sideways to the
+    <a href="../research/">research subtree</a>, the
+    <a href="../ux-design.html">UX design</a>, and the
+    <a href="../future-features-v1.1.html">v1.1+ deferred features</a>.
+  </p>
+</main>
+</body>
+</html>

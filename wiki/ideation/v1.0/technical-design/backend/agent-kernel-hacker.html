@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kernel Hacker — Backend deep dive — MCP Manager v1.0</title>
+<meta name="description" content="cgroup v2 OOM notification via memory.events, RLIMIT_AS fallback, macOS jetsam inference, signal handling, PR_SET_PDEATHSIG, and per-server supervisor design.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">backend · kernel-hacker</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">backend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Kernel Hacker's Backend</h1>
+  <p class="lede">cgroups, RLIMITs, jetsam, signals. Performance under load is a moral question; OOM detection is not a polling problem; orphaned descendants are unforgivable. The supervisor is where the kernel meets the daemon &mdash; and it has to be right.</p>
+
+  <p>
+    <span class="evidence-badge">stance: kernel-hacker</span>
+    <span class="evidence-badge">facet: backend</span>
+    <span class="evidence-badge">home: mcpm-supervisor</span>
+    <span class="evidence-badge">argues HOW, never IF</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments against my four peers</a>
+        <ul>
+          <li><a href="#vs-tokio">vs tokio-pragmatist</a></li>
+          <li><a href="#vs-systems">vs systems-veteran</a></li>
+          <li><a href="#vs-library">vs library-author</a></li>
+          <li><a href="#vs-boring">vs boring-tech-defender</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Concrete design (sequence diagrams + OS primitives)</a>
+        <ul>
+          <li><a href="#design-spawn">Spawn sequence</a></li>
+          <li><a href="#design-oom-v2">cgroup v2 OOM detection</a></li>
+          <li><a href="#design-oom-v1">cgroup v1 / RLIMIT_AS fallback</a></li>
+          <li><a href="#design-oom-mac">macOS jetsam inference</a></li>
+          <li><a href="#design-signals">Signals + reaper</a></li>
+          <li><a href="#design-idle">Idle TTL + singleton refcount</a></li>
+          <li><a href="#design-logs">Log rotation atomicity</a></li>
+          <li><a href="#design-table">Cross-component decision table</a></li>
+        </ul>
+      </li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      The spec hand-waves the part of the system that decides whether your laptop melts. <code>OOM detect</code> appears in a box in the architecture diagram and the implementation-level decisions accordion claims it is "resolved." It is not resolved. "Watch <code>memory.events.oom_kill</code> increment" is a sentence, not a design. There is a kernel-side dance &mdash; <code>fanotify</code> vs <code>inotify</code> vs <code>epoll</code> on the pseudo-file, the <code>POLLPRI</code> wake on <code>cgroup.events</code>, the <code>fsnotify</code> path through <code>kernfs</code> &mdash; and we have to pick exactly one. I will pick.
+    </p>
+
+    <p>
+      The product asks for "10s of MCPs" supervised by a single daemon, restart-on-crash with jittered backoff, per-process memory caps, OS-correct OOM attribution, and graceful idle-TTL teardown. That is an industrial-strength supervisor. It is also a supervisor we cannot crib from systemd because <em>we are running in <code>--user</code> mode</em>; on macOS we have neither systemd nor cgroups at all. The supervisor must be portable but not the lowest-common-denominator portable. We commit to per-OS specialisation.
+    </p>
+
+    <p>
+      My commitments before I argue with my peers:
+    </p>
+    <ul>
+      <li><strong>cgroup v2 first.</strong> Linux 4.5+ has had it; 5.8+ has all the controllers we need at the unprivileged delegated level. We <em>open</em> <code>memory.events</code> with <code>O_RDONLY|O_NONBLOCK</code>, register it with <code>epoll_ctl</code> for <code>EPOLLPRI</code>, and read on wakeup. That is the deterministic OOM signal. No polling, no <code>memory.peak</code> guesswork.</li>
+      <li><strong>cgroup v1 is dead, but we degrade.</strong> CentOS 7 reaches EOL in 2024-06; RHEL 7 in 2024-06. Anyone still on it gets <code>RLIMIT_AS</code> + SIGKILL inference. The "may have been OOM" warning is a feature, not a bug.</li>
+      <li><strong>macOS jetsam is best-effort.</strong> Apple is hostile to processes asking "did I just get killed for memory pressure?" The three-condition heuristic in the spec (SIGKILL + memory-pressure signal + RSS &gt; 80%) is the right shape; I'll tighten it with <code>proc_pid_rusage(RUSAGE_INFO_V4)</code> instead of last-known-RSS.</li>
+      <li><strong>Descendants must die with the daemon.</strong> <code>PR_SET_PDEATHSIG</code> on Linux; an explicit sentinel-pipe watchdog in the spawned wrapper on macOS (no PDEATHSIG equivalent there). Without this, we will leak processes on daemon crash, and the user will hate us.</li>
+      <li><strong>Wakeup discipline.</strong> One tokio task per managed process is a fine abstraction for the application layer, but at the kernel-boundary we coalesce: one <code>epoll</code> fd shared across all <code>memory.events</code> watchers, one signal-coalescing reaper, one <code>signalfd</code> (or, on macOS, one <code>kqueue</code>).</li>
+    </ul>
+
+    <p>
+      The four people who will disagree with this essay are: an idiomatic-async-Rust person who wants me to "just spawn a task per process and await on it"; a sans-I/O purist who wants the cgroup logic in a pure state machine away from the syscall; a library author who wants this stuff hidden behind a trait; and a boring-tech defender who will try to convince me that <code>RLIMIT_AS</code> is enough on Linux too. They are all wrong in different ways. Let me show them.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments against my four peers</h2>
+
+    <h3 id="vs-tokio">vs tokio-pragmatist</h3>
+
+    <p>
+      The pragmatist says: <em>one <code>tokio::process::Command</code> per server, await on the spawned handle, react to exit, profit.</em> This is fine for the happy path. It is wrong for OOM, and it is wrong for orphan reaping.
+    </p>
+
+    <p>
+      <strong>OOM-vs-crash is not visible from the await.</strong> On Linux you can read <code>WIFSIGNALED</code> and <code>WTERMSIG</code> and see <code>SIGKILL</code>, but <em>so does a manual <code>kill -KILL</code> from a user</em>. The kernel never tells you "this was the OOM killer" through <code>wait4</code> &mdash; it tells you that through <code>cgroup.events</code>'s <code>oom_kill</code> counter, or through <code>memory.events.oom</code>. You have to read the file, and you have to read it at the moment the kernel sets <code>POLLPRI</code> on the corresponding inode, because the file is rewritten not appended. Miss the wake-up &mdash; e.g., because your tokio executor was busy &mdash; and a subsequent crash will read a stale value and misattribute.
+    </p>
+
+    <p>
+      Therefore: the OOM detector is its <em>own</em> task, owned by <code>mcpm-supervisor</code>, that drives a single <code>epoll</code> file descriptor through a dedicated tokio task running on a tokio "blocking" slot. It cross-references against the descendant-watcher: when the spawned handle's await resolves, it does not immediately classify the exit &mdash; it sends a "descendant X exited with signal Y at instant T" event through a small mpsc channel to the classifier, which reads the cgroup file, joins on instant, and decides <code>server.crash</code> vs <code>server.oom</code>.
+    </p>
+
+    <p>
+      <strong>Orphan reaping.</strong> Tokio's spawned handle internally does the <code>waitpid</code>, but only if the daemon is alive to call it. The pragmatist hand-waves the daemon-crash case: <em>"the OS will reap them when the daemon dies."</em> No. On Linux, if our daemon dies and the descendant is in <code>--user</code> systemd's reaping scope, fine; if we are not under systemd-user (e.g., the user ran <code>mcpmanagerd &</code> manually from a shell) the descendant is reparented to PID 1 (or in some configurations to the user's session leader) and continues to run, holding ports, holding API keys, holding RAM. The fix is <code>prctl(PR_SET_PDEATHSIG, SIGKILL)</code> on Linux in the descendant, done <em>inside</em> the <code>posix_spawn</code> file_actions / <code>fork()+exec()</code> window before <code>execve</code>. <code>tokio::process::Command</code> does not let you do this directly. We use <code>std::os::unix::process::CommandExt::pre_exec</code> on the underlying <code>std::process::Command</code> before wrapping it as a tokio <code>Command</code>, or we drop to <code>nix::unistd::fork</code> + <code>nix::sys::prctl::set_pdeathsig</code>. I prefer the <code>pre_exec</code> approach &mdash; it stays inside the tokio <code>Command</code> idiom but lets us call <code>prctl</code> in the descendant after fork but before exec.
+    </p>
+
+    <p>
+      <strong>Wakeup amplification.</strong> Idiomatic tokio is <em>one task per concern</em>. With 30 MCPs, the pragmatist's design has 30 descendant-watchers, 30 stdout pumps, 30 stderr pumps, 30 cgroup-events watchers, 30 idle timers. 150 tasks. Each write to stdout from a managed process potentially wakes the executor, walks the task into a ready-queue, runs it, and goes back to sleep. The cost is spurious wakeups when there is no <em>downstream</em> consumer (e.g., no <code>logs.tail</code> subscriber). I want a single per-server "stdio aggregator" task with internal channels, and a daemon-wide signal/cgroup-events reactor task with a small dispatch table. Fewer tasks; bounded wakeup count per second; better cache locality.
+    </p>
+
+    <h3 id="vs-systems">vs systems-veteran</h3>
+
+    <p>
+      The veteran says: <em>"sans-I/O cores; event journal; explicit state machines."</em> Yes, mostly. The supervisor's per-server lifecycle (<code>Spawning → Running → Draining → IdleTimer → Stopped</code>, with <code>BackoffWait</code> and <code>Failed</code>) is exactly the kind of thing that should be a state machine &mdash; pure, exhaustively-matched, journaled, and unit-testable without spawning processes.
+    </p>
+
+    <p>
+      Where we disagree is the <em>boundary</em>. The veteran will push the cgroup-events parser into the pure core: "parse a string, emit an event." That is right. But the <em>watch</em> &mdash; the <code>epoll_ctl(ADD, fd, EPOLLPRI)</code>, the <code>read()</code> after wakeup, the inode-revoked recovery when the cgroup is destroyed and recreated &mdash; that is irreducibly I/O. The boundary is:
+    </p>
+
+    <pre><code class="lang-rust">// Pure (lives in mcpm-supervisor/src/state.rs)
+enum SupervisorEvent {
+    DescendantExited { pid: Pid, status: ExitStatus, instant: Instant },
+    CgroupOomKill { server: ServerName, count: u64, instant: Instant },
+    MacosMemoryPressure { level: PressureLevel, instant: Instant },
+    IdleTimerFired { server: ServerName },
+    StartRequest { server: ServerName, client: ClientId },
+    StopRequest { server: ServerName, graceful: bool },
+}
+
+impl SupervisorCore {
+    // pure: (state, event) -> (new state, Vec&lt;Action&gt;)
+    pub fn step(&amp;mut self, ev: SupervisorEvent) -&gt; Vec&lt;Action&gt; { /* ... */ }
+}
+</code></pre>
+
+    <p>
+      Everything in <code>SupervisorEvent</code> is pre-digested by the I/O shell. The shell owns the <code>epoll</code> fd, the <code>signalfd</code> on Linux, the <code>kqueue</code> on macOS, and the spawned tokio process handles. It emits events; it does not branch on state. That keeps the veteran happy and keeps the kernel-shaped code where it has to be.
+    </p>
+
+    <p>
+      Where the veteran is <em>wrong</em>: he will want to journal every wakeup. We must not. The cgroup-events file gets rewritten in-place by the kernel; if we journal the full read on every <code>POLLPRI</code> wake, we are journalling kernel implementation detail. We journal <em>only deltas</em>: "<code>oom_kill</code> went from 0 to 1 for server X." That's a sans-I/O concern (delta computation) but it lives <em>just above</em> the read, in the shell, because we need the previous value to compute the delta and that previous value is part of the supervisor's working state, not part of its journal.
+    </p>
+
+    <h3 id="vs-library">vs library-author</h3>
+
+    <p>
+      The library author wants the supervisor wrapped in a trait so other people could implement it. They will write something like:
+    </p>
+
+    <pre><code class="lang-rust">pub trait ProcessSupervisor: Send + Sync {
+    fn spawn(&amp;self, spec: ServerSpec) -&gt; Result&lt;ManagedHandle&gt;;
+    fn observe_oom(&amp;self) -&gt; impl Stream&lt;Item = OomEvent&gt;;
+    // ...
+}
+</code></pre>
+
+    <p>
+      This is the wrong abstraction. There is one supervisor implementation per OS, and the differences between Linux-with-cgroupv2, Linux-with-cgroupv1, and macOS are not "swap a trait implementation" &mdash; they are <em>different control planes</em>. cgroup v2 has hierarchical delegation and unified memory/cpu/io controllers; cgroup v1 has independent hierarchies per controller and a different file layout (<code>memory.limit_in_bytes</code> vs <code>memory.max</code>); macOS has none of this. Hiding that behind a trait pretends the supervisor is portable code with platform-specific impls. It isn't. It is platform-specific code with a common configuration surface.
+    </p>
+
+    <p>
+      The right abstraction is:
+    </p>
+
+    <ul>
+      <li><code>mcpm-protocol</code> exposes <em>configuration</em>: <code>memory_max_mb</code>, <code>restart.attempts_max</code>, <code>idle_ttl_secs</code>, <code>singleton</code>. These are wire-stable.</li>
+      <li><code>mcpm-supervisor</code> internally has <code>#[cfg(target_os = "linux")]</code> and <code>#[cfg(target_os = "macos")]</code> modules. The <code>SupervisorCore</code> state machine is shared; the I/O shell is per-OS, compile-time selected.</li>
+      <li>On Linux there is one more runtime branch: cgroup v2 (preferred) vs cgroup v1 (fallback). That branch happens once at daemon startup &mdash; we probe <code>/sys/fs/cgroup/cgroup.controllers</code> (v2 marker) and switch the shell's backing impl.</li>
+    </ul>
+
+    <p>
+      Where the library author is <em>right</em>: <code>mcpm-protocol</code> needs to carry enough information that a third-party client can render OOM events meaningfully. So the wire payload for <code>server.oom</code> needs <code>oom_kill_count</code>, <code>memory_high_breaches</code>, and a platform tag (<code>"cgroup-v2" | "cgroup-v1" | "macos-jetsam"</code>) so the UI can disclaim accordingly. That belongs in <code>mcpm-protocol</code>, semver-stable.
+    </p>
+
+    <h3 id="vs-boring">vs boring-tech-defender</h3>
+
+    <p>
+      The boring-tech defender will say: <em>"<code>setrlimit(RLIMIT_AS)</code> works on every Unix since 1990. Use it everywhere. cgroups is fashion."</em> This is wrong in three measurable ways.
+    </p>
+
+    <p>
+      First, <code>RLIMIT_AS</code> limits address space, not RSS. A process that <code>mmap</code>s a 4&nbsp;GiB file but only faults 50&nbsp;MiB worth of pages does not consume 4&nbsp;GiB of memory &mdash; but it trips <code>RLIMIT_AS</code> at mmap time. Many Python MCPs do exactly this (numpy memmaps, large tokenizer files). With <code>RLIMIT_AS = 512&nbsp;MB</code>, perfectly innocent servers will fail to start.
+    </p>
+
+    <p>
+      Second, <code>RLIMIT_AS</code> kills the process with no warning. cgroup v2's <code>memory.high</code> is a soft limit: when the cgroup crosses it, the kernel throttles the process by stalling allocations (memory reclaim is forced into the allocation path). The process slows down but does not die. We can <em>observe</em> <code>memory.events.high</code> and emit a warning to the user: "<code>github-mcp</code> is approaching its memory limit." That is a vastly better UX than "your server vanished."
+    </p>
+
+    <p>
+      Third, <code>RLIMIT_AS</code> gives us no way to attribute the kill. As above: SIGKILL exit from RLIMIT looks identical to SIGKILL from user, from OOM, from the OOM killer, from <code>systemd-oomd</code>. cgroup v2 distinguishes them perfectly.
+    </p>
+
+    <p>
+      So: on Linux with cgroup v2 (the overwhelming majority of users in 2026), we use <code>memory.max</code> for the hard limit, <code>memory.high</code> for the soft warning, and <code>memory.events</code> for attribution. We use <code>RLIMIT_AS</code> only as the fallback on cgroup v1.
+    </p>
+
+    <p>
+      Where the boring defender is <em>right</em>: we should not depend on a fashion-of-the-month cgroups library. The <code>cgroups-rs</code> crate in the v1.0 deps table is a thin wrapper that has had API churn. I would rather we do raw filesystem operations &mdash; <code>std::fs::write("/sys/fs/cgroup/.../memory.max", "536870912")</code> &mdash; than carry a transitive dep that breaks. The cgroup v2 ABI is stable; the pseudo-filesystem is the API. Code directly to it.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Concrete design</h2>
+
+    <h3 id="design-spawn">Spawn sequence</h3>
+
+    <p>
+      Every spawn goes through the same path regardless of singleton mode. The supervisor's <code>spawn()</code> shell function is:
+    </p>
+
+    <pre><code>┌──────────────┐                ┌──────────────┐               ┌──────────────┐
+│ Supervisor   │                │ Linux kernel │               │ spawned proc │
+│ (I/O shell)  │                │ (cgroup v2)  │               │ (MCP server) │
+└──────┬───────┘                └──────┬───────┘               └──────┬───────┘
+       │  mkdir(/sys/fs/cgroup/mcpmanagerd.slice/  │                        │
+       │        server-&lt;name&gt;.scope)               │                        │
+       ├──────────────────────────────────────────►│                        │
+       │  write memory.max = N                     │                        │
+       ├──────────────────────────────────────────►│                        │
+       │  write memory.high = N * 0.9              │                        │
+       ├──────────────────────────────────────────►│                        │
+       │  open memory.events O_NONBLOCK            │                        │
+       ├──────────────────────────────────────────►│                        │
+       │  epoll_ctl(ADD, fd, EPOLLPRI)             │                        │
+       │                                                                    │
+       │  clone3(CLONE_INTO_CGROUP, …) (Linux 5.7+)                         │
+       │     pre_exec: prctl(PR_SET_PDEATHSIG, SIGKILL);                    │
+       │               prctl(PR_SET_NAME, "mcp-srv:&lt;name&gt;");                │
+       │               sched_setaffinity(...) if pinned                     │
+       ├──────────────────────────────────────────────────────────────────►│
+       │                                                                    │
+       │  (fallback path: write cgroup.procs = &lt;pid&gt; after spawn)           │
+       ├──────────────────────────────────────────►│                        │
+       │                                           │                        │
+       │  ◄────── ready, on epoll ──────────────  │                        │
+       │                                                                    │
+</code></pre>
+
+    <p>
+      Two ordering points matter:
+    </p>
+
+    <ol>
+      <li>
+        <strong>cgroup must be created and configured <em>before</em> the spawn.</strong> If we spawn first and migrate the descendant into the cgroup after, there is a window where it can allocate beyond <code>memory.max</code> and crash before the limit takes effect. The window is small but not zero. Pre-create.
+      </li>
+      <li>
+        <strong>The descendant must be in the cgroup <em>before</em> any meaningful work.</strong> The clean way to do this is with <code>clone3(CLONE_INTO_CGROUP, …)</code> on Linux 5.7+. That gives us atomic "fork into this cgroup", no race. <code>cgroups-rs</code> doesn't expose it; we use the <code>nix</code> crate's binding (or raw <code>syscall(SYS_clone3, …)</code>) and treat the older-kernel path as the post-spawn-write-cgroup.procs fallback.
+      </li>
+    </ol>
+
+    <pre><code class="lang-rust">use std::os::fd::AsRawFd;
+use nix::sys::epoll::{Epoll, EpollEvent, EpollFlags, EpollCreateFlags};
+
+pub struct SupervisorShell {
+    epoll: Epoll,
+    // Map epoll user-data → which server's memory.events fired
+    cgroup_watchers: HashMap&lt;u64, ServerName&gt;,
+    // Last observed counter values; the kernel rewrites the file in place,
+    // so we compute deltas at every wake.
+    last_oom_kill: HashMap&lt;ServerName, u64&gt;,
+    last_high_breach: HashMap&lt;ServerName, u64&gt;,
+}
+
+impl SupervisorShell {
+    pub fn watch_cgroup(&amp;mut self, server: ServerName) -&gt; nix::Result&lt;()&gt; {
+        let path = format!(
+            "/sys/fs/cgroup/mcpmanagerd.slice/server-{}.scope/memory.events",
+            server.as_str()
+        );
+        let fd = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(&amp;path)?;
+        let token = self.next_token();
+        let ev = EpollEvent::new(EpollFlags::EPOLLPRI, token);
+        self.epoll.add(&amp;fd, ev)?;
+        self.cgroup_watchers.insert(token, server);
+        Ok(())
+    }
+}
+</code></pre>
+
+    <h3 id="design-oom-v2">cgroup v2 OOM detection</h3>
+
+    <p>
+      The kernel signals changes to <code>memory.events</code> via <code>POLLPRI</code> on the file descriptor &mdash; <em>not</em> <code>POLLIN</code>. This is the same mechanism used for sysfs attribute changes. The standard idiom is:
+    </p>
+
+    <pre><code class="lang-c">/* From kernel Documentation/admin-guide/cgroup-v2.rst:
+ *
+ *   The notifications generated on cgroup v2 interface files (memory.events,
+ *   cgroup.events) follow the POLLPRI/EPOLLPRI semantics for "out-of-band"
+ *   data: poll() returns POLLPRI when the file's contents have changed
+ *   since last read. The reader must read() and seek back to 0 (or re-open).
+ */
+
+int memory_events_fd = open(
+    "/sys/fs/cgroup/mcpmanagerd.slice/server-foo.scope/memory.events",
+    O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+
+struct pollfd pfd = { .fd = memory_events_fd, .events = POLLPRI };
+
+while (poll(&amp;pfd, 1, /* timeout = */ -1) &gt; 0) {
+    if (pfd.revents &amp; POLLPRI) {
+        char buf[512];
+        lseek(memory_events_fd, 0, SEEK_SET);
+        ssize_t n = read(memory_events_fd, buf, sizeof(buf));
+        /* parse: lines of "key value\n", e.g.:
+         *   low 0
+         *   high 0
+         *   max 0
+         *   oom 0
+         *   oom_kill 1
+         */
+        parse_and_dispatch(buf, n);
+    }
+}
+</code></pre>
+
+    <p>
+      In Rust, we drive this through tokio's <code>AsyncFd</code>, which wraps any file descriptor and lets us await <code>readable()</code> / <code>writable()</code> readiness. <code>EPOLLPRI</code> is not directly exposed by tokio's <code>AsyncFd</code> (which is hard-coded to <code>EPOLLIN/OUT</code>), so we use a dedicated OS thread that owns the <code>epoll</code> fd and forwards events through a tokio <code>mpsc</code> channel. That is simpler than wrestling with tokio internals, has predictable wakeup behaviour, and isolates the kernel-shaped code to one thread:
+    </p>
+
+    <pre><code class="lang-rust">// Dedicated OS thread, not a tokio task.
+// One per daemon; handles all cgroup memory.events fds and signalfd.
+fn run_supervisor_reactor(
+    epoll: Epoll,
+    state: Arc&lt;Mutex&lt;SupervisorShell&gt;&gt;,
+    tx: tokio::sync::mpsc::Sender&lt;SupervisorEvent&gt;,
+) {
+    let mut events = [EpollEvent::empty(); 64];
+    loop {
+        let n = match epoll.wait(&amp;mut events, EpollTimeout::None) {
+            Ok(n) =&gt; n,
+            Err(nix::Error::EINTR) =&gt; continue,
+            Err(e) =&gt; { error!(?e, "epoll_wait failed"); break; }
+        };
+        for ev in &amp;events[..n] {
+            // POLLPRI bit on a cgroup memory.events fd?
+            if ev.events().contains(EpollFlags::EPOLLPRI) {
+                let token = ev.data();
+                let mut sh = state.lock().unwrap();
+                if let Some(server) = sh.cgroup_watchers.get(&amp;token).cloned() {
+                    if let Ok(delta) = sh.read_memory_events_delta(&amp;server) {
+                        if delta.oom_kill_delta &gt; 0 {
+                            let _ = tx.blocking_send(SupervisorEvent::CgroupOomKill {
+                                server,
+                                count: delta.new_oom_kill,
+                                instant: Instant::now(),
+                            });
+                        } else if delta.high_breach_delta &gt; 0 {
+                            // soft-limit warning, not a kill
+                            let _ = tx.blocking_send(SupervisorEvent::CgroupMemoryHigh {
+                                server, instant: Instant::now(),
+                            });
+                        }
+                    }
+                }
+            }
+            // signalfd events — SIGCHLD path:
+            if ev.data() == SIGNALFD_TOKEN {
+                drain_signalfd(&amp;tx);
+            }
+        }
+    }
+}
+</code></pre>
+
+    <p>
+      <strong>Why a dedicated thread, not a tokio task?</strong> Because <code>epoll_wait</code> with a <code>None</code> timeout blocks the calling kernel thread. On a multi-threaded tokio runtime that blocks one of the worker threads and degrades the rest. Tokio's <code>spawn_blocking</code> is meant for this, but we want a long-lived dedicated thread with a stable identity for the OS, not a thread from a pool. One thread, lifetime of the daemon, sole owner of the <code>epoll</code> fd.
+    </p>
+
+    <p>
+      <strong>What about <code>cgroup.events</code>?</strong> Same mechanism but a different file: <code>populated</code> and <code>frozen</code> keys, useful for the "is this cgroup empty?" check we need when implementing graceful drain. We watch both: <code>memory.events</code> for OOM, <code>cgroup.events</code> for population.
+    </p>
+
+    <h3 id="design-oom-v1">cgroup v1 / RLIMIT_AS fallback</h3>
+
+    <p>
+      Probe at daemon startup:
+    </p>
+
+    <pre><code class="lang-rust">pub enum LinuxCgroupMode {
+    V2 { root: PathBuf },     // unified hierarchy at /sys/fs/cgroup
+    V1 { memory: PathBuf },    // legacy split hierarchies
+    None,                      // no cgroups available (containerized in a way
+                               // that hides them, etc.)
+}
+
+pub fn detect_cgroup_mode() -&gt; LinuxCgroupMode {
+    // v2 marker: /sys/fs/cgroup/cgroup.controllers exists
+    if std::fs::metadata("/sys/fs/cgroup/cgroup.controllers").is_ok() {
+        return LinuxCgroupMode::V2 { root: PathBuf::from("/sys/fs/cgroup") };
+    }
+    // v1 marker: /sys/fs/cgroup/memory/memory.limit_in_bytes
+    if std::fs::metadata("/sys/fs/cgroup/memory/memory.limit_in_bytes").is_ok() {
+        return LinuxCgroupMode::V1 {
+            memory: PathBuf::from("/sys/fs/cgroup/memory")
+        };
+    }
+    LinuxCgroupMode::None
+}
+</code></pre>
+
+    <p>
+      On the <code>V1</code> and <code>None</code> branches we fall back to <code>RLIMIT_AS</code> in the spawn pre-exec:
+    </p>
+
+    <pre><code class="lang-rust">unsafe fn preexec_set_rlimit(memory_max_bytes: u64) -&gt; std::io::Result&lt;()&gt; {
+    use libc::{setrlimit, rlimit, RLIMIT_AS};
+    // We use RLIMIT_AS rather than RLIMIT_DATA: address-space includes mmap
+    // regions, which matters more for Node/Python servers than data segment.
+    // Trade-off acknowledged: mmap-heavy servers may fail to start. Document
+    // this in the per-server "isolation limit" warning surfaced by the CLI.
+    let rl = rlimit {
+        rlim_cur: memory_max_bytes,
+        rlim_max: memory_max_bytes,
+    };
+    let rc = setrlimit(RLIMIT_AS, &amp;rl as *const _);
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+</code></pre>
+
+    <p>
+      On crash classification under the RLIMIT_AS path: we observe <code>WIFSIGNALED &amp;&amp; WTERMSIG == SIGKILL</code>. We cannot distinguish OOM-from-RLIMIT vs OOM-killer vs user-SIGKILL. We emit <code>server.crash</code> with a sub-field <code>oom_likely: "yes-no-perfect-signal"</code> when the last RSS sample (taken by us, polled from <code>/proc/[pid]/status</code> at 1&nbsp;Hz during the process's lifetime) was above 80% of the configured limit within the last 30 seconds &mdash; same heuristic we use on macOS, applied here because we have no better signal. The audit detail carries <code>"may have been OOM, no perfect signal on this kernel"</code>.
+    </p>
+
+    <h3 id="design-oom-mac">macOS jetsam inference</h3>
+
+    <p>
+      macOS jetsam is the kernel's memory pressure killer; it lives in <code>xnu</code>'s <code>kern_memorystatus.c</code>. It is not user-controllable in any documented way for non-Apple processes. We cannot subscribe to "your descendant was jetsamed." What we <em>can</em> observe:
+    </p>
+
+    <ul>
+      <li>System memory pressure level via the <code>DISPATCH_SOURCE_TYPE_MEMORYPRESSURE</code> dispatch source. This gives us <code>DISPATCH_MEMORYPRESSURE_NORMAL | WARN | CRITICAL</code> as a delta-fired signal. We hold one source for the lifetime of the daemon and stamp a "last critical-pressure timestamp" continuously.</li>
+      <li>Per-descendant resource usage via <code>proc_pid_rusage(pid, RUSAGE_INFO_V4, ...)</code>, which returns a <code>rusage_info_v4</code> struct including <code>ri_resident_size</code> (current RSS), <code>ri_lifetime_max_phys_footprint</code> (peak), and <code>ri_pageins</code>. We sample this at 1&nbsp;Hz per managed process during its life.</li>
+      <li>Exit signal via <code>waitpid</code>: <code>WIFSIGNALED &amp;&amp; WTERMSIG == SIGKILL</code> with no <code>WCOREDUMP</code>. jetsam delivers SIGKILL; an unrelated SEGV would set <code>WCOREDUMP</code> (subject to <code>ulimit -c</code>).</li>
+    </ul>
+
+    <p>
+      The classifier:
+    </p>
+
+    <pre><code class="lang-rust">fn classify_macos_exit(
+    exit: ExitStatus,
+    last_rss_bytes: u64,
+    memory_limit_bytes: Option&lt;u64&gt;,
+    last_critical_pressure_at: Option&lt;Instant&gt;,
+    exit_instant: Instant,
+) -&gt; CrashOrOom {
+    // Condition (a): SIGKILL without core dump
+    let sigkill = matches!(exit.signal(), Some(libc::SIGKILL))
+                  &amp;&amp; !exit.core_dumped();
+    // Condition (b): system memory pressure CRITICAL within the last 30s
+    let pressure_recent = last_critical_pressure_at
+        .map(|t| exit_instant.duration_since(t) &lt;= Duration::from_secs(30))
+        .unwrap_or(false);
+    // Condition (c): last-known RSS exceeded 80% of the configured limit
+    let rss_high = match memory_limit_bytes {
+        Some(limit) =&gt; last_rss_bytes &gt; (limit * 8 / 10),
+        // No limit configured: fall back to "process was using &gt; 1 GiB"
+        None =&gt; last_rss_bytes &gt; 1_073_741_824,
+    };
+
+    if sigkill &amp;&amp; pressure_recent &amp;&amp; rss_high {
+        CrashOrOom::Oom { reason: "jetsam-inferred" }
+    } else if sigkill {
+        CrashOrOom::Crash { hint: "sigkill, but inferred-not-oom" }
+    } else {
+        CrashOrOom::Crash { hint: exit_string(&amp;exit) }
+    }
+}
+</code></pre>
+
+    <p>
+      <strong>Why all three?</strong> Because each individually has false positives. SIGKILL alone is delivered by the user, by <code>activity monitor</code>'s force-quit, by an editor crashing and tearing down its descendant group. Memory pressure alone says nothing about <em>our</em> process &mdash; some other process could be the cause. High RSS alone is normal for many MCPs (codebase-indexers, code-graphs). The conjunction is strong evidence; nothing in user-space gives us certainty.
+    </p>
+
+    <p>
+      We also expose <code>proc_pid_taskinfo</code> for richer diagnostics in the audit log &mdash; thread counts, virtual size, dirty page count. Apple's <code>libproc</code> headers document these. We don't classify on them, but they help the user understand "what was this process doing right before it died?"
+    </p>
+
+    <h3 id="design-signals">Signals + reaper</h3>
+
+    <p>
+      The daemon's signal-handling discipline:
+    </p>
+
+    <ul>
+      <li><strong><code>SIGCHLD</code></strong>: drain via <code>waitpid(-1, &amp;status, WNOHANG)</code> in a loop until <code>0</code>. We do this from the supervisor reactor thread, woken via <code>signalfd</code> (Linux) or <code>kevent</code> on <code>EVFILT_PROC</code> + <code>NOTE_EXIT</code> (macOS). Coalescing is mandatory: a burst of 10 exits delivers as few as one SIGCHLD.</li>
+      <li><strong><code>SIGTERM</code></strong>: initiate graceful shutdown. Send <code>SIGTERM</code> to every managed process, wait up to <code>graceful_timeout</code> (default 10s), then <code>SIGKILL</code> survivors. Then exit.</li>
+      <li><strong><code>SIGINT</code></strong>: same as SIGTERM. For users hitting Ctrl-C on a foreground daemon.</li>
+      <li><strong><code>SIGHUP</code></strong>: re-read canonical config. Used by <code>daemon.reload</code>. Reuses the config-change code path.</li>
+      <li><strong><code>SIGPIPE</code></strong>: ignore. We get this on broken UDS connections; we want <code>EPIPE</code> from <code>write</code>, not a death.</li>
+      <li><strong><code>SIGUSR1</code></strong>: dump supervisor state to stderr for debugging (off by default; doc-as-undocumented). Useful when someone hits "the daemon is weird" and we say "<code>kill -USR1 $(pgrep mcpmanagerd)</code> and send us the log."</li>
+    </ul>
+
+    <pre><code class="lang-rust">use nix::sys::signal::{SigSet, Signal};
+use nix::sys::signalfd::{SignalFd, SfdFlags};
+
+fn install_signal_handling() -&gt; nix::Result&lt;SignalFd&gt; {
+    // Block these signals on the main thread; signalfd is the only path.
+    let mut mask = SigSet::empty();
+    mask.add(Signal::SIGCHLD);
+    mask.add(Signal::SIGTERM);
+    mask.add(Signal::SIGINT);
+    mask.add(Signal::SIGHUP);
+    mask.add(Signal::SIGUSR1);
+    mask.thread_block()?;
+    // SIGPIPE: ignore process-wide. EPIPE from write() is what we want.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
+    SignalFd::with_flags(&amp;mask, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
+}
+</code></pre>
+
+    <p>
+      The <code>signalfd</code> is registered on the same <code>epoll</code> as cgroup events. One reactor; one event source per file descriptor; clean dispatch.
+    </p>
+
+    <p>
+      On macOS there is no <code>signalfd</code>. We use <code>kqueue</code> <code>EVFILT_SIGNAL</code> filters. <code>kqueue</code> is the right answer: it integrates with the same kqueue we use for exit notification (<code>EVFILT_PROC + NOTE_EXIT</code>) and gives us a single reactor pattern that mirrors the Linux epoll loop.
+    </p>
+
+    <p>
+      <strong>PR_SET_PDEATHSIG</strong>. On Linux, every spawned descendant immediately calls:
+    </p>
+
+    <pre><code class="lang-c">/* in the descendant, after fork() and before execve() */
+prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
+/* If the parent (mcpmanagerd) dies for any reason, the kernel delivers
+ * SIGKILL to this process. Per prctl(2):
+ *   "Set the parent-death signal of the calling process to sig..."
+ *   "...delivered when the thread that created the calling process
+ *    terminates."
+ * Note the "thread" caveat: we ensure the daemon's main thread is the
+ * spawner. We do not spawn from arbitrary tokio worker threads.
+ */
+</code></pre>
+
+    <p>
+      On macOS there is no equivalent. The closest is the <code>SIGTERM</code>-on-parent-die behavior from <code>launchd</code> if we register as a service, but that only applies when launchd itself launches the daemon. For the <code>mcpm</code>-auto-spawned daemon case (the common path) we need a userspace workaround: each spawned descendant is passed a sentinel pipe whose write end the daemon holds. A small wrapper in the descendant does a <code>read(sentinel)</code> in a background thread; an EOF on the sentinel (because the daemon died and closed all its fds) triggers the wrapper to <code>kill(getpid(), SIGKILL)</code>.
+    </p>
+
+    <p>
+      This is uglier than <code>PR_SET_PDEATHSIG</code> but it's the macOS-correct pattern, used by Docker Desktop, by VS Code's process explorer, by every native macOS tool that needs supervisor semantics without launchd. Document it; test it; live with it.
+    </p>
+
+    <h3 id="design-idle">Idle TTL + singleton refcount</h3>
+
+    <p>
+      The spec describes the refcount semantics correctly: refcount → 0 starts the idle timer; new client cancels it; timer fires → graceful stop. The kernel-shaped details:
+    </p>
+
+    <ul>
+      <li><strong>Process indexing.</strong> Singleton: one entry per <code>ServerName</code> in a <code>HashMap&lt;ServerName, ProcessHandle&gt;</code>. Per-client (<code>singleton = false</code>): <code>HashMap&lt;(ServerName, ClientId), ProcessHandle&gt;</code>. <code>ClientId</code> is the connection-id we assign at UDS accept time, stable for the lifetime of that <code>mcpm exec</code> invocation. We do not derive it from the peer pid (which can be reused) but from a per-connection monotonic counter.</li>
+      <li><strong>Idle timer.</strong> One <code>tokio::time::Sleep</code> per server (singleton) or per process (per-client). We do not poll. The supervisor's state machine carries <code>idle_until: Option&lt;Instant&gt;</code>; on refcount-zero it sets the field; on refcount-up it clears the field; the reactor selects on the soonest <code>idle_until</code> across all servers and wakes once.</li>
+      <li><strong>Graceful stop.</strong> When the idle timer fires, we send <code>SIGTERM</code>, wait <code>graceful_timeout_secs</code> (default 5 for idle stop, configurable), then <code>SIGKILL</code>. During the wait the server can flush, close database handles, etc. We then <code>rmdir</code> the cgroup directory; the kernel rejects this if the cgroup is non-empty, so it serves as a population check.</li>
+      <li><strong>Negative <code>idle_ttl_secs</code> = never stop.</strong> Implementation: <code>idle_until</code> is never set; the field stays <code>None</code>. The state machine simply doesn't have a transition to set it when <code>idle_ttl_secs &lt; 0</code>.</li>
+      <li><strong><code>idle_ttl_secs = 0</code> = stop on refcount-zero.</strong> Implementation: on refcount-zero we immediately enqueue a <code>StopServer { graceful: true }</code> action. No timer.</li>
+    </ul>
+
+    <h3 id="design-logs">Log rotation atomicity</h3>
+
+    <p>
+      The spec calls for daily rotation of the audit log (<code>YYYY-MM-DD.jsonl</code>) and ring-buffer-backed per-server logs with 16&nbsp;MiB on-disk rotation. The kernel-relevant correctness points:
+    </p>
+
+    <ul>
+      <li><strong>Audit log.</strong> Open with <code>O_APPEND | O_CREAT | O_CLOEXEC</code>. <code>O_APPEND</code> guarantees that concurrent <code>write</code>s from multiple threads are atomically positioned at the current end-of-file by the kernel; we do not need a userspace mutex around the write call itself. We do still serialize because we want to <code>flush()</code> the userspace buffer at controlled boundaries (the 100&nbsp;ms / 4&nbsp;KiB threshold), so the lock protects the <code>BufWriter</code>, not the file. <code>fsync</code> is on a 1&nbsp;s timer (not per-event) to bound durability loss to one second; we accept this for telemetry-style data.</li>
+      <li><strong>Daily rotation correctness.</strong> The rotation logic runs once per minute (cheap). It compares the current UTC date to the date encoded in the open log path. If different: open the new path (atomic <code>O_CREAT | O_EXCL</code> first, fall back to <code>O_APPEND | O_CREAT</code> if another writer beat us), <code>flush</code> the old buffer, <code>fsync</code> the old fd, swap the open fd, close the old fd. Any concurrent writer that grabbed the lock before us writes to the old file (correct &mdash; that's the file for "now"); any that grabbed after writes to the new file. No interleaving across day boundaries. <strong>We use a single shared mutex around the fd-swap step</strong>; the fast path (regular append) is lock-free thanks to <code>O_APPEND</code>'s kernel-side ordering.</li>
+      <li><strong>Per-server stdout/err logs.</strong> Ring buffer in memory (4&nbsp;MiB default) with a backing file on disk that rotates at 16&nbsp;MiB. Same <code>O_APPEND</code> pattern. <strong>No <code>O_DIRECT</code>:</strong> direct I/O bypasses the page cache, which is the opposite of what we want for tail-following (the <code>logs.tail</code> RPC consumer expects fresh data to be available immediately, served from cache).</li>
+      <li><strong>fsync discipline.</strong> Audit log: <code>fsync</code> every 1&nbsp;s and on graceful shutdown. Per-server logs: <code>fsync</code> only on graceful shutdown. Reasoning: audit-log data is the security record, worth one second of latency-window data loss; per-server stdout/err is debugging telemetry, worth the throughput improvement of not syncing.</li>
+    </ul>
+
+    <h3 id="design-table">Cross-component decision table</h3>
+
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Crate</th>
+          <th>Kernel-hacker call</th>
+          <th>Rationale</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>mcpm-core</code></td>
+          <td>Owns the journal/audit-log write path. <code>O_APPEND</code> append, 1&nbsp;s fsync. No direct kernel concerns beyond filesystem atomicity.</td>
+          <td>Audit is a security record; durability bounded; never on the fast path.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-daemon</code></td>
+          <td>Owns the <code>signalfd</code> / <code>kqueue</code> reactor thread, the UDS accept loop, the <code>SO_PEERCRED</code> check on every accept. Sets process name via <code>prctl(PR_SET_NAME)</code> at startup so <code>ps</code> shows <code>mcpmanagerd</code>.</td>
+          <td>The daemon is the single signal sink; the only place that owns process-wide signal disposition.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-protocol</code></td>
+          <td>Adds <code>platform</code>: <code>"cgroup-v2" | "cgroup-v1" | "macos-jetsam"</code> tag on <code>server.oom</code> events; adds <code>memory_high_breach_count</code> for the soft-limit-warning event.</td>
+          <td>Clients need to render disclaim text. Wire-stable.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-client</code></td>
+          <td>Auto-spawn: <code>flock(2)</code> on a sibling lockfile (<code>$XDG_RUNTIME_DIR/mcpmanagerd.spawn.lock</code>) with <code>LOCK_EX | LOCK_NB</code>; on success, <code>fork+exec mcpmanagerd</code>; on failure, sleep 50&nbsp;ms and re-attempt UDS connect. Cap at 100 retries (5&nbsp;s budget).</td>
+          <td>Prevents thundering-herd of two <code>mcpm</code> invocations both spawning the daemon. The lock is a file lock so it survives crashes.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-supervisor</code></td>
+          <td>This essay.</td>
+          <td>Home.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-registry</code></td>
+          <td>HTTP fetches use rustls + a fixed CA bundle. Stream-to-disk via <code>tempfile</code> + <code>rename(2)</code> for atomic install. Verify minisign signature <em>before</em> the rename.</td>
+          <td>Atomic-rename is the only POSIX guarantee we have for "either old or new, never half-written."</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-secrets</code></td>
+          <td>Plaintext lives in <code>secrecy::SecretString</code> until the spawn syscall. Inject via <code>envp</code> in the spawn call &mdash; the env is built in the parent's address space, then passed across the <code>execve</code> argv/envp protocol. Parent's <code>SecretString</code> is dropped (zeroed) immediately after spawn returns.</td>
+          <td>Minimises the time plaintext is resident. Cannot avoid memory pages being readable by ptrace-capable processes in the parent's namespace, but bounds the window.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-projector</code></td>
+          <td>Managed-block writes use <code>tempfile</code> + <code>rename(2)</code> + <code>fsync(parent_dir)</code> to guarantee crash consistency. On macOS the <code>fsync</code> on parent dir is a no-op as documented; we still call it for portability.</td>
+          <td>Editor configs are user-visible; a half-written one is a worse failure than no update.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-logs</code></td>
+          <td><code>O_APPEND</code> + bounded mutex on fd-swap during rotation. 1&nbsp;s fsync for audit; on-shutdown fsync for stdout/err.</td>
+          <td>Detailed above.</td>
+        </tr>
+        <tr>
+          <td><code>mcpm-trust</code></td>
+          <td>Minisign verification of <code>trust.toml</code> happens in-process, no subprocesses. The signature is read into memory; the public key is baked-in (a <code>const &amp;[u8]</code>); <code>minisign-verify</code> runs purely in-process.</td>
+          <td>Fewer attack surfaces than calling out to <code>minisign(1)</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>End-to-end: a server crashes from OOM on Linux cgroup v2</h3>
+
+    <pre><code>00:00:00.000  mcpm exec github-mcp  -- editor spawns wrapper
+00:00:00.050  mcpm-client dials UDS, sends server.start { name: "github-mcp" }
+00:00:00.052  daemon: SO_PEERCRED check ok, refcount++
+00:00:00.054  supervisor.state_machine: Idle -> Spawning
+00:00:00.054  shell: mkdir(/sys/fs/cgroup/mcpmanagerd.slice/server-github-mcp.scope)
+00:00:00.055  shell: write memory.max = 536870912 (512 MiB)
+00:00:00.055  shell: write memory.high = 483183820 (90% of 512 MiB)
+00:00:00.056  shell: open memory.events  O_RDONLY|O_NONBLOCK
+00:00:00.056  shell: epoll_ctl ADD fd, EPOLLPRI, token=0x42
+00:00:00.057  shell: clone3(CLONE_INTO_CGROUP, …) — atomic spawn-into-cgroup
+00:00:00.058    descendant: prctl(PR_SET_PDEATHSIG, SIGKILL)
+00:00:00.058    descendant: prctl(PR_SET_NAME, "mcp-srv:github-mcp")
+00:00:00.058    descendant: execve("/path/to/github-mcp", …)
+00:00:00.062  supervisor.state_machine: Spawning -> Running
+00:00:00.064  daemon: reply { stdio_fds = (in, out) }
+...
+00:00:15.230  shell: epoll_wait wakes with EPOLLPRI on token 0x42
+00:00:15.230  shell: lseek(0); read memory.events:
+                "low 0\nhigh 7\nmax 0\noom 0\noom_kill 0\n"
+              -- high_breach went from 0 -> 7 (process is allocation-throttled)
+00:00:15.231  shell: emit CgroupMemoryHigh { server: "github-mcp" }
+00:00:15.232  state_machine.step: Running stays Running; emits Warning action
+00:00:15.232  daemon: emit logs.tail notification — "memory pressure"
+...
+00:00:18.541  shell: epoll_wait wakes with EPOLLPRI on token 0x42
+00:00:18.541  shell: read memory.events:
+                "low 0\nhigh 12\nmax 1\noom 1\noom_kill 1\n"
+              -- oom_kill went from 0 -> 1
+00:00:18.542  shell: emit CgroupOomKill { server, count: 1, at: T1 }
+00:00:18.555  shell: signalfd wakes (SIGCHLD)
+00:00:18.555  shell: waitpid(-1, WNOHANG) -> (pid, signal=SIGKILL, !core)
+00:00:18.555  shell: emit DescendantExited { pid, status, at: T2 }
+00:00:18.556  classifier: joins on (pid, server, T1≈T2 within 100 ms)
+              -> CrashOrOom::Oom { reason: "cgroup-v2 oom_kill" }
+00:00:18.556  state_machine.step: Running -> BackoffWait
+                attempts++; delay = base * 2^attempts * jitter
+00:00:18.557  audit: server.oom { name, oom_kill: 1, platform: "cgroup-v2",
+                memory_max_mb: 512, memory_high_breaches: 12 }
+00:00:18.557  shell: rmdir cgroup directory (kernel allows: no procs)
+...
+00:00:22.890  state_machine.step: BackoffWait -> Spawning (re-spawn)
+              (full cgroup reset, fresh memory.events fd, fresh PID)
+</code></pre>
+
+    <p>
+      This is the trace I want the daemon to be able to print on demand. Every step is observable through normal tracing (<code>RUST_LOG=mcpm_supervisor=trace</code>). Every step is testable in isolation: the state machine has no I/O, the shell can be exercised against a fake cgroup tree under <code>$TMPDIR</code>, the classifier is a pure function with five inputs and one output.
+    </p>
+
+    <h3>What I am explicitly not designing</h3>
+
+    <ul>
+      <li><strong>CPU limits.</strong> v1.0 spec doesn't ask for CPU caps; cgroup v2 makes them easy (<code>cpu.max</code>) but the failure mode of "MCP uses too much CPU" is much less catastrophic than memory. Defer to v1.1.</li>
+      <li><strong>I/O limits.</strong> Same. <code>io.max</code> exists in cgroup v2; the use case is unclear for v1.0.</li>
+      <li><strong>Network namespaces.</strong> Stream 2 (sandboxing) owns this. The supervisor does not put descendants in network namespaces; that's bubblewrap / sandbox-exec territory.</li>
+      <li><strong>seccomp filters.</strong> Same &mdash; sandbox layer.</li>
+      <li><strong>Live OOM-killer disabling.</strong> Some distros disable global OOM killer for cgroups via <code>memory.oom.group</code>. We do not touch this; we accept the default (kill the whole cgroup on OOM &mdash; which is what we want, since each cgroup is one MCP).</li>
+    </ul>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li>
+        <span class="citation-title">Control Group v2 — kernel documentation</span>.
+        Linux kernel source; <code>Documentation/admin-guide/cgroup-v2.rst</code>. Authoritative reference for <code>memory.events</code>, <code>memory.max</code>, <code>memory.high</code>, and POLLPRI notification semantics.
+        <br><a href="https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html">https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html</a>
+      </li>
+      <li>
+        <span class="citation-title">prctl(2) — Linux manual page</span>.
+        Documents <code>PR_SET_PDEATHSIG</code> and <code>PR_SET_NAME</code>; the parent-death-signal mechanism we depend on.
+        <br><a href="https://man7.org/linux/man-pages/man2/prctl.2.html">https://man7.org/linux/man-pages/man2/prctl.2.html</a>
+      </li>
+      <li>
+        <span class="citation-title">getrlimit(2) / setrlimit(2) — Linux manual page</span>.
+        <code>RLIMIT_AS</code> semantics for the cgroup v1 / no-cgroup fallback path.
+        <br><a href="https://man7.org/linux/man-pages/man2/setrlimit.2.html">https://man7.org/linux/man-pages/man2/setrlimit.2.html</a>
+      </li>
+      <li>
+        <span class="citation-title">clone3(2) — Linux manual page</span>.
+        <code>CLONE_INTO_CGROUP</code> flag; required for race-free spawn-into-cgroup on Linux 5.7+.
+        <br><a href="https://man7.org/linux/man-pages/man2/clone3.2.html">https://man7.org/linux/man-pages/man2/clone3.2.html</a>
+      </li>
+      <li>
+        <span class="citation-title">signalfd(2) — Linux manual page</span>.
+        Used to integrate <code>SIGCHLD</code> reaping into the epoll loop.
+        <br><a href="https://man7.org/linux/man-pages/man2/signalfd.2.html">https://man7.org/linux/man-pages/man2/signalfd.2.html</a>
+      </li>
+      <li>
+        <span class="citation-title">epoll(7) — Linux manual page</span>.
+        <code>EPOLLPRI</code> semantics for cgroup pseudo-files; the kernel-level notification primitive.
+        <br><a href="https://man7.org/linux/man-pages/man7/epoll.7.html">https://man7.org/linux/man-pages/man7/epoll.7.html</a>
+      </li>
+      <li>
+        <span class="citation-title">Apple Developer — Dispatch Sources for Monitoring Process Activity</span>.
+        Documents <code>DISPATCH_SOURCE_TYPE_MEMORYPRESSURE</code>, the only first-party signal we get for jetsam pressure on macOS.
+        <br><a href="https://developer.apple.com/library/archive/documentation/General/Conceptual/ConcurrencyProgrammingGuide/GCDWorkQueues/GCDWorkQueues.html">https://developer.apple.com/library/archive/documentation/General/Conceptual/ConcurrencyProgrammingGuide/GCDWorkQueues/GCDWorkQueues.html</a>
+      </li>
+      <li>
+        <span class="citation-title">Apple <code>libproc</code> headers — <code>proc_pid_rusage</code>, <code>proc_pid_taskinfo</code></span>.
+        <code>rusage_info_v4</code> structure with <code>ri_resident_size</code> + <code>ri_lifetime_max_phys_footprint</code>; used to sample per-process memory on macOS.
+        <br><a href="https://opensource.apple.com/source/xnu/xnu-7195.50.7.100.1/libsyscall/wrappers/libproc/libproc.h.auto.html">https://opensource.apple.com/source/xnu/xnu-7195.50.7.100.1/libsyscall/wrappers/libproc/libproc.h.auto.html</a>
+      </li>
+      <li>
+        <span class="citation-title">xnu — <code>kern_memorystatus.c</code></span>.
+        The jetsam implementation in Apple's open-source kernel tree. Useful for understanding the model we infer against.
+        <br><a href="https://opensource.apple.com/source/xnu/xnu-7195.50.7.100.1/bsd/kern/kern_memorystatus.c.auto.html">https://opensource.apple.com/source/xnu/xnu-7195.50.7.100.1/bsd/kern/kern_memorystatus.c.auto.html</a>
+      </li>
+      <li>
+        <span class="citation-title">kqueue(2) — FreeBSD/macOS manual page</span>.
+        <code>EVFILT_PROC</code> + <code>NOTE_EXIT</code> for exit notification on macOS; <code>EVFILT_SIGNAL</code> for signal integration into the same reactor.
+        <br><a href="https://man.freebsd.org/cgi/man.cgi?query=kqueue&amp;sektion=2">https://man.freebsd.org/cgi/man.cgi?query=kqueue&amp;sektion=2</a>
+      </li>
+      <li>
+        <span class="citation-title">cgroups-rs crate — docs.rs</span>.
+        The "fashion-of-the-month" Rust wrapper around cgroups I argue against using; included for completeness. We code directly to the cgroup v2 pseudo-filesystem instead.
+        <br><a href="https://docs.rs/cgroups-rs/latest/cgroups_rs/">https://docs.rs/cgroups-rs/latest/cgroups_rs/</a>
+      </li>
+      <li>
+        <span class="citation-title">nix crate — Rust bindings for Unix APIs</span>.
+        Source of <code>prctl</code>, <code>signalfd</code>, <code>epoll</code>, <code>kqueue</code>, <code>setrlimit</code>, <code>clone3</code> bindings used throughout.
+        <br><a href="https://docs.rs/nix/latest/nix/">https://docs.rs/nix/latest/nix/</a>
+      </li>
+      <li>
+        <span class="citation-title">open(2) — Linux manual page; O_APPEND atomicity</span>.
+        "If <code>O_APPEND</code> is set, the file offset is first set to the end of the file before writing. The adjustment of the file offset and the write operation are performed as an atomic step." The basis for our lock-free log append fast-path.
+        <br><a href="https://man7.org/linux/man-pages/man2/open.2.html">https://man7.org/linux/man-pages/man2/open.2.html</a>
+      </li>
+      <li>
+        <span class="citation-title">cgroup v2 design notes — LWN</span>.
+        Useful colour on why unified-hierarchy + pseudo-filesystem-as-API was the design pick.
+        <br><a href="https://lwn.net/Articles/669755/">https://lwn.net/Articles/669755/</a>
+      </li>
+    </ol>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Back to the <a href="./overview.html">backend overview</a> or the <a href="../index.html">deep-dive index</a>.
+    For the v1.0 breadth-pass spec, see <a href="../../technical-design.html">technical-design.html</a>.
+  </p>
+</main>
+</body>
+</html>

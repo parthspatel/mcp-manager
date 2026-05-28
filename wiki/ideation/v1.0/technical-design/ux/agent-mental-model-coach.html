@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mental Model Coach — UX deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ux · mental-model-coach</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">ux overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Mental Model Coach's UX</h1>
+  <p class="lede">Server. Editor. Secret. Three nouns. Everything else is invisible or perfectly metaphored. If a user has to learn one of <em>our</em> internal words to do their job, we have failed the design brief.</p>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>I have read the v1.0 product overview, the technical design, and the ux-design document end to end. The architecture is, in my honest assessment, very strong: a canonical store, projected fan-out to editors, a daemon that brokers stdio, secrets in the OS keychain, three persistent TOML files. The plumbing is right. The shape of the surface area is right. But the <em>words</em> on that surface — the words that show up in TUI labels, error codes, TOML keys, CLI flags, and (most importantly) docs introductions — are not yet ready for a user who has never read our docs. And that is the only audience that matters for the first ninety seconds of an install.</p>
+
+    <p>A mental model is not what the system <em>is</em>; it is what the user <em>believes</em> the system is, derived from the names and labels we expose. Don Norman's framing in <em>The Design of Everyday Things</em> is the foundational text here: the system image — every word, glyph, and prompt the user encounters — is the only thing standing between the designer's model and the user's model. If our system image leaks designer-words, the user constructs a designer-shaped mental model, which is a mental model of a thing they have to learn rather than a thing they can use. Every leaked CS term — "singleton", "projection", "idle TTL", "refcount", "managed-block hash" — costs us minutes of orientation and trust that we never get back. (See Norman, Nielsen Norman Group's "Mental Models" article, and Adam Wathan's <em>Refactoring UI</em> chapter on labels.)</p>
+
+    <p>So my job in this debate is the unglamorous one: I am the name-naysayer. I am the person who reads the technical design with a marker and circles every word that came from a Rust struct field instead of a kitchen-table sentence. I do not want to soften the engineering — the engineering is good — I want to <em>translate</em> it. The right mental model for the user of MCP Manager is three nouns: <strong>servers</strong> (things that provide tools), <strong>editors</strong> (apps that consume those tools, like Claude Code or Cursor), and <strong>secrets</strong> (the credentials a server needs to do its job). One sentence should bind them: <em>"MCP Manager runs MCP servers on your machine, connects them to your editors, and stores their secrets safely."</em> If a user reads that sentence and then opens the TUI, they should see three panes labelled Servers, Editors, Secrets — and that is exactly what the current TUI mock shows. Good. But the middle pane is currently called "Toolchains", which is a fourth noun nobody asked for, and the right pane talks about "projection drift", which is a phrase only the implementer's mother could love.</p>
+
+    <p>The specific words I am going to push to rename, with rationale, are five: <code>projection</code>, <code>idle TTL</code>, <code>singleton</code>, <code>toolchain</code>, and <code>inherit</code>. Each one is a CS-correct term that earns its keep in the codebase but ambushes a first-time user. I will also push to make the 19-command CLI verb-tense-consistent (it is mostly there, with two outliers I want to fix), and I will propose a three-page mdbook IA whose top-level sections are literally Servers, Editors, Secrets. The trust gate has its own naming problem I want to address — "trust" alone is too ambient; we should say what we are trusting <em>about</em>, which is the project config. And the singleton flag, which lives in TOML as <code>singleton = true</code>, should surface in the TUI and docs as something a human would actually say out loud, like "share one process across editors" with the inverted form "give each editor its own copy".</p>
+
+    <p>Two principles run underneath all of this. First: the user's vocabulary is sovereign. We do not get to teach them ours; we earn their attention by speaking theirs. Second: a TOML key is allowed to be technical because power users will read it twice; a TUI label is not, because a novice will read it once and decide whether to quit. So the rename strategy is asymmetric — keep the implementer-friendly key in the file (with a doc comment), and rename only the user-facing surface (labels, prompts, error messages, help text). This is the same split Kubernetes makes between API-level <code>spec.template.spec.containers[].image</code> and user-level <code>kubectl get pods</code>: power users see structure, novices see verbs. We can do both.</p>
+
+    <p>One last note before I argue with my peers: this stance is not about being cute. I am not asking for clever names. I am asking for <em>boring</em> names — names so obvious they vanish. "Auto-stop after 30 min" is a boring label, and that is precisely why it works. "Idle TTL: 1800" is a clever-feeling label that makes the user feel stupid for not knowing what TTL means. Boring is kind. Clever is hostile. We are going for kind.</p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments against my four peers</h2>
+
+    <h3>Against <code>empathy-led-designer</code></h3>
+    <p>The empathy-led-designer's instinct — kind defaults, audited tone, no exclamation points where a period will do — is right and complementary to mine. I would never argue against compassionate copy. My pushback is on <em>precedence</em>: tone audit is what you do <em>after</em> the nouns are right. If we tune the tone of an error message that contains "projection drift detected", we end up with a kind, warm, polite message that the user still cannot read. A friendly sentence built on a hostile noun is still hostile. So I want the rename pass to land before the tone pass. If you read <code>E_PROJECTION_DRIFT</code> as "the editor's config file was hand-edited and now disagrees with what MCP Manager last wrote there", you can spend your tone budget on softening the <em>action</em> ("would you like to keep the hand edit or restore the managed copy?") rather than apologizing for the <em>concept</em>. Kindness compounds with clarity; it cannot substitute for it. Don Norman has a phrase for this: "the trouble with making things foolproof is that fools are so ingenious" — which I always read as a backhanded reminder that the engineer who chose the word "projection" thought they were being precise, and they were, in their dialect. The empathy-led-designer's job is to make our voice kind. My job is to make sure that voice has anything kind <em>to say</em>.</p>
+
+    <p>Concretely: I'll defer to empathy-led-designer on the tone of every prompt and the wording of every confirmation. I just want a veto over the nouns those prompts contain. We split the work cleanly along that seam.</p>
+
+    <h3>Against <code>data-driven-pm</code></h3>
+    <p>Local-only metrics are a fine idea — counters of how many times <code>mcpm install</code> succeeds versus fails, how often the trust gate is hit, how often a user opens the TUI versus invokes the CLI. I have no architectural objection. My pushback is on <em>what the metrics are allowed to do</em>. Metrics tell you where users <em>got stuck</em>; they do not tell you <em>why</em>. If 40% of first-time users abandon onboarding at the trust-gate prompt, the data-driven-pm's instinct will (correctly) be to flag the prompt for redesign. But the redesign has to be conceptual, not just visual. The reason users will abandon at "trust this project config?" is not that the prompt is ugly; it is that the word "trust" without an object is too abstract to act on. They are being asked to make a security decision with no scaffolding. So I want metrics to <em>inform</em> rename decisions, not replace them — and I want it stipulated that we will rename a label <em>before</em> we instrument it. Otherwise we end up A/B testing two equally confusing labels and declaring a "winner" that is still confusing.</p>
+
+    <p>The deeper philosophical point: Jakob Nielsen's heuristic #2, "match between system and the real world", is not a hypothesis to test — it is a constraint to satisfy. We do not test whether "Auto-stop after 30 min" beats "Idle TTL: 1800s" in click-through. We rename it because TTL is jargon and "auto-stop" is plain English, and we move on to the next problem. Metrics are for things real users are doing in the wild; they are not a substitute for not embarrassing ourselves on the way out the door.</p>
+
+    <h3>Against <code>onboarding-specialist</code></h3>
+    <p>The onboarding-specialist's "60 seconds to value" target is a beautiful constraint, and the existing <code>mcpm init</code> flow — five prompts, all with sensible defaults, <code>-y</code> to accept them all — is already very close. My pushback is on <em>what value</em> we deliver in those 60 seconds. The current init flow asks: name, scope, projection targets, docker, service-register. That is correct sequencing for getting the daemon running, but it does not <em>build the mental model</em>. The user finishes init and knows the daemon is alive, but they do not yet have the three-noun frame in their head. So the first <code>mcpm</code> command they type after init is going to be a guessing game.</p>
+
+    <p>I propose we cheaply add one line of teach-as-you-go to the init output:</p>
+
+    <pre><code>✓ Initialized.
+
+  MCP Manager runs three things for you:
+    Servers  — the tools your editor can call (`mcpm install` to add one)
+    Editors  — the apps that use those tools (we connected 3 already ✓)
+    Secrets  — the credentials your servers need (`mcpm secret set NAME`)
+
+  Try:  mcpm install official/github-mcp@^0.4</code></pre>
+
+    <p>This is six lines of output. It costs nothing. It plants the three-noun model in the first 30 seconds, so the next 30 seconds are guided by it. Without this, the onboarding-specialist's 60-second target is a 60-second time-to-daemon, not a 60-second time-to-mental-model. The latter is what makes the next hour of use feel natural; the former just makes the first minute feel snappy.</p>
+
+    <p>The onboarding-specialist may counter that adding text makes onboarding feel slower. I disagree — six lines of plain English read in under three seconds, and they replace twenty minutes of later confusion. The Mozilla Developer Network's onboarding research and the GitHub CLI's <code>gh auth login</code> flow both demonstrate that a single sentence of context-setting after a successful init <em>increases</em> downstream completion. We are not making init slower; we are making the second command faster.</p>
+
+    <h3>Against <code>error-recovery-advocate</code></h3>
+    <p>The error-recovery-advocate wants every error to have a clear next step, an obvious recovery path, and a taxonomy that supports machine parsing. I am in violent agreement. My pushback is on the <em>names of the codes themselves</em>. The current 12-row taxonomy has codes like <code>E_PROJECTION_DRIFT</code> and <code>E_SPEC_UNSUPPORTED</code> and <code>E_KEYCHAIN_UNAVAILABLE</code>. The recovery advocate's job is to make sure each code carries a "what to do" — and the current taxonomy does that well. My job is to make sure each code carries a "what happened" that the user can read without consulting docs. <code>E_PROJECTION_DRIFT</code> is a category, not a sentence. The sentence is "an editor's config file no longer matches what MCP Manager last wrote there, because someone hand-edited it". That sentence belongs in the user-facing message; the code can stay as a stable identifier for log parsers and our docs.</p>
+
+    <p>So I propose a two-layer error taxonomy: the codes stay (engineers and log parsers need stable identifiers), but the <em>human title</em> of each error gets a noun-and-verb sentence that builds on the three-noun model. <code>E_PROJECTION_DRIFT</code> → "Editor config edited outside MCP Manager". <code>E_SERVER_OOM</code> → "Server ran out of memory". <code>E_SECRET_MISSING</code> → "Secret not found in keychain". Each title sits in the same plane as the three nouns; each fix sentence is one imperative verb. The error-recovery-advocate keeps their taxonomy; I just want a column added between the code and the explanation that holds the user-friendly title.</p>
+
+    <p>One specific disagreement: I do <em>not</em> want errors to include the underlying internal vocabulary even in the fix-suggestion line. A user who reads "the projection failed to sync; run <code>mcpm projection diff</code>" has to learn what a projection is to follow the advice. Better: "the editor config was hand-edited; run <code>mcpm sync diff cursor</code>". If we rename the verb from "projection" to "sync" (or "link"), the entire error path becomes legible without a glossary.</p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design proposals</h2>
+
+    <h3>The three-noun mental model (ASCII relationships)</h3>
+
+    <p>Every doc page, every TUI screen, every help-text intro should reinforce this picture. It is the whole product, drawn in one breath:</p>
+
+    <pre><code>     ┌─────────────┐
+     │   EDITORS   │   Claude Code, Cursor, Zed, …
+     │             │   (what the user opens to write code)
+     └──────┬──────┘
+            │  uses tools from
+            ▼
+     ┌─────────────┐
+     │   SERVERS   │   github-mcp, postgres-mcp, filesystem-mcp, …
+     │             │   (managed by `mcpm`; provide the tools)
+     └──────┬──────┘
+            │  needs
+            ▼
+     ┌─────────────┐
+     │   SECRETS   │   GITHUB_TOKEN, ACME_DB_URL, …
+     │             │   (stored in your OS keychain)
+     └─────────────┘
+</code></pre>
+
+    <p>Three nouns, two arrows, one sentence each. No fourth concept. The daemon, the projection, the lockfile, the trust manifest, the spec version — all of it sits underneath this picture as plumbing the user never has to name unless something goes wrong.</p>
+
+    <h3>Renaming proposals (jargon → user-friendly)</h3>
+
+    <p>For each rename: keep the TOML/CLI key intact (power users), change only the user-facing label (everyone else). The rightmost column shows where the change shows up.</p>
+
+    <table class="compare">
+      <thead><tr><th>Current term</th><th>Where it lives</th><th>Proposed user-facing label</th><th>Rationale</th><th>Keep TOML key?</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>projection</code></td>
+          <td>TOML key, error code, CLI subcommand area</td>
+          <td><strong>sync</strong> (verb) / <strong>editor link</strong> (noun for the relationship)</td>
+          <td>"Projection" is a database/math term. "Sync" is what every user has done a thousand times (Dropbox, iCloud, git). The TUI's middle pane becomes "Editors" not "Toolchains"; the action is "sync to editor".</td>
+          <td>Yes — <code>[projection.cursor]</code> stays in TOML; only labels change.</td>
+        </tr>
+        <tr>
+          <td><code>idle_ttl_secs</code></td>
+          <td>Per-server TOML field</td>
+          <td><strong>Auto-stop after N minutes idle</strong> (with TUI showing "30 min" not "1800s")</td>
+          <td>TTL is networking jargon. "Auto-stop after" is a phrase from every phone settings app. Display the value in minutes, not seconds — humans don't think in seconds for half-hour intervals.</td>
+          <td>Yes — TOML stays <code>idle_ttl_secs</code> for power users; doc comment links to the user-facing name.</td>
+        </tr>
+        <tr>
+          <td><code>singleton = true</code></td>
+          <td>Per-server TOML field</td>
+          <td><strong>Share one process across editors</strong> (with inverse: <em>Give each editor its own copy</em>)</td>
+          <td>"Singleton" is a software-design-pattern name. The user thinks in terms of "do my editors share state, or each get a fresh start?" — describe the outcome, not the implementation.</td>
+          <td>Yes — TOML stays; TUI checkbox label uses the human form.</td>
+        </tr>
+        <tr>
+          <td><code>Toolchains</code> (TUI pane title)</td>
+          <td>Middle pane in current TUI mock</td>
+          <td><strong>Editors</strong></td>
+          <td>The pane lists Claude Code, Cursor, Zed — those are <em>editors</em>, not toolchains. "Toolchain" is a compiler/build-system term that misleads. Calling it Editors restores the three-noun symmetry.</td>
+          <td>N/A — UI label only.</td>
+        </tr>
+        <tr>
+          <td><code>inherit = "all"</code></td>
+          <td>Project-config TOML</td>
+          <td><strong>Use your global servers in this project?</strong> (yes/some/no)</td>
+          <td>"Inherit" carries OOP baggage. The user is asking "do I want my normal servers available here, or just the project ones, or both?" — phrase it as a question with three answers.</td>
+          <td>Yes — <code>inherit = "all" | [...] | "none"</code> stays in TOML.</td>
+        </tr>
+        <tr>
+          <td><code>trust</code> (alone)</td>
+          <td>Trust file, trust gate, <code>mcpm trust</code> subcommand</td>
+          <td><strong>Allow this project's MCP config</strong> (gate) / <strong>Registry signing keys</strong> (subcommand)</td>
+          <td>"Trust" is doing double duty: trusting a project config AND trusting registry pubkeys. Split them in user-facing language. The TOML can keep <code>trust.toml</code>; the gate becomes "allow this project?" and the subcommand becomes <code>mcpm keys</code> or stays <code>mcpm trust</code> with clarified help text.</td>
+          <td>Yes — internals unchanged; only the human framing splits.</td>
+        </tr>
+        <tr>
+          <td><code>managed-block</code></td>
+          <td>Editor config files, error messages</td>
+          <td><strong>the part MCP Manager writes</strong> (in prose)</td>
+          <td>Use the phrase, not the noun. "The part MCP Manager writes was hand-edited" reads cleanly; "managed-block drift" does not.</td>
+          <td>N/A — internal-only term, never needed user-facing.</td>
+        </tr>
+        <tr>
+          <td><code>refcount</code></td>
+          <td>Daemon internals, possibly status display</td>
+          <td><strong>active editors</strong> (when relevant)</td>
+          <td>Refcounts belong in the daemon; the user-visible version is "2 editors using this server right now". If it never shows up in TUI, even better.</td>
+          <td>Yes — code-level only.</td>
+        </tr>
+        <tr>
+          <td><code>spec version</code></td>
+          <td>Server metadata, errors</td>
+          <td><strong>MCP version</strong></td>
+          <td>"Spec" by itself is ambiguous. "MCP version" is what the user is thinking.</td>
+          <td>Yes.</td>
+        </tr>
+        <tr>
+          <td><code>canonical config</code></td>
+          <td>Architecture docs, error messages</td>
+          <td><strong>your MCP Manager config</strong></td>
+          <td>"Canonical" is a math/CS adjective. The user thinks of it as just "the config". The contrast with editor configs is preserved by saying "your config" vs "your editor's config".</td>
+          <td>N/A — docs-only.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Subcommand verb-consistency audit</h3>
+
+    <p>The CLI's 19 top-level subcommands are mostly clean already. Verbs are imperative present-tense ("install", "start", "stop", "restart", "update"). The two outliers I flag:</p>
+
+    <ul>
+      <li><code>mcpm outdated</code> — this is an <em>adjective</em>, not a verb. Every other top-level command is a verb. Replace with <code>mcpm check-updates</code> or <code>mcpm preview-updates</code> (rhymes with <code>mcpm update</code>). Keep <code>outdated</code> as an alias for one release for backwards compat with anyone who lifted it from the brainstorm doc.</li>
+      <li><code>mcpm status</code> — fine, but inconsistent with <code>mcpm list</code> which we don't have. Either add <code>mcpm list</code> as an alias (for muscle memory from <code>ls</code>, <code>kubectl get</code>, <code>docker ps</code>), or document that <code>status</code> is the single source of truth. I lean toward adding the alias.</li>
+    </ul>
+
+    <p>The exec/test/config/project/registry/secret/trust subcommands all use noun-then-verb subcommand patterns (<code>mcpm registry add</code>, <code>mcpm secret set</code>), which matches <code>kubectl</code> and <code>gh</code> conventions and is fine. The verb set is consistent: <code>add/remove/list/set/get/unset/refresh/verify/edit</code>. I would specifically reject any attempt to use <code>delete</code> in some places and <code>remove</code> in others — pick one. <code>remove</code> is the more common verb in package managers (npm, cargo, apt); use <code>remove</code> throughout.</p>
+
+    <h3>TUI label rename pairs</h3>
+
+    <table class="compare">
+      <thead><tr><th>Current</th><th>Proposed</th></tr></thead>
+      <tbody>
+        <tr><td>Toolchains</td><td>Editors</td></tr>
+        <tr><td>sync (status word)</td><td>linked ✓ (when current); needs re-link (when drifted)</td></tr>
+        <tr><td>drifted</td><td>edited outside (with hint: press <code>e</code> to review)</td></tr>
+        <tr><td>failed (5/5)</td><td>crashed 5× (5 of 5 retries used)</td></tr>
+        <tr><td>● running / ○ stopped / ⚠ failed</td><td>● running / ○ stopped / ⚠ crashed (keep glyphs; rename "failed" → "crashed" everywhere)</td></tr>
+        <tr><td>"What's your name?" (init prompt)</td><td>"Who's setting this up?" — less identity-loaded, same intent</td></tr>
+        <tr><td>"Project into all three?"</td><td>"Connect MCP Manager to all three editors?"</td></tr>
+      </tbody>
+    </table>
+
+    <h3>mdbook IA outline (Servers, Editors, Secrets at the top)</h3>
+
+    <p>The mdbook table of contents should not start with "Installation" → "Configuration" → "Architecture". That is implementer order. The user's first question is "what does this thing do?", and the answer is the three nouns. Proposed top-level chapters:</p>
+
+    <ol>
+      <li><strong>What is MCP Manager?</strong> — one page, three nouns, the ASCII diagram above. Total reading time: 90 seconds.</li>
+      <li><strong>Install MCP Manager</strong> — curl one-liner, Nix flake, verify with <code>mcpm status</code>.</li>
+      <li><strong>Servers</strong> — install, list, update, remove. The whole lifecycle of an MCP server. (This is where <code>mcpm install</code> through <code>mcpm uninstall</code> live.)</li>
+      <li><strong>Editors</strong> — what editors are auto-detected; how MCP Manager keeps editor configs in sync; what to do when an editor config gets hand-edited.</li>
+      <li><strong>Secrets</strong> — how secrets are stored (OS keychain), how to set / list / remove them, how to use environment-variable fallbacks for CI.</li>
+      <li><strong>Projects</strong> — per-repo configs, the trust gate, sharing config with teammates.</li>
+      <li><strong>The TUI</strong> — keymap, panes, log multiplexing.</li>
+      <li><strong>Troubleshooting</strong> — error codes (the 12-row taxonomy), what each one means in plain English, recovery steps.</li>
+      <li><strong>Reference</strong> — full TOML schema, all CLI flags, audit-log format. This is the deep-end pool for power users.</li>
+      <li><strong>Concepts (optional reading)</strong> — daemon architecture, projection mechanics, refcounting, spec negotiation. Tagged "optional reading" because the user does not need any of this to use the tool.</li>
+    </ol>
+
+    <p>Notice the symmetry: chapters 3, 4, 5 are exactly the three nouns. Chapter 2 is install. Chapter 1 is the model. Chapters 6–9 are layers on top. Chapter 10 is the engine room, gated behind a label that says "you don't need this". The IA <em>is</em> the mental model, externalised.</p>
+
+    <h3>Update notifications — preserve the noun-count</h3>
+
+    <p>Update notifications (when <code>mcpm</code> detects a newer mcpmanagerd version) should not introduce a fourth noun. The current phrasing "mcpmanagerd update available" forces the user to know what mcpmanagerd is. Rephrase: "MCP Manager update available (v1.0.2 → v1.0.3). Run <code>mcpm update --self</code> to install." The user only ever needs to know about one product: MCP Manager. The daemon is plumbing.</p>
+
+    <h3>Accessibility commitments (mental-model angle)</h3>
+
+    <p>The existing accessibility commitments are good (color + glyph, NO_COLOR, keyboard-only, high-contrast theme). I'll add one mental-model-shaped commitment: <strong>every glyph has a one-word screen-reader label</strong>. ● is "running", not "filled circle". ○ is "stopped". ⚠ is "crashed". The glyph and the word converge on the same mental concept. This is the same principle ARIA labels enforce on the web — a sighted user and a screen-reader user should arrive at the same noun.</p>
+
+    <h3>Summary of the rename pass — what changes, what doesn't</h3>
+
+    <p><strong>Changes:</strong> TUI pane title ("Toolchains" → "Editors"), four status words ("failed" → "crashed", "drifted" → "edited outside", "sync" → "linked", "projection" → "sync" as a verb), the idle-TTL label, the singleton-flag label, the inherit-mode prompt, one CLI subcommand rename (<code>outdated</code> → <code>check-updates</code>, with alias), all 12 error-code titles, all init-flow prompts, the mdbook IA top-level chapter ordering.</p>
+
+    <p><strong>Does not change:</strong> any TOML key, any CLI subcommand below the rename above, the architecture, the daemon name (internally), the error codes themselves (only their titles), the lockfile format, the trust file format, the keymap, the keychain integration. The implementation is untouched; only the surface words change.</p>
+
+    <p>This is a one-week pass for a careful copyeditor with vetoes from engineering on anything that would break compat. The payoff is permanent: every new user from the day this lands forward arrives with the right three-noun model in their head, and every later release inherits that vocabulary by gravity.</p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li><a href="https://www.nngroup.com/articles/mental-models/">Nielsen Norman Group, "Mental Models" (Jakob Nielsen, 2010)</a> — the canonical short read on user mental models vs designer models; the source of the "system image is the only translator" framing I lean on throughout.</li>
+      <li><a href="https://www.basicbooks.com/titles/donald-a-norman/the-design-of-everyday-things/9780465050659/">Don Norman, <em>The Design of Everyday Things</em> (revised ed., Basic Books, 2013)</a> — chapter 1 establishes the three-models framework (designer's model, system image, user's model); the whole book is the philosophical backbone of this stance.</li>
+      <li><a href="https://www.refactoringui.com/">Adam Wathan &amp; Steve Schoger, <em>Refactoring UI</em></a> — the chapter on naming and labeling is the practical bridge between "good design principles" and "actually shipped labels". The "boring beats clever" heuristic I cite comes from here.</li>
+      <li><a href="https://www.nngroup.com/articles/ten-usability-heuristics/">Nielsen, "10 Usability Heuristics for User Interface Design" (NN/g, updated 2024)</a> — heuristic #2 ("match between system and the real world") is the formal name for what I am doing in the rename table.</li>
+      <li><a href="https://k9scli.io/topics/commands/">k9s CLI documentation — Commands and navigation</a> — k9s established the lazygit/k9s-class TUI pattern MCP Manager's TUI is modeled on, and its naming conventions (resources, namespaces, contexts) are studiously plain-English. A direct precedent for keeping CS internals out of TUI labels.</li>
+      <li><a href="https://kubernetes.io/docs/reference/kubectl/conventions/">Kubernetes, "kubectl Conventions"</a> — the noun-then-verb subcommand pattern (<code>kubectl get pods</code>, <code>kubectl create deployment</code>) is the model for <code>mcpm registry add</code>, <code>mcpm secret set</code>, etc. Also the source of the "alias <code>list</code> to <code>get</code>" precedent I cite.</li>
+      <li><a href="https://martinfowler.com/bliki/TwoHardThings.html">Martin Fowler, "TwoHardThings"</a> — the famous Phil Karlton attribution: "There are only two hard things in Computer Science: cache invalidation and naming things." This stance exists because we're choosing not to ship the second hard thing onto our users.</li>
+      <li><a href="https://clig.dev/">"Command Line Interface Guidelines" (clig.dev)</a> — the most thorough modern style guide for CLI naming and behavior. Specifically the "Naming" and "Help" sections inform the verb-consistency audit and the subcommand structure.</li>
+      <li><a href="https://docs.github.com/en/github-cli/github-cli/about-github-cli">GitHub CLI documentation</a> — <code>gh auth login</code> is a direct precedent for the kind of teach-as-you-go init output I'm proposing. Its prompts model the product's mental structure (host, protocol, scope) in plain English.</li>
+      <li><a href="https://rust-lang.github.io/mdBook/">mdBook documentation</a> — the IA outline I propose maps directly onto how mdBook's SUMMARY.md is structured; the "Concepts (optional reading)" pattern is borrowed from the Rust Book's own structure (chapters 1–3 are usage; chapter 19's "Advanced Features" is gated under "optional").</li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audit Compliance — Security deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">security · audit-compliance</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">security overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Audit Compliance Specialist's Security</h1>
+  <p class="lede">
+    Append-only. Sequenced. Hash-chained. Every privileged action logged with a verifiable provenance
+    trail. If a security team auditor cannot, six months from now, take a single JSONL file off a
+    developer laptop and prove cryptographically that no entry has been removed, reordered, or
+    fabricated, then v1.0 has not shipped an audit log — it has shipped a logfile, and that is a
+    meaningfully smaller thing.
+  </p>
+
+  <p>
+    <span class="evidence-badge">SOC 2 CC7.2</span>
+    <span class="evidence-badge">ISO 27001 A.12.4</span>
+    <span class="evidence-badge">NIST SP 800-92</span>
+    <span class="evidence-badge">OWASP Logging</span>
+    <span class="evidence-badge">hash chain</span>
+    <span class="evidence-badge">tamper-evident</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments</a>
+        <ul>
+          <li><a href="#vs-red-team">vs. red-team</a></li>
+          <li><a href="#vs-crypto-pedant">vs. crypto-pedant</a></li>
+          <li><a href="#vs-sandboxing-veteran">vs. sandboxing-veteran</a></li>
+          <li><a href="#vs-secrets-architect">vs. secrets-architect</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design</a>
+        <ul>
+          <li><a href="#event-schema">14 event types — JSONL schema</a></li>
+          <li><a href="#hash-chain">Hash-chain construction</a></li>
+          <li><a href="#verify-tool"><code>mcpm audit verify</code></a></li>
+          <li><a href="#rotation">Rotation strategy</a></li>
+          <li><a href="#export">Compliance export format</a></li>
+        </ul>
+      </li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <h3>What an auditor will actually ask for</h3>
+    <p>
+      The mental model I use, the one I want the v1.0 design to survive, is: a SOC 2 Type II auditor
+      walks up to one of our users six months after install and says <em>"show me every MCP server
+      that was granted secret access to <code>OPENAI_API_KEY</code> in the last quarter, who approved
+      each grant, and prove to me the log has not been edited."</em> Today, with the spec as written,
+      we get to ninety percent of that answer — JSONL events exist, they record the actor and the
+      outcome, they include a versioned schema — and we lose at the last ten percent, which is
+      precisely the part the auditor cares about: <em>integrity</em>. A flat append-only JSONL is not
+      tamper-evident. Any process that can write to <code>~/Library/Logs/mcpmanagerd/audit/</code>
+      can also rewrite it. That is the gap I am here to close.
+    </p>
+
+    <p>
+      The v1.0 locked decision is "Audit JSONL append-only." Good. I am not arguing against JSONL —
+      I am arguing that "append-only" without a sequence number and a hash chain is a property the
+      filesystem can enforce in name only. On macOS, the user owns the file; chflags uappnd can be
+      removed by the same user. On Linux, chattr +a requires root and is therefore not on the table
+      for a user-space daemon. The only tamper-evidence we get for free is cryptographic, and
+      cryptographic tamper-evidence is cheap: one SHA-256 per event, one monotonically increasing
+      <code>seq</code> per event, one <code>prev_hash</code> field referencing the previous line.
+      That is roughly forty bytes of overhead per event and it transforms the log from "a file we
+      hope nobody edited" into "a Merkle-style append-only ledger anyone can verify with one
+      command." This is the same construction Sigstore's Rekor transparency log uses, the same
+      construction Certificate Transparency uses, the same construction Git uses for its object
+      graph. It is not exotic. It is table stakes for any log that calls itself an audit log.
+    </p>
+
+    <h3>What "every privileged action" means in practice</h3>
+    <p>
+      I want fourteen distinct event types, no more, no fewer. The temptation in projects like this
+      is either to log too little ("we'll add events as we need them") or to log too much ("every
+      RPC call gets an audit event"). Both are wrong. Too little means the auditor cannot
+      reconstruct the security-relevant timeline. Too much means signal-to-noise collapses, log
+      files explode, and the developer experience pushes everyone toward <code>--verbose=0</code>
+      which is the same as having no log at all. The fourteen events I land on below are the ones
+      where a privilege boundary is crossed: trust granted or revoked, signature verified or
+      rejected, secret read or written, daemon started, IPC connection authenticated, sandbox
+      escape detected, install initiated, configuration changed. Every line should be an answer to
+      "what changed in the security posture?" and nothing else. Application-level telemetry
+      (tool calls, completions) belongs in a separate stream that explicitly says it is not the
+      audit log.
+    </p>
+
+    <h3>Provenance is half the audit</h3>
+    <p>
+      The other half — the half that is harder to do well — is install provenance. When
+      <code>github-mcp@1.4.2</code> appears in someone's <code>servers.toml</code> a year from now,
+      the auditor needs to know: <em>which registry did it come from? what was the package
+      content-hash at install time? which signing key signed the TUF metadata? what was the
+      <code>mcpm</code> binary's own code-signing identity when it performed the install?</em>
+      Without those four facts, "we installed github-mcp on this date" tells you nothing. With
+      those four facts, you have a forensic chain that survives a supply-chain compromise — even
+      if upstream is later revealed to have been backdoored on day N, you can prove that <em>this
+      install</em> happened on day N-30 and pulled the pre-compromise content. The provenance
+      record belongs <em>inside</em> the audit log, not next to it, because the audit log is
+      already the integrity-protected stream and duplicating that integrity guarantee for a
+      separate provenance file is wasted work.
+    </p>
+
+    <h3>Why local audit still matters even without telemetry</h3>
+    <p>
+      The v1.0 spec correctly says no vendor telemetry. I support that. But "no telemetry" does
+      not mean "no audit" — quite the opposite. Without a central log shipper, the local log
+      <em>is</em> the system of record. It must be exportable, verifiable, and structured well
+      enough that a security team can ingest it into Splunk, Elastic, or whatever SIEM they use
+      when they investigate an incident. That is what <code>mcpm audit export --format=csv|json</code>
+      is for: not exfiltration, not phone-home, but the user choosing to hand their own log to
+      their own security team when something has gone wrong, or — in the SOC 2 case — when an
+      auditor asks. The export format must match what a SIEM expects (timestamps in RFC 3339,
+      fields flattened to dotted notation, one row per event) so that the data is usable without
+      a custom parser.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments</h2>
+
+    <h3 id="vs-red-team">Against <code>red-team</code></h3>
+    <p>
+      Red-team's threat model is excellent — STRIDE, default-deny, attack trees — and I agree with
+      it. Where we part company is on the role of the audit log under attack. Red-team treats the
+      log as one of the things that must survive compromise; I treat it as the only thing that
+      must survive compromise, because every other defensive layer (sandbox, trust gate, signature
+      verification) can fail silently. The audit log is what tells you a layer failed. Red-team's
+      paper draft mentions "tamper-evident audit trail" once and moves on. I want that phrase
+      load-bearing. Specifically: when a malicious MCP attempts to read <code>~/.ssh/id_rsa</code>
+      and the sandbox blocks it, that block must produce a <code>sandbox.deny</code> event with
+      the path, the syscall, and a hash-chained sequence number. When that same MCP later succeeds
+      in convincing the user to grant it network access via the trust gate, the
+      <code>trust.grant</code> event must reference the prior <code>sandbox.deny</code> events by
+      sequence number so the auditor can see the escalation path.
+    </p>
+    <p>
+      Where red-team and I converge: the audit log is part of the threat model, not external to
+      it. An attacker who can suppress audit events is an attacker who has already won. So the
+      log file's own integrity must be a STRIDE-modeled property — Tampering, specifically — and
+      we must specify what we do about it. My answer: hash chain plus a daily "anchor" event
+      that the user can optionally email to themselves or commit to a private gist, which gives
+      retrospective tamper-evidence even if the entire log file is later rewritten.
+    </p>
+
+    <h3 id="vs-crypto-pedant">Against <code>crypto-pedant</code></h3>
+    <p>
+      Crypto-pedant will want me to specify the hash algorithm, the canonicalization rule, and
+      the signing model with surgical precision. Good. I will. SHA-256 for the chain (matches
+      Rekor, matches CT, hardware-accelerated on every modern CPU, post-quantum concerns
+      irrelevant on this timeline). JSON Canonicalization Scheme (RFC 8785) for the input bytes,
+      because if we hash the literal JSONL line as written we are hostage to the serializer's
+      whitespace and key ordering, and any pretty-printer becomes a tamper event. The
+      <code>prev_hash</code> field is the SHA-256 of the canonical form of the previous record,
+      hex-encoded lowercase, exactly 64 characters, no exceptions.
+    </p>
+    <p>
+      Where I push back on crypto-pedant: I do not want the local audit log <em>signed</em> by
+      mcpmanagerd's own ed25519 key in v1.0. Signing implies a verifying party — and the only
+      verifying party we have is the same machine, with the same key, which means an attacker
+      who roots the machine forges signatures and we have gained nothing. Hash-chaining alone
+      gives us tamper-evidence within the log; signing gains us nothing without an external
+      trust anchor. If we want external trust, that is v2.0 territory and probably involves
+      something like optional Rekor anchoring or a daily hash committed to a user-controlled
+      remote (their own GitHub gist, their own S3 bucket). For v1.0 the chain is enough; let's
+      not over-engineer.
+    </p>
+
+    <h3 id="vs-sandboxing-veteran">Against <code>sandboxing-veteran</code></h3>
+    <p>
+      Sandboxing-veteran wants Seatbelt profiles on macOS, bubblewrap or landlock on Linux, and
+      per-server network egress controls. I agree with all of it. My contribution: every sandbox
+      decision must be a logged event. Not just denials — allows too. Because the question an
+      auditor asks is not "did your sandbox block anything?" but "show me everything the sandbox
+      permitted." Without a complete record of allowed operations, a forensic investigation
+      after a breach is reduced to guesswork. So <code>sandbox.allow</code> and
+      <code>sandbox.deny</code> are both event types in my fourteen.
+    </p>
+    <p>
+      Sandboxing-veteran will rightly object that logging every sandbox decision is unworkable —
+      a single Node-based MCP can produce thousands of syscalls per second. The compromise:
+      sandbox decisions are logged at the level of <em>policy</em>, not per-syscall. When a new
+      egress destination is allowed, log it once. When a new filesystem path is touched, log it
+      once per session per path. The sandbox itself keeps a per-session bloom filter of
+      already-logged decisions and emits only the first occurrence. This gives the auditor "MCP
+      X touched paths Y, Z, W in this session" without the noise of "MCP X read Y eight thousand
+      times." Volume becomes manageable; signal stays high.
+    </p>
+
+    <h3 id="vs-secrets-architect">Against <code>secrets-architect</code></h3>
+    <p>
+      Secrets-architect's layered model — keyring for storage, env for injection at spawn, never
+      plaintext on disk — is correct, and I take no issue with it. My contribution is at the
+      seams: every secret-touching operation must be a logged event. <code>secret.set</code>,
+      <code>secret.get</code>, <code>secret.unset</code>, <code>secret.expose-to-server</code>.
+      The value is never logged. The <em>identity</em> of the secret (its name, e.g.
+      <code>OPENAI_API_KEY</code>) is logged. The <em>actor</em> (the MCP server that requested
+      it, or the user via <code>mcpm secret set</code>) is logged. The outcome — granted, denied,
+      keychain-prompt-shown, keychain-prompt-cancelled — is logged.
+    </p>
+    <p>
+      Where I will push back on secrets-architect: there is a temptation to say "secret access is
+      so high-volume we should sample." No. Secret access is the single most security-relevant
+      event in this entire system. Every read, every write, every expose-to-child-process gets a
+      line in the audit log. If that volume becomes a problem, the answer is rotation and
+      compaction, not sampling. Sampling means the next time a secret is exfiltrated the auditor
+      gets back "we logged 73% of the access attempts" and that is a job-losing sentence to put
+      in front of a SOC 2 auditor.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3 id="event-schema">14 event types — JSONL schema</h3>
+    <p>
+      Each event is one JSONL line. Required fields on every event:
+      <code>seq</code> (uint64, monotonically increasing from 1),
+      <code>ts</code> (RFC 3339 UTC with millisecond precision),
+      <code>event</code> (one of the fourteen below),
+      <code>actor</code> ({<code>kind</code>: "user"|"daemon"|"server"|"mcpm-cli",
+      <code>id</code>: string, <code>pid</code>: int?, <code>uid</code>: int?}),
+      <code>outcome</code> ("success"|"denied"|"error"),
+      <code>details</code> (event-specific object),
+      <code>prev_hash</code> (hex SHA-256 of canonical previous record, all-zeros for seq=1),
+      <code>v</code> (schema version, "1" for v1.0).
+    </p>
+
+    <table class="comparison">
+      <thead><tr><th>#</th><th>Event</th><th>Trigger</th><th>Required details</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>daemon.start</code></td><td>mcpmanagerd boot</td><td>binary_hash, binary_signing_id, version, cargo_lock_hash</td></tr>
+        <tr><td>2</td><td><code>daemon.stop</code></td><td>mcpmanagerd shutdown</td><td>reason, uptime_s</td></tr>
+        <tr><td>3</td><td><code>ipc.connect</code></td><td>UDS accept</td><td>peer_pid, peer_uid, peer_path, allowed</td></tr>
+        <tr><td>4</td><td><code>trust.grant</code></td><td>user approves project</td><td>project_path, scope, expires_at, prompt_id</td></tr>
+        <tr><td>5</td><td><code>trust.revoke</code></td><td>user or expiry</td><td>project_path, reason</td></tr>
+        <tr><td>6</td><td><code>install.start</code></td><td>mcpm install</td><td>registry, package, version_constraint, requested_by</td></tr>
+        <tr><td>7</td><td><code>install.verify</code></td><td>signature check</td><td>package, version, content_sha256, signing_key_id, tuf_root_version</td></tr>
+        <tr><td>8</td><td><code>install.commit</code></td><td>install complete</td><td>package, version, content_sha256, install_path</td></tr>
+        <tr><td>9</td><td><code>secret.set</code></td><td>keyring write</td><td>name, backend (keychain/secret-service/file), scope</td></tr>
+        <tr><td>10</td><td><code>secret.get</code></td><td>keyring read</td><td>name, requested_by, granted</td></tr>
+        <tr><td>11</td><td><code>secret.unset</code></td><td>keyring delete</td><td>name, backend</td></tr>
+        <tr><td>12</td><td><code>server.spawn</code></td><td>MCP launched</td><td>server_id, binary_hash, sandbox_profile, env_keys (names only)</td></tr>
+        <tr><td>13</td><td><code>sandbox.deny</code></td><td>policy-block</td><td>server_id, operation, target, reason</td></tr>
+        <tr><td>14</td><td><code>config.change</code></td><td>servers.toml mutation</td><td>path, diff_hash, actor</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Two things to call out. First, <code>secret.get</code> records the name and the requester
+      but never the value, never even a hash of the value (because the keyspace is small enough
+      that a SHA-256 of an API key is a plausible brute-force target — log the identity, not the
+      material). Second, <code>install.verify</code> is the single most important event in the
+      log for supply-chain forensics: it captures the content hash, the signing key, and the TUF
+      root version at the moment of install, which is the entire forensic chain anyone will need
+      a year from now when they ask "did we ship the backdoored version of github-mcp?"
+    </p>
+
+    <h3 id="hash-chain">Hash-chain construction</h3>
+    <p>
+      The chain is constructed as follows. For each event record <code>R_n</code>:
+    </p>
+    <ol>
+      <li>Serialize <code>R_n</code> minus the <code>prev_hash</code> field to canonical JSON per
+        RFC 8785 (sorted keys, no insignificant whitespace, UTF-8).</li>
+      <li>Compute <code>H_n = SHA256(canonical_bytes_of_R_n_without_prev_hash || prev_hash_bytes)</code>
+        where <code>prev_hash_bytes</code> is the 32-byte raw hash of the previous record
+        (or 32 zero bytes if <code>seq == 1</code>).</li>
+      <li>Set <code>R_n.prev_hash = hex(H_{n-1})</code> for the next record; write
+        <code>R_n</code> as a single JSONL line.</li>
+      <li>fsync the line to disk. Audit events are durable before the operation that triggered
+        them is acknowledged to the caller — a denied operation that does not show up in the log
+        is worse than a denied operation that does not happen.</li>
+    </ol>
+    <p>
+      The fsync-before-ack rule matters more than it looks. If we ack a privileged operation
+      before its audit event hits stable storage, then a crash between ack and write produces a
+      missing event, and the chain stays intact only because the next event will reference the
+      last successfully written hash. That is fine for liveness but bad for forensics — there is
+      now an undetectable gap. Write-then-ack closes that gap.
+    </p>
+
+    <h3 id="verify-tool"><code>mcpm audit verify</code></h3>
+    <p>
+      One CLI command, no flags by default, verifies the entire chain in the user's audit
+      directory. Algorithm:
+    </p>
+    <ol>
+      <li>Walk audit log files in <code>seq</code>-ascending order
+        (<code>audit-0000001-0099999.jsonl</code>, <code>audit-0100000-0199999.jsonl</code>, ...).</li>
+      <li>For each record, recompute the canonical hash; compare against the
+        <code>prev_hash</code> stored in the <em>next</em> record.</li>
+      <li>Verify <code>seq</code> increases by exactly 1 across records and across file
+        boundaries.</li>
+      <li>Verify <code>ts</code> is monotonically non-decreasing (clock skew protection).</li>
+      <li>On any mismatch, print the seq, the expected hash, the observed hash, and exit with
+        code 2 (chain broken). On success, print the seq of the first and last records, the
+        terminal hash, and exit 0.</li>
+    </ol>
+    <p>
+      The tool is intentionally simple and offline. No network, no signing key needed. An
+      auditor with the JSONL files and a copy of <code>mcpm</code> (or just <code>jq</code> and
+      <code>sha256sum</code>; we will document the verification recipe in plain text) can
+      reproduce the result. <code>mcpm audit verify --json</code> emits a structured report
+      suitable for ingestion into a SIEM.
+    </p>
+
+    <h3 id="rotation">Rotation strategy</h3>
+    <p>
+      Rotation cannot break the chain. The rule: rotate by record count, not by file size or
+      time. Every 100,000 records, close the current file and open
+      <code>audit-NNNNNNN-MMMMMMM.jsonl</code> where N is the first seq in the file and M is
+      the last. The <em>first</em> record of the new file still carries the <code>prev_hash</code>
+      of the last record in the previous file, so the chain spans rotations transparently. Old
+      files are never deleted by the daemon; <code>mcpm audit prune --before=2025-01-01</code>
+      is the user's explicit action, and the prune itself emits an event (event #14
+      <code>config.change</code> with details <code>{"action": "audit-prune", "before": "..."}</code>)
+      <em>before</em> the files are removed, so the next-generation log retains the breadcrumb
+      that earlier history was discarded.
+    </p>
+    <p>
+      Storage budget: at average ~500 bytes per record (verified empirically against the
+      schema above), 100,000 records is roughly 50 MB per file. A heavy user generating 1,000
+      audit events per day will rotate every ~100 days and accumulate ~180 MB per year. Light
+      users will produce ~5 MB per year. Both are within reason; neither needs compression in
+      v1.0. (Compression of rotated-out files is a v1.1 nice-to-have.)
+    </p>
+
+    <h3 id="export">Compliance export format</h3>
+    <p>
+      <code>mcpm audit export --format=json --since=2025-01-01 --until=2025-03-31 --out=q1-2025.json</code>
+      produces a SIEM-friendly file. The JSON variant is an array of records, fields flattened
+      (no nested <code>actor</code> object — instead <code>actor.kind</code>,
+      <code>actor.id</code>, etc. as top-level keys), timestamps in RFC 3339 with explicit
+      <code>Z</code> suffix, and a header object at index 0 with the chain's terminal hash and
+      the verification status at export time. The CSV variant uses the same flattened keys as
+      column headers, with nested <code>details</code> JSON-encoded into a single
+      <code>details_json</code> column (acceptable per OWASP's logging guidance because the
+      structured fields auditors filter on — actor, outcome, event, ts — are first-class
+      columns).
+    </p>
+    <p>
+      The export also emits a sidecar <code>q1-2025.manifest.json</code> with the export's own
+      SHA-256, the seq range, the source machine identifier (hostname, not a stable user id),
+      and the <code>mcpm</code> version. The manifest is what an auditor signs off on; the
+      JSON/CSV is what their SIEM ingests. This two-file convention matches what FedRAMP
+      assessors expect when they receive evidence packages.
+    </p>
+
+    <h3 id="anchor">Optional daily anchor (note for v1.0)</h3>
+    <p>
+      One thing I want in v1.0 but will accept as a v1.1 if scope is tight: a daily
+      <code>audit.anchor</code> event that contains the previous day's terminal hash and the
+      record-count range. Users who care about defense-in-depth can configure mcpmanagerd to
+      <em>also</em> write each anchor line to a path of their choosing — a Dropbox folder, an
+      iCloud Drive folder, a private GitHub gist they own. That gives external tamper-evidence
+      without any vendor telemetry: the user themselves is the offsite party. The anchor itself
+      is one extra event per day, ~200 bytes, no integration cost. Specifying it now even if
+      we ship it later means the schema version stays at "1" rather than churning.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li><a href="https://www.aicpa-cima.com/topic/audit-assurance/audit-and-assurance-greater-than-soc-2">AICPA — SOC 2 Trust Services Criteria (CC7.2 system monitoring, audit logging)</a></li>
+      <li><a href="https://www.iso.org/standard/27001">ISO/IEC 27001:2022 — Annex A.12.4 Logging and monitoring</a></li>
+      <li><a href="https://csrc.nist.gov/publications/detail/sp/800-92/final">NIST SP 800-92 — Guide to Computer Security Log Management</a></li>
+      <li><a href="https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html">OWASP Logging Cheat Sheet</a></li>
+      <li><a href="https://docs.sigstore.dev/logging/overview/">Sigstore Rekor — transparency log construction</a></li>
+      <li><a href="https://datatracker.ietf.org/doc/html/rfc6962">RFC 6962 — Certificate Transparency (Merkle hash-chain reference)</a></li>
+      <li><a href="https://datatracker.ietf.org/doc/html/rfc8785">RFC 8785 — JSON Canonicalization Scheme (JCS)</a></li>
+      <li><a href="https://datatracker.ietf.org/doc/html/rfc3339">RFC 3339 — Date and Time on the Internet: Timestamps</a></li>
+      <li><a href="https://man7.org/linux/man-pages/man8/auditd.8.html">Linux auditd(8) — kernel audit subsystem (event-stream design reference)</a></li>
+      <li><a href="https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search#!/control?version=5.1&number=AU-10">NIST SP 800-53 Rev 5 — AU-10 Non-repudiation, AU-9 Protection of audit information</a></li>
+      <li><a href="https://www.fedramp.gov/assets/resources/documents/CSP_Continuous_Monitoring_Strategy_Guide.pdf">FedRAMP Continuous Monitoring Strategy Guide — evidence package conventions</a></li>
+      <li><a href="https://datatracker.ietf.org/doc/html/rfc6234">RFC 6234 — SHA-256 specification</a></li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

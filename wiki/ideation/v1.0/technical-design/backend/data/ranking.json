@@ -1,0 +1,100 @@
+{
+  "title": "How each backend stance scores against the v1.0 priorities. Drag the sliders to re-weight.",
+  "options": [
+    "agent-tokio-pragmatist",
+    "agent-systems-veteran",
+    "agent-library-author",
+    "agent-kernel-hacker",
+    "agent-boring-tech-defender"
+  ],
+  "criteria": [
+    { "key": "simplicity",            "label": "Simplicity",            "weight": 0.20 },
+    { "key": "reliability",           "label": "Reliability",           "weight": 0.25 },
+    { "key": "performance",           "label": "Performance",           "weight": 0.15 },
+    { "key": "api_stability",         "label": "API stability",         "weight": 0.15 },
+    { "key": "supply_chain",          "label": "Supply-chain hygiene",  "weight": 0.10 },
+    { "key": "developer_ergonomics",  "label": "Developer ergonomics",  "weight": 0.15 }
+  ],
+  "scores": {
+    "agent-tokio-pragmatist": {
+      "simplicity":           3,
+      "reliability":          4,
+      "performance":          4,
+      "api_stability":        3,
+      "supply_chain":         4,
+      "developer_ergonomics": 5,
+      "_evidence": {
+        "simplicity":           ["../agent-tokio-pragmatist.html#design"],
+        "reliability":          ["../agent-tokio-pragmatist.html#design"],
+        "performance":          ["../agent-tokio-pragmatist.html#design"],
+        "api_stability":        ["../agent-tokio-pragmatist.html#vs-library-author"],
+        "supply_chain":         ["../agent-tokio-pragmatist.html#design"],
+        "developer_ergonomics": ["../agent-tokio-pragmatist.html#design"]
+      }
+    },
+    "agent-systems-veteran": {
+      "simplicity":           2,
+      "reliability":          5,
+      "performance":          3,
+      "api_stability":        4,
+      "supply_chain":         4,
+      "developer_ergonomics": 3,
+      "_evidence": {
+        "simplicity":           ["../agent-systems-veteran.html#design"],
+        "reliability":          ["../agent-systems-veteran.html#design"],
+        "performance":          ["../agent-systems-veteran.html#design"],
+        "api_stability":        ["../agent-systems-veteran.html#vs-library"],
+        "supply_chain":         ["../agent-systems-veteran.html#design"],
+        "developer_ergonomics": ["../agent-systems-veteran.html#design"]
+      }
+    },
+    "agent-library-author": {
+      "simplicity":           3,
+      "reliability":          3,
+      "performance":          3,
+      "api_stability":        5,
+      "supply_chain":         5,
+      "developer_ergonomics": 4,
+      "_evidence": {
+        "simplicity":           ["../agent-library-author.html#design"],
+        "reliability":          ["../agent-library-author.html#design"],
+        "performance":          ["../agent-library-author.html#design"],
+        "api_stability":        ["../agent-library-author.html#design"],
+        "supply_chain":         ["../agent-library-author.html#design"],
+        "developer_ergonomics": ["../agent-library-author.html#design"]
+      }
+    },
+    "agent-kernel-hacker": {
+      "simplicity":           1,
+      "reliability":          5,
+      "performance":          5,
+      "api_stability":        2,
+      "supply_chain":         2,
+      "developer_ergonomics": 2,
+      "_evidence": {
+        "simplicity":           ["../agent-kernel-hacker.html#design"],
+        "reliability":          ["../agent-kernel-hacker.html#design-oom-v2"],
+        "performance":          ["../agent-kernel-hacker.html#design"],
+        "api_stability":        ["../agent-kernel-hacker.html#vs-library"],
+        "supply_chain":         ["../agent-kernel-hacker.html#vs-boring"],
+        "developer_ergonomics": ["../agent-kernel-hacker.html#design"]
+      }
+    },
+    "agent-boring-tech-defender": {
+      "simplicity":           5,
+      "reliability":          3,
+      "performance":          3,
+      "api_stability":        3,
+      "supply_chain":         5,
+      "developer_ergonomics": 4,
+      "_evidence": {
+        "simplicity":           ["../agent-boring-tech-defender.html#design"],
+        "reliability":          ["../agent-boring-tech-defender.html#design"],
+        "performance":          ["../agent-boring-tech-defender.html#design"],
+        "api_stability":        ["../agent-boring-tech-defender.html#design"],
+        "supply_chain":         ["../agent-boring-tech-defender.html#design"],
+        "developer_ergonomics": ["../agent-boring-tech-defender.html#design"]
+      }
+    }
+  }
+}

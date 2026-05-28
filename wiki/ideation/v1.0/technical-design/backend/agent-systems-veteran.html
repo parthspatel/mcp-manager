@@ -1,0 +1,861 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Systems Veteran — Backend deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">backend · systems-veteran</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">backend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+<main class="container">
+  <h1>The Systems Veteran's Backend</h1>
+  <p class="lede">
+    Every I/O fails. Power dies mid-<code>write(2)</code>. The user pulls the laptop lid down between
+    <code>rename(2)</code> and the directory <code>fsync(2)</code>. <code>mcpmanagerd</code> gets <code>SIGKILL</code>'d
+    while a child PID is half-spawned. <strong>None of this is exotic.</strong> A v1.0 daemon that intends to live across
+    laptop sleeps, OS upgrades, and the inevitable <code>kill -9</code> needs the same discipline the database people
+    figured out four decades ago: make the state machine explicit, the journal append-only, and recovery a
+    tested code path.
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts — what scares me about the v1.0 spec</a></li>
+      <li><a href="#arguments">Arguments against my peers</a>
+        <ul>
+          <li><a href="#vs-tokio">vs. tokio-pragmatist</a></li>
+          <li><a href="#vs-library">vs. library-author</a></li>
+          <li><a href="#vs-kernel">vs. kernel-hacker</a></li>
+          <li><a href="#vs-boring">vs. boring-tech-defender</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design — sans-I/O cores, event journal, recovery</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      I have shipped daemons. Several. The one habit I notice in every codebase that survives more than two
+      years is that the people who wrote it eventually wrote a <em>recovery loop</em> — a function that takes
+      the on-disk state and reconstructs the in-memory state from scratch — and they ran it on every cold
+      start, not just after a crash. Codebases that did not do this slowly accumulated drift: in-memory
+      structures whose only ground-truth was "what the previous process happened to mutate". Those
+      codebases eventually develop a class of bug nobody wants to debug: "we restarted, and now the
+      audit log says we own a PID that doesn't exist".
+    </p>
+
+    <p>
+      The v1.0 spec is broadly excellent and the lockdown choices are pragmatic. But reading
+      <a href="../../technical-design.html">technical-design.html</a> with my paranoid hat on, three
+      things scare me, in increasing order:
+    </p>
+
+    <ol>
+      <li>
+        <strong>The supervisor's state is implicit in tokio task graphs.</strong> "One tokio task per
+        managed process" (per-crate table) is fine until <code>mcpmanagerd</code> restarts. What is
+        the source of truth that says "before the restart, github-mcp had refcount=3, idle timer
+        firing at T+1700s, restart-attempt counter at 2 within the last window"? Tokio tasks die
+        with the process. The audit log captures the events but it's append-only JSONL, not a queryable
+        projection. If we don't <em>replay</em> the journal to rebuild that supervisor state on
+        boot, we have just signed up for a class of subtle bugs that show up only after laptop sleep,
+        OS upgrade, or daemon segfault — exactly the cases v1.0 promises auto-spawn covers.
+      </li>
+      <li>
+        <strong>"Atomic temp-rename" is necessary but not sufficient for config writes.</strong> Flow A
+        says <code>mcpm-core</code> writes the canonical config via temp-rename. POSIX
+        <code>rename(2)</code> atomicity does not transitively guarantee durability across crashes
+        unless we <code>fsync</code> the <em>directory</em> after the rename<sup><a href="#cite-lwn">[1]</a></sup>.
+        A laptop lid-close after the rename but before the directory entry hits disk leaves
+        you with the old file. This is the bug every node-write-file-atomic clone has rediscovered.
+      </li>
+      <li>
+        <strong>OOM detection, restart backoff, and the singleton refcount are three independent
+        state machines, but the spec sketches them as procedural flow.</strong> Flow D ("crash →
+        restart with backoff"), Flow B step 9 (idle TTL), and the OOM table all interact: an OOM kill
+        increments the restart counter, which may push the server into <code>failed</code>, which
+        must clear the idle timer, which must surface in the TUI's <code>server.list</code> snapshot.
+        Right now these read like prose. They need to be one explicit
+        <code>enum ServerState</code> with all valid transitions enumerated and a
+        property test that fuzzes the transitions and asserts invariants.
+      </li>
+    </ol>
+
+    <p>
+      My worldview: a daemon is a state machine plus an I/O wrapper. Build the state machine first,
+      make it pure (no <code>.await</code>, no <code>tokio::process</code>), property-test the hell
+      out of it, then wrap it. This is the <strong>sans-I/O</strong> discipline that
+      Brett Cannon documented for Python protocols<sup><a href="#cite-sans-io">[2]</a></sup> and
+      that the <code>hyperium/h2</code> crate adopted at the heart of Rust's HTTP/2
+      stack<sup><a href="#cite-h2-state">[3]</a></sup>. The runtime — tokio in our case — is a transport,
+      not the architecture.
+    </p>
+
+    <p>
+      Pair that with an <strong>event journal</strong>: every state transition is appended to an
+      on-disk log before the in-memory state advances. Restart = replay. This is older than ARIES
+      and the database literature spelled it out in detail in 1992<sup><a href="#cite-aries">[4]</a></sup>;
+      SQLite's WAL mode is the same idea applied to a single file<sup><a href="#cite-sqlite-wal">[5]</a></sup>.
+      We are not building a database, but we are building a daemon that promises lifecycle
+      coherence across crashes, and the same primitives apply at a smaller scale.
+    </p>
+
+    <p>
+      My peers will accuse me of over-engineering for a 10s-of-MCPs scale. That criticism is
+      reasonable in shape but wrong in detail. Sans-I/O cores and event journals are not a
+      <em>cost</em> at v1.0 — they're a structure that makes everything else easier. They turn
+      crash-recovery from a hope into a <code>cargo test</code> target. They let
+      <code>tokio-pragmatist</code>'s tower middlewares run on top of a state machine they can't
+      corrupt. They let <code>library-author</code> publish <code>mcpm-protocol</code> as a stable
+      surface because the protocol's state machine is a typed crate, not a memo. And they cost
+      maybe 800 LoC across <code>mcpm-core</code> and <code>mcpm-supervisor</code>.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments</h2>
+
+    <h3 id="vs-tokio">Against tokio-pragmatist</h3>
+
+    <p>
+      My pragmatist colleague will reach for tokio + tower + tracing and lean on idiom: <code>tokio::spawn</code>
+      per supervised child, <code>tokio::select!</code> on the child's exit + idle timer + shutdown signal,
+      a layered tower service for the JSON-RPC handlers. I agree with every individual choice. I disagree
+      with the implied architecture.
+    </p>
+
+    <p>
+      The pragmatist's <code>tokio::select!</code> is where state goes to die. When you write
+    </p>
+
+    <pre><code>tokio::select! {
+    result = child.wait()       =&gt; on_child_exit(result),
+    _      = idle_timer.tick()  =&gt; on_idle(),
+    _      = shutdown.cancelled() =&gt; on_shutdown(),
+}</code></pre>
+
+    <p>
+      …you have just stuffed a state machine into a future and made it inaccessible to everything
+      else. The refcount lives in some shared <code>Arc&lt;Mutex&lt;HashMap&lt;…&gt;&gt;&gt;</code>; the
+      idle-timer cancellation lives in the local task; the "is this server in the middle of being
+      restarted" boolean lives in a third place. After a <code>mcpmanagerd</code> restart, none of
+      this is on disk. Tokio docs themselves note that cancellation safety is subtle and that
+      graceful shutdown across many tasks requires explicit <code>CancellationToken</code>
+      plumbing<sup><a href="#cite-tokio-shutdown">[6]</a></sup> — which is the smell that the state
+      is in the wrong place.
+    </p>
+
+    <p>
+      The fix is to flip the polarity. <code>mcpm-supervisor</code> exposes a pure
+      <code>Supervisor</code> struct whose method signatures are
+      <code>fn on_child_exit(&amp;mut self, id, status) -&gt; Vec&lt;Action&gt;</code>,
+      <code>fn on_tick(&amp;mut self, now) -&gt; Vec&lt;Action&gt;</code>,
+      <code>fn on_exec_request(&amp;mut self, server) -&gt; Vec&lt;Action&gt;</code>. <code>Action</code> is
+      an enum: <code>SpawnChild</code>, <code>SendSignal(pid, signal)</code>, <code>StartIdleTimer(id, secs)</code>,
+      <code>CancelIdleTimer(id)</code>, <code>MarkFailed(id, reason)</code>, <code>AppendJournal(entry)</code>.
+      A thin tokio shell turns those <code>Action</code>s into actual syscalls and timers. The
+      pragmatist's <code>tokio::select!</code> still exists — it just becomes a dumb dispatch loop
+      that drains an action queue. The state machine itself is testable without spawning a process.
+    </p>
+
+    <p>
+      That's the
+      <code>hyperium/h2</code> playbook: the connection state machine lives in
+      <code>proto/streams/state.rs</code> as a pure enum, and the tokio-aware I/O layer drives it
+      with bytes-in / bytes-out<sup><a href="#cite-h2-state">[3]</a></sup>. We get cancellation
+      safety for free because the state machine doesn't await anything. We get property tests for
+      free because the state machine is a function.
+    </p>
+
+    <p>
+      See also <a href="./agent-tokio-pragmatist.html#design">tokio-pragmatist's design</a> — I expect
+      we'll converge on "yes, tokio runs the shell; the kernel of supervision is pure".
+    </p>
+
+    <h3 id="vs-library">Against library-author</h3>
+
+    <p>
+      Library-author wants <code>mcpm-protocol</code> tiny, stable, <code>#[non_exhaustive]</code>,
+      semver-disciplined. Good. I want all of that <em>plus</em> a property: every wire enum has a
+      corresponding state-machine enum in <code>mcpm-core</code> or <code>mcpm-supervisor</code>,
+      and the relationship is enforced by a test rather than memorized by humans. The wire schema
+      is a projection of internal state; if the projection drifts, debugging is hell.
+    </p>
+
+    <p>
+      The specific risk: library-author's instinct is to define <code>ServerStatus</code> as a flat
+      enum in <code>mcpm-protocol</code> — say
+      <code>{ Stopped, Running, Failed, OomKilled }</code> — and let the daemon map its internal
+      state onto it. That mapping is the bug-farm. Internally we'll have a richer state with
+      attempt counters, idle deadlines, and "this server is mid-restart" flags. Squashing all of
+      that to four variants for the wire is fine, but only if the squash is a typed
+      <code>impl From&lt;internal::ServerState&gt; for protocol::ServerStatus</code> with
+      exhaustive pattern matching. A property test compares "internal state after N journal-replay
+      events" against "wire status returned from <code>server.list</code>" and asserts the mapping
+      is total.
+    </p>
+
+    <p>
+      I also want a <strong>wire-level conformance test</strong> driven by the journal. Every
+      protocol method has a property: "if the daemon is in state S, and method M is called with args
+      A, the result R and journal-delta J are deterministic functions of (S, M, A)". Property-test
+      that with <code>proptest</code>, including the streaming
+      <code>logs.tail</code> handler<sup><a href="#cite-proptest">[7]</a></sup>. This protects
+      library-author's stable-surface promise: the protocol doesn't drift because the
+      <em>semantics</em> are pinned in tests, not just the wire shape.
+    </p>
+
+    <p>
+      The disagreement is a small one: library-author thinks discipline around the wire types is
+      enough. I think the wire types are a window onto the state machine, and you need to
+      property-test the window — otherwise you ship a stable wire that means slightly different
+      things in different versions. Cross-ref:
+      <a href="./agent-library-author.html#design">library-author's design</a>.
+    </p>
+
+    <h3 id="vs-kernel">Against kernel-hacker</h3>
+
+    <p>
+      Kernel-hacker will fight for cgroupv2 memory.events, eBPF for tracing, RLIMIT_AS fallbacks,
+      and macOS jetsam heuristics — all of which v1.0 already specifies (Flow D). We agree on
+      the primitives. We disagree on where they live in the architecture.
+    </p>
+
+    <p>
+      Kernel-hacker's instinct is to embed the OOM-detection logic in the supervisor task — a tokio
+      task per child that calls <code>inotify_init1</code> or <code>kqueue</code>, parses the cgroup
+      event stream, and decides "this was OOM, increment the restart counter". I want that logic in
+      a pure function:
+    </p>
+
+    <pre><code>// in mcpm-supervisor, sans-I/O core
+pub fn classify_exit(
+    exit_status: ExitStatus,
+    oom_signal:  Option&lt;OomEvidence&gt;,   // gathered by the I/O layer
+    last_rss_pct: Option&lt;u8&gt;,
+    pressure_recent: bool,
+) -&gt; ExitClass {
+    use ExitClass::*;
+    match (exit_status.signal(), oom_signal) {
+        (Some(libc::SIGKILL), Some(OomEvidence::Cgroup)) =&gt; OomKill,
+        (Some(libc::SIGKILL), None) if pressure_recent
+            &amp;&amp; last_rss_pct.is_some_and(|p| p &gt; 80)        =&gt; ProbableOom,
+        (Some(libc::SIGKILL), _)                            =&gt; UnknownKill,
+        (Some(sig), _)                                      =&gt; Signal(sig),
+        (None, _) if exit_status.success()                  =&gt; CleanExit,
+        (None, _)                                           =&gt; ErrorExit(exit_status.code()),
+    }
+}</code></pre>
+
+    <p>
+      That's the entire macOS jetsam heuristic from Flow D, but it's a pure function I can
+      property-test with all 2<sup>4</sup>=16 combinations of inputs, including the cases the spec
+      doesn't enumerate ("what if cgroup reports OOM but the exit was SIGSEGV?"). The I/O layer's
+      job is just to populate <code>OomEvidence</code>. Kernel-hacker's instinct lumps these
+      together; my instinct splits them so the policy is testable and the platform-specific
+      I/O is swappable.
+    </p>
+
+    <p>
+      The same logic applies to backoff: <code>mcpm-supervisor</code>'s pure core computes
+      <code>fn next_delay(attempt: u32, base: Duration, cap: Duration, jitter: f64) -&gt; Duration</code>.
+      It doesn't <code>sleep</code>; it returns a number. The I/O layer turns that number into a
+      <code>tokio::time::sleep</code>. Property test: for any <code>(attempt, base, cap, jitter)</code>,
+      the result is in <code>[0, cap]</code> and is monotonically non-decreasing across attempts
+      (within the jitter window). That's the kind of invariant kernel-hacker thinks is "obvious"
+      until a misplaced minus sign turns the backoff negative and you get a tight respawn loop on
+      a customer's machine.
+    </p>
+
+    <p>
+      Cross-ref: <a href="./agent-kernel-hacker.html#design">kernel-hacker's design</a> — we will
+      agree on the syscalls; I want them living behind a pure decision layer.
+    </p>
+
+    <h3 id="vs-boring">Against boring-tech-defender</h3>
+
+    <p>
+      Boring-tech-defender will argue: line-delimited JSON over UDS, no journal, no state machine,
+      just a hash map and rewrite the config file when it changes. <em>Ship it.</em> I respect the
+      instinct. It's wrong specifically for the parts where the spec already commits to consistency.
+    </p>
+
+    <p>
+      The v1.0 spec already has CAS-style <code>prior_hash</code> guards on <code>config.put</code>
+      (decision #6, resolved 2026-05-24). That's a small piece of optimistic concurrency control
+      bolted onto the config layer. It only works if <code>config.get</code> returns a hash that
+      remains valid until the next mutation. Without a journal — without a serialized stream of
+      "config mutated at this hash → that hash" — two concurrent writers can each observe the same
+      <code>prior_hash</code>, both pass the CAS check, and the second write silently wins. The
+      spec says "atomic temp-rename" prevents that, which is true on a single host with a single
+      filesystem if and only if we hold an OS file lock during the read-hash-write sequence. The
+      journal is a cleaner primitive: every config change appends a journal entry under a daemon-held
+      lock, and <code>prior_hash</code> is the LSN of the last entry. The boring solution becomes
+      the correct solution.
+    </p>
+
+    <p>
+      The other place boring-tech-defender's instinct breaks is the audit log itself. The spec
+      already commits to append-only JSONL with daily rotation. Congratulations — we have a journal.
+      It just doesn't have a schema for "this is a state transition the daemon must replay on
+      restart". My ask is small: reserve a subset of the audit log's <code>event</code> field for
+      <em>state-machine</em> events (server.spawn, server.stop, server.refcount-delta,
+      server.restart-scheduled), and define recovery as "replay all such events since the last
+      checkpoint". This costs maybe 200 lines of code on top of what the spec already specifies.
+    </p>
+
+    <p>
+      I will concede this: we do not need RocksDB, sled, or a real WAL implementation. JSONL +
+      <code>fsync</code> + directory-fsync after rotation is enough for 10s of MCPs at v1.0 scale.
+      Boring stack, principled use. Cross-ref:
+      <a href="./agent-boring-tech-defender.html#design">boring-tech-defender's design</a>.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3>1. Sans-I/O cores in two crates</h3>
+
+    <p>
+      Two crates get explicit sans-I/O cores. Everything else is glue.
+    </p>
+
+    <table class="compare">
+      <thead><tr><th>Crate</th><th>Pure core</th><th>I/O shell (separate file in same crate)</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>mcpm-core</code></td>
+          <td>
+            Config validation (<code>fn validate(toml: &amp;str) -&gt; Result&lt;ConfigDoc, Vec&lt;Diag&gt;&gt;</code>);
+            CAS guard logic (<code>fn check_prior(hash, doc) -&gt; CasOutcome</code>);
+            journal-event projection (<code>fn project(events: &amp;[JournalEvent]) -&gt; CoreState</code>);
+            lockfile resolution (<code>fn resolve(config, registry_snapshot) -&gt; Lockfile</code>).
+          </td>
+          <td>
+            <code>fs.rs</code> — atomic-write with directory-fsync; mmap of the audit JSONL; tokio
+            stream that decodes the file into <code>JournalEvent</code>s for projection.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-supervisor</code></td>
+          <td>
+            <code>enum ServerState</code> (below); <code>fn step(state, event) -&gt; (NewState, Vec&lt;Action&gt;)</code>;
+            <code>fn next_delay(attempt, …) -&gt; Duration</code>; <code>fn classify_exit(…) -&gt; ExitClass</code>;
+            <code>fn refcount_delta(state, delta) -&gt; (NewState, Vec&lt;Action&gt;)</code>.
+          </td>
+          <td>
+            <code>process.rs</code> — <code>tokio::process::Command</code>; cgroup setup; signal delivery;
+            <code>journal.rs</code> — appends the journal entries the pure core emits.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      <em>No</em> <code>tokio::spawn</code> inside the pure-core modules. <em>No</em>
+      <code>async fn</code>. The pure cores expose synchronous functions that operate on
+      <code>&amp;mut Self</code> and emit <code>Vec&lt;Action&gt;</code>. The shell drains the action
+      queue against tokio.
+    </p>
+
+    <h3>2. Explicit state types</h3>
+
+    <p>
+      The supervisor's <code>ServerState</code> is the load-bearing type. Yoshua Wuyts' state-machine
+      essays in Rust make a strong case for enum-based modeling
+      with explicit transitions<sup><a href="#cite-state-enum">[8]</a></sup>; we follow that
+      shape verbatim. Stable variant tags are critical because the journal serializes them.
+    </p>
+
+    <pre><code>// mcpm-supervisor/src/state.rs (sans-I/O)
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServerState {
+    Stopped,
+    Starting   { spawn_id: SpawnId, attempt: u32, started_at: Timestamp },
+    Running    { spawn_id: SpawnId, pid: u32, refcount: u32,
+                 idle_deadline: Option&lt;Timestamp&gt;, last_rss_kib: Option&lt;u64&gt; },
+    Restarting { spawn_id: SpawnId, attempt: u32, backoff_until: Timestamp,
+                 last_exit: ExitClass },
+    Failed     { reason: FailureReason, attempts: u32, window_start: Timestamp },
+}
+
+#[derive(Debug, Clone)]
+pub enum Event {
+    SpawnRequested { client_id: ClientId, server: ServerName, now: Timestamp },
+    SpawnSucceeded { spawn_id: SpawnId, pid: u32, now: Timestamp },
+    SpawnFailed    { spawn_id: SpawnId, error: SpawnError, now: Timestamp },
+    ChildExited    { spawn_id: SpawnId, class: ExitClass, now: Timestamp },
+    RefcountInc    { spawn_id: SpawnId, client_id: ClientId, now: Timestamp },
+    RefcountDec    { spawn_id: SpawnId, client_id: ClientId, now: Timestamp },
+    IdleFired      { spawn_id: SpawnId, now: Timestamp },
+    StopRequested  { spawn_id: SpawnId, graceful: bool, now: Timestamp },
+    BackoffElapsed { spawn_id: SpawnId, now: Timestamp },
+}
+
+#[derive(Debug, Clone)]
+pub enum Action {
+    SpawnChild      { server: ServerName, env: EnvSnapshot, isolation: IsolationProfile,
+                      spawn_id: SpawnId },
+    SignalChild     { pid: u32, signal: i32 },
+    StartIdleTimer  { spawn_id: SpawnId, fires_at: Timestamp },
+    CancelIdleTimer { spawn_id: SpawnId },
+    StartBackoffTimer { spawn_id: SpawnId, fires_at: Timestamp },
+    AppendJournal   { entry: JournalEntry },
+    NotifyClient    { client_id: ClientId, outcome: ClientOutcome },
+}
+
+pub fn step(state: ServerState, event: Event, policy: &amp;Policy) -&gt; (ServerState, Vec&lt;Action&gt;) {
+    // exhaustive match. Every (state, event) pair is handled or explicitly rejected.
+    // No tokio. No I/O. Just data → data.
+    …
+}</code></pre>
+
+    <p>
+      The <code>Policy</code> argument bundles the per-server config (idle_ttl_secs, restart attempts_max,
+      window_secs, singleton, memory_max_mb). It's read-only from the state machine's perspective.
+    </p>
+
+    <h3>3. Event-journal schema (re-using <code>mcpm-logs</code>)</h3>
+
+    <p>
+      The spec already promises an append-only JSONL audit log
+      (<code>$XDG_STATE_HOME/mcpmanagerd/audit/YYYY-MM-DD.jsonl</code>). We reuse it. We carve a
+      sub-namespace of <code>event</code> values that the supervisor's recovery loop replays. The
+      audit log gains a single new field — <code>lsn</code>, a monotonic 64-bit counter — to give
+      every event a stable identity:
+    </p>
+
+    <pre><code>{
+  "ts":   "2026-05-24T19:15:02.413891Z",
+  "lsn":  17394021,
+  "event":"supervisor.spawn_succeeded",   // namespace: supervisor.*  ← replayable
+  "actor":{ "kind":"internal" },
+  "server":"github-mcp",
+  "outcome":"ok",
+  "details":{
+    "spawn_id":"01J9KX2H8…",              // ULID
+    "pid": 84219,
+    "attempt": 0,
+    "isolation":"devenv",
+    "env_hash":"sha256:abcd…"             // hash of the resolved env map, not the env itself
+  },
+  "v":1
+}</code></pre>
+
+    <p>
+      <strong>Replayable events</strong> (<code>supervisor.*</code> namespace): spawn_requested,
+      spawn_succeeded, spawn_failed, child_exited, refcount_inc, refcount_dec, idle_scheduled,
+      idle_cancelled, idle_fired, restart_scheduled, restart_attempted, marked_failed, stop_requested.
+      <strong>Non-replayable</strong> (<code>secret.read</code>, <code>config.change</code>,
+      <code>projection.write</code>, <code>auth.failed</code>, etc.): observability only.
+    </p>
+
+    <p>
+      A <strong>checkpoint</strong> is written every N=1000 events or 60 seconds, whichever comes first.
+      The checkpoint serializes the full <code>HashMap&lt;ServerName, ServerState&gt;</code> plus the
+      LSN it was taken at. On daemon start, recovery loads the latest checkpoint and replays all
+      <code>supervisor.*</code> events with <code>lsn &gt; checkpoint.lsn</code>. This is identical
+      in spirit to ARIES "REDO from last checkpoint"<sup><a href="#cite-aries">[4]</a></sup> but
+      vastly simpler because we don't have multi-resource transactions; we have a single in-memory
+      map.
+    </p>
+
+    <h3>4. Recovery sequence</h3>
+
+    <p>
+      <code>mcpmanagerd</code> starts. The recovery sequence is:
+    </p>
+
+    <pre><code>1. Acquire flock on $XDG_RUNTIME_DIR/mcpmanagerd.lock. (existing dial-or-spawn invariant)
+2. Open audit/YYYY-MM-DD.jsonl in append mode; fsync the directory before any writes.
+3. Load the most recent checkpoint at $XDG_STATE_HOME/mcpmanagerd/checkpoints/latest.cbor.
+   If none, start from empty state.
+4. Read all audit lines with lsn &gt; checkpoint.lsn. Filter to supervisor.* namespace.
+5. For each event in order, call:
+       (state, _) = step(state, event, &amp;policy_for(event.server));
+   We discard the Action vec during replay — those actions already happened the first time.
+6. After replay, scan the resulting state map. For every server in Running { pid, .. }:
+       a. Probe pid with kill(pid, 0). If ESRCH, the process is gone — synthesize a
+          ChildExited { class: UnknownKill } event and step the machine again, write the
+          synthesized event to the journal.
+       b. If alive, attempt to reattach: open the child's stdio FIFOs from
+          $XDG_RUNTIME_DIR/mcpmanagerd/stdio/&lt;spawn_id&gt;/.
+          If reattach fails, treat as ChildExited.
+7. For every server in Restarting { backoff_until }: if backoff_until is in the past,
+   synthesize BackoffElapsed. Otherwise re-arm the tokio timer.
+8. For every server in Running { idle_deadline: Some(t) }: if t in the past, synthesize
+   IdleFired. Otherwise re-arm the timer.
+9. Open the UDS listener. Start accepting clients.
+10. Write a supervisor.recovery_complete event.</code></pre>
+
+    <p>
+      Step 6 is the key bit kernel-hacker and I agree on: PIDs survive the daemon's death. macOS and
+      Linux both keep child processes alive when their parent dies (the kernel re-parents them to
+      PID 1). We can probe with <code>kill(pid, 0)</code> and, if alive, reattach. The
+      <code>spawn_id</code> ULID lets us distinguish "the PID I had before" from a "a new process
+      that happens to be reusing that PID". This is the same trick conmon uses to survive podman
+      restarts<sup><a href="#cite-conmon">[9]</a></sup>.
+    </p>
+
+    <h3>5. Property-test strategy</h3>
+
+    <p>
+      Three test layers, all using <code>proptest</code><sup><a href="#cite-proptest">[7]</a></sup>:
+    </p>
+
+    <ol>
+      <li>
+        <strong>Per-function properties.</strong> <code>next_delay</code> is monotonic and bounded.
+        <code>classify_exit</code> never returns <code>OomKill</code> without
+        <code>OomEvidence::Cgroup</code>. <code>step(state, event)</code> never produces a state
+        whose internal invariants (refcount &gt; 0 ⟹ <code>Running</code>) are violated.
+      </li>
+      <li>
+        <strong>State-machine sequential testing</strong> via
+        <code>proptest-state-machine</code><sup><a href="#cite-proptest-state">[10]</a></sup>.
+        Generate sequences of <code>Event</code>s and compare the resulting state against a model
+        implementation (a hand-written, inefficient reference machine). Shrink to minimal failing
+        sequences. The model captures the spec; the implementation captures performance. They
+        should agree.
+      </li>
+      <li>
+        <strong>Crash-then-recover.</strong> Generate an event sequence, split it at a random
+        index, serialize the journal up to the split, run recovery, then run the rest of the
+        sequence. The final state must equal the state of a single uninterrupted run. This is the
+        property database recovery papers call "crash equivalence"; without it, we have no
+        evidence that recovery actually recovers.
+      </li>
+    </ol>
+
+    <p>
+      Test goal: at least 1000 generated cases per property per CI run; shrunk failing cases
+      committed as regression seeds. Empirically, the first time you run #3 against any non-trivial
+      state machine, it finds bugs. This is the difference between "crash-recovery works because
+      we thought about it" and "crash-recovery works because we proved it".
+    </p>
+
+    <h3>6. Atomic file writes, properly</h3>
+
+    <p>
+      <code>mcpm-core</code>'s atomic writes follow the recipe LWN published in 2009
+      and that npm's <code>write-file-atomic</code> rediscovered fifteen years
+      later<sup><a href="#cite-lwn">[1]</a></sup>:
+    </p>
+
+    <pre><code>fn atomic_write(path: &amp;Path, bytes: &amp;[u8]) -&gt; io::Result&lt;()&gt; {
+    let dir = path.parent().expect("path has parent");
+    let tmp = NamedTempFile::new_in(dir)?;            // same filesystem
+    tmp.as_file().write_all(bytes)?;
+    tmp.as_file().sync_all()?;                        // fsync the data
+    tmp.persist(path)?;                               // atomic rename
+    File::open(dir)?.sync_all()?;                     // fsync the directory entry
+    Ok(())
+}</code></pre>
+
+    <p>
+      The directory-fsync is the line everyone forgets. It's also the line that turns
+      "atomic on most filesystems most of the time" into "atomic on POSIX as
+      specified". On macOS we additionally call <code>F_FULLFSYNC</code> via
+      <code>fcntl</code> on critical paths (the canonical config, the checkpoint file). Cost: a few
+      ms per write. Benefit: the config never half-writes across a power loss.
+    </p>
+
+    <h3>7. Per-component application</h3>
+
+    <table class="compare">
+      <thead><tr><th>Component</th><th>How sans-I/O + journal applies</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>mcpm-core</code></td>
+          <td>
+            Pure config validation; CAS-guard logic; journal projection. The
+            <code>prior_hash</code> CAS becomes <code>prior_lsn</code> internally — same shape on the
+            wire, stronger guarantee underneath (LSN linearizes config mutations against journal
+            order, eliminating the read-after-write window).
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-daemon</code></td>
+          <td>
+            Implements the recovery sequence above as a synchronous bootstrap before the tokio
+            runtime serves clients. Auto-spawn semantics use <code>flock(2)</code> on a sibling
+            lockfile (spec already specifies this); the recovery sequence is what makes auto-spawn
+            <em>safe</em>, because the auto-spawned daemon reconstructs full state before answering
+            anyone.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-protocol</code></td>
+          <td>
+            Wire types versioned; <code>mcpm_wire_version</code> per spec. Adds
+            <code>checkpoint_lsn</code> to <code>daemon.status</code> so observability tools can
+            see "is the daemon caught up?". Adds a documented <code>E_CONFIG_CONFLICT</code> code
+            with the current <code>prior_hash</code> returned so clients can resolve cleanly.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-client</code></td>
+          <td>
+            Auto-spawn dance plus a <em>recovery probe</em>: after auto-spawning, wait for
+            <code>daemon.status</code> to report <code>recovery_complete</code> before sending any
+            mutating call. This handles the "I spawned mcpmanagerd, but it's still replaying its
+            journal" race that v1.0 currently elides.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-supervisor</code></td>
+          <td>
+            All discussed above. The supervisor is the largest piece of sans-I/O surface and the
+            primary beneficiary of property testing.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-registry</code></td>
+          <td>
+            BM25 search and version resolution are already pure. The cache refresh path (network)
+            needs explicit "stale-while-revalidate" semantics: if the network fails, the daemon must
+            never <em>silently</em> serve a stale index — it must label the index as stale in
+            <code>RegistryEntry::freshness</code> so the client can warn. Journal entries:
+            <code>registry.refresh_attempted</code>, <code>registry.refresh_succeeded</code>,
+            <code>registry.refresh_failed</code>.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-secrets</code></td>
+          <td>
+            <code>SecretStore</code> trait is already a clean abstraction; what's missing is a
+            test double that lets us property-test the supervisor against secret-failure
+            modes. Add <code>InMemorySecretStore</code> and <code>FailingSecretStore</code> for
+            tests. The trait's <code>fetch</code> returns
+            <code>Result&lt;SecretString, SecretError&gt;</code>; the supervisor's
+            <code>step</code> machine handles every variant. Property: <em>no secret value ever
+            appears in any <code>Action</code> serializable form</em>. Fuzz-test the journal
+            serializer to confirm.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-projector</code></td>
+          <td>
+            Managed-block sync is naturally idempotent: read, diff, write. Sans-I/O fits perfectly —
+            <code>fn compute_managed_block(canonical: &amp;ConfigDoc, current_file: &amp;str, tool:
+            ToolId) -&gt; (NewFileContents, DiffSummary)</code>. Property: applying the function
+            twice equals applying it once. Property: a manual edit outside the managed-block fence
+            is preserved exactly. Journal entries: <code>projection.write</code> with
+            <code>managed_hash</code> before/after.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-logs</code></td>
+          <td>
+            Three-stream tail API: pure ring buffer + on-disk rotation, fed by tokio file streams.
+            Audit JSONL is the journal in disguise — the same writer with a different consumer.
+            Rotation logic: on day-boundary, fsync the closing file, fsync the directory, open the
+            new file. Crash mid-rotation is recoverable because the LSN is monotonic across files.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mcpm-trust</code></td>
+          <td>
+            Pure: <code>fn verify(manifest_bytes: &amp;[u8], root_pubkey: &amp;PublicKey) -&gt;
+            Result&lt;TrustManifest, VerifyError&gt;</code>. The baked-in-fallback mode is a
+            single boolean in the trust state. Journal entry: <code>trust.refresh_succeeded</code>,
+            <code>trust.refresh_failed</code>, <code>trust.fallback_engaged</code>. The
+            "fetched ↔ baked-in-fallback" state transition is itself a tiny state machine —
+            property-test it.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>8. What this buys us</h3>
+
+    <ol>
+      <li>
+        <strong>Crash recovery is a tested code path.</strong> Property #3 (crash-equivalence)
+        runs in CI every commit. If we break recovery, the build is red before the bug ships.
+        Joe Armstrong's "let it crash" philosophy<sup><a href="#cite-armstrong">[11]</a></sup>
+        only works if you have crashed enough times in test to trust the restart.
+      </li>
+      <li>
+        <strong>Restart-during-restart is well-defined.</strong> A user runs <code>mcpm restart
+        github-mcp</code> while the supervisor is in <code>Restarting { backoff_until }</code>. The
+        state machine has a single answer to this. The current spec implies an answer; we make it
+        explicit.
+      </li>
+      <li>
+        <strong>The audit log gains a second consumer.</strong> Before: humans read it. After:
+        humans <em>and</em> the daemon read it. The format hardens, because regressions in the
+        format break the daemon and not just the user's grep.
+      </li>
+      <li>
+        <strong>Debug aid: time-travel.</strong> Replay the journal in a test harness against the
+        sans-I/O core. Reproduce a user's failure deterministically from their audit log (with
+        secret-hashes redacted). The on-call experience improves dramatically.
+      </li>
+      <li>
+        <strong>The wire protocol gets a free invariant.</strong> Every <code>server.list</code>
+        response is, by construction, a projection of a journal-replayable state. There is no
+        in-memory shadow state that could disagree with the on-disk truth.
+      </li>
+    </ol>
+
+    <h3>9. Cost estimate</h3>
+
+    <p>
+      Rough lines of code, on top of the pragmatist's baseline:
+    </p>
+
+    <ul>
+      <li><code>mcpm-supervisor</code>: ~600 lines of pure state machine, ~300 lines of test (proptest harness + reference model). The I/O shell shrinks proportionally — most of what tokio-pragmatist would put in the supervisor moves to the shell as dumb dispatch.</li>
+      <li><code>mcpm-core</code>: ~150 lines for the LSN-based journal index + checkpoint serializer.</li>
+      <li><code>mcpm-logs</code>: ~50 lines for the directory-fsync-on-rotate path; the rest of the code is unchanged.</li>
+      <li><code>mcpm-daemon</code>: ~200 lines for the recovery bootstrap. Most of this is the PID-probe-and-reattach loop.</li>
+    </ul>
+
+    <p>
+      Total: ~1300 lines, mostly testable in milliseconds. Compared to a v1.0 codebase that the spec
+      sizes at ~50-80kLoC, this is a 1.5–2.5% tax. The payoff is that the supervisor's behavior
+      under crash, OOM, restart, and laptop-sleep is no longer hand-waved — it's
+      <code>cargo test</code>-able.
+    </p>
+
+    <h3>10. What I'm explicitly <em>not</em> proposing</h3>
+
+    <ul>
+      <li>
+        <strong>Not</strong> proposing we move to SQLite, RocksDB, or sled. The append-only
+        JSONL + checkpoint is sufficient at our scale. SQLite WAL mode would be the natural
+        next step at 1000s of MCPs<sup><a href="#cite-sqlite-wal">[5]</a></sup>; v1.1 territory.
+      </li>
+      <li>
+        <strong>Not</strong> proposing two-phase commit or any distributed-systems machinery. Single
+        host, single daemon, single writer for the journal.
+      </li>
+      <li>
+        <strong>Not</strong> proposing the typestate pattern (one Rust type per state). Enum-based
+        modeling is enough for our complexity; typestates would force us into PhantomData gymnastics
+        with no win on testability at this scale.
+      </li>
+      <li>
+        <strong>Not</strong> changing the wire protocol's user-facing semantics — only adding
+        <code>checkpoint_lsn</code> to <code>daemon.status</code> and the <code>recovery_complete</code>
+        readiness signal.
+      </li>
+    </ul>
+
+    <p>
+      Net: small architectural surgery, no scope creep. The result is a v1.0 daemon you can pull the
+      plug on, plug back in, and walk away from confident that the next user invocation will see
+      coherent state.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li id="cite-lwn">
+        Jonathan Corbet, <em>Atomicity vs. durability</em>, LWN, 2009 — the canonical write-up of
+        the rename + directory-fsync interaction. <a href="https://lwn.net/Articles/323430/">https://lwn.net/Articles/323430/</a>.
+        See also npm's
+        <a href="https://github.com/npm/write-file-atomic/issues/64">write-file-atomic issue #64</a>
+        ("Rename atomicity is not enough") for a recent rediscovery.
+      </li>
+      <li id="cite-sans-io">
+        Brett Cannon, <em>Network protocols, sans I/O</em>, 2016 — the foundational essay on the
+        sans-I/O architectural pattern.
+        <a href="https://sans-io.readthedocs.io/">https://sans-io.readthedocs.io/</a>
+        and the longer-form
+        <a href="https://snarky.ca/network-protocols-sans-i-o/">https://snarky.ca/network-protocols-sans-i-o/</a>.
+      </li>
+      <li id="cite-h2-state">
+        The <code>hyperium/h2</code> stream state machine — a real-world sans-I/O core in Rust used
+        by every HTTP/2 server built on hyper.
+        <a href="https://github.com/hyperium/h2/blob/master/src/proto/streams/state.rs">https://github.com/hyperium/h2/blob/master/src/proto/streams/state.rs</a>.
+        Background: <a href="https://news.ycombinator.com/item?id=40872020">"Sans-IO: The secret to effective Rust for network services" — HN discussion</a>.
+      </li>
+      <li id="cite-aries">
+        C. Mohan et al., <em>ARIES: A Transaction Recovery Method Supporting Fine-Granularity
+        Locking and Partial Rollbacks Using Write-Ahead Logging</em>, ACM TODS 17(1), 1992.
+        <a href="https://web.stanford.edu/class/cs345d-01/rl/aries.pdf">https://web.stanford.edu/class/cs345d-01/rl/aries.pdf</a>.
+        The journal-then-replay discipline is the same; we just don't need pages or fine-grained
+        locking.
+      </li>
+      <li id="cite-sqlite-wal">
+        SQLite documentation, <em>Write-Ahead Logging</em>.
+        <a href="https://sqlite.org/wal.html">https://sqlite.org/wal.html</a> — relevant as both
+        prior art and a v1.1 upgrade path.
+      </li>
+      <li id="cite-tokio-shutdown">
+        Tokio documentation, <em>Graceful Shutdown</em>.
+        <a href="https://tokio.rs/tokio/topics/shutdown">https://tokio.rs/tokio/topics/shutdown</a>
+        — implicitly argues the case for explicit state by showing how much
+        <code>CancellationToken</code> plumbing is needed to coordinate it across async tasks.
+      </li>
+      <li id="cite-proptest">
+        Jason Lingle et al., <em>proptest</em> — Rust property-based testing library.
+        <a href="https://github.com/proptest-rs/proptest">https://github.com/proptest-rs/proptest</a>;
+        book at <a href="https://altsysrq.github.io/proptest-book/">https://altsysrq.github.io/proptest-book/</a>.
+        Inspired by Hypothesis (Python) and QuickCheck (Haskell).
+      </li>
+      <li id="cite-state-enum">
+        Yoshua Wuyts, <em>State Machines II: an enum-based design</em>.
+        <a href="https://blog.yoshuawuyts.com/state-machines-2/">https://blog.yoshuawuyts.com/state-machines-2/</a>.
+        And the follow-up on typestates,
+        <a href="https://blog.yoshuawuyts.com/state-machines-3/">State Machines III: Type States</a>,
+        for the case I'm explicitly <em>not</em> making.
+      </li>
+      <li id="cite-conmon">
+        <em>conmon</em> — podman's per-container monitor process; the inspiration for
+        process-reattach across daemon restarts.
+        <a href="https://github.com/containers/conmon">https://github.com/containers/conmon</a>.
+      </li>
+      <li id="cite-proptest-state">
+        <em>proptest-state-machine</em> — sequential state-machine testing for proptest, modeled on
+        Erlang's <code>eqc_statem</code>.
+        <a href="https://github.com/proptest-rs/proptest/tree/master/proptest-state-machine">https://github.com/proptest-rs/proptest/tree/master/proptest-state-machine</a>.
+      </li>
+      <li id="cite-armstrong">
+        Joe Armstrong, <em>Making reliable distributed systems in the presence of software
+        errors</em>, PhD thesis, KTH, 2003 — the canonical "let it crash" reference.
+        <a href="https://erlang.org/download/armstrong_thesis_2003.pdf">https://erlang.org/download/armstrong_thesis_2003.pdf</a>.
+      </li>
+      <li id="cite-bonus-h2-arch">
+        Carl Lerche, "Why I Built hyper", and the h2 architecture documentation:
+        <a href="https://docs.rs/h2/">https://docs.rs/h2/</a>. The library is the canonical
+        example in the Rust ecosystem of a sans-I/O protocol core paired with a tokio shell.
+      </li>
+      <li id="cite-bonus-fsync-paper">
+        Vijay Chidambaram et al., <em>All File Systems Are Not Created Equal: On the Complexity of
+        Crafting Crash-Consistent Applications</em>, OSDI 2014.
+        <a href="https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai">https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai</a>.
+        Empirical evidence that almost no application gets crash-consistency right by accident.
+      </li>
+    </ol>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Peer essays in this facet:
+    <a href="./agent-tokio-pragmatist.html">tokio-pragmatist</a> ·
+    <a href="./agent-library-author.html">library-author</a> ·
+    <a href="./agent-kernel-hacker.html">kernel-hacker</a> ·
+    <a href="./agent-boring-tech-defender.html">boring-tech-defender</a>.
+    Back to the <a href="../../technical-design.html">v1.0 technical design</a>.
+  </p>
+</main>
+</body>
+</html>

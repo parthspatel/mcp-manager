@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boring Tech Defender — Backend deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">backend · boring-tech-defender</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">backend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Boring Tech Defender's Backend</h1>
+  <p class="lede">
+    Five-ish subcommands. Line-delimited JSON-RPC 2.0 over a UNIX domain socket. <code>tokio::process::Command</code>. <code>std::fs</code> when async earns nothing. TOML files instead of databases. No plugin system. No protobuf, no Cap'n Proto, no gRPC. The simplest design that meets the locked v1.0 decisions, shipped on time, beats the clever one that ships next quarter — or, more likely, never.
+  </p>
+
+  <p>
+    <span class="evidence-badge">scope discipline</span>
+    <span class="evidence-badge">JSON over UDS</span>
+    <span class="evidence-badge">no plugins in v1.0</span>
+    <span class="evidence-badge">files, not DBs</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts (why boring wins, again)</a></li>
+      <li><a href="#arguments">Arguments against my four peers</a></li>
+      <li><a href="#design">The minimum-viable backend</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      Four startups. Four corpses. The most recent one died because three engineers spent eleven weeks rewriting a perfectly fine PostgreSQL-and-Redis stack into a custom Raft-backed event-sourced thing nobody asked for. The first one died because we adopted Thrift in 2014 when JSON would have been fine. The other two are too embarrassing to recount. In every case the technology was excellent. The judgment was not. So when I read the v1.0 spec for MCP Manager, my first job is not to admire it. My first job is to ask: <em>what can we cut and still ship something useful in v1.0?</em>
+    </p>
+
+    <p>
+      The locked decisions are already pleasingly conservative. macOS + Linux only. No telemetry. Apache 2.0. Tens of MCPs, not thousands. Curl + Nix, not a self-updater. JSON-RPC 2.0 over UDS. Files on disk. <code>tokio::process</code>. No GUI in v1.0. These are good locks. They came from someone who has shipped before. My job here is to defend them against the inevitable scope creep that arrives once five engineers start drawing boxes on a whiteboard. The pressure to add complexity is constant; the discipline to refuse it has to be louder.
+    </p>
+
+    <p>
+      "Choose Boring Technology" by Dan McKinley<a href="#cite-boring"><sup>[1]</sup></a> is the load-bearing essay of my worldview. The argument is simple: every team has a finite budget of <em>innovation tokens</em>. Spend them on the parts of your product that are actually novel. Spend them on the part where the user gets value. MCP Manager's novelty is <em>orchestration of MCP servers for ten editors with one config</em>. That's where the innovation tokens go. Everything else — IPC, config format, process supervision, log rotation, secret storage, registry fetch — should be the most boring, well-trodden choice we can find. JSON over UDS. TOML files. <code>tokio::process</code>. <code>keyring</code> crate. <code>tracing</code>. Done.
+    </p>
+
+    <p>
+      Hillel Wayne's writing on essential vs. accidental complexity<a href="#cite-hillel"><sup>[2]</sup></a> is the other half. A custom binary protocol is accidental complexity. A custom reaper is accidental complexity. A plugin trait object that can swap secret backends at runtime is accidental complexity. The user does not care. They want <code>mcpm install github-mcp</code> to work in ten seconds and never think about it again. Every keystroke we ask the user to learn, every config schema we ask them to internalize, every error message they have to look up — that's the real budget. Engineering cleverness that doesn't translate to a user-visible hour saved is, definitionally, waste.
+    </p>
+
+    <p>
+      Rich Hickey's <em>Simple Made Easy</em><a href="#cite-hickey"><sup>[3]</sup></a> distinguishes "simple" (un-braided, one concern per thing) from "easy" (familiar). The mistake we make in Rust shops is reaching for "easy" — the crate everybody knows, the macro everybody uses — when "simple" would serve us better. But the converse trap is just as bad: building a "simple" abstraction (a clever <code>Transport</code> trait with three implementations) when one concrete implementation would have been both simpler <em>and</em> easier. Defaulting to the concrete first, then extracting an abstraction <em>only after the second use case actually arrives</em>, is the boring path. We have one transport (UDS). We have one IPC format (line-delimited JSON-RPC). We don't need an enum yet.
+    </p>
+
+    <p>
+      Kernighan's lever<a href="#cite-kernighan"><sup>[4]</sup></a>: "Debugging is twice as hard as writing the code in the first place. Therefore, if you write the code as cleverly as possible, you are, by definition, not smart enough to debug it." This is the single most useful sentence in our profession. Every time someone on this team reaches for <code>unsafe</code>, or zero-copy deserialization, or a sans-I/O core that requires its own mental model, I want them to repeat that sentence three times before opening their editor. The fact that we <em>could</em> shave 40µs off a method dispatch with custom framing is not a reason to do it. We will spend that 40µs back, with interest, the first time someone has to bisect a state-machine bug at 11pm.
+    </p>
+
+    <p>
+      The Hyrum-rule corollary<a href="#cite-hyrum"><sup>[5]</sup></a>: every observable behavior of your API will be depended on by someone. The smaller and more boring the public surface, the fewer accidental promises we make. <code>mcpm-protocol</code> should be tiny. The fewer types, the better. Each method we add to the wire is a permanent commitment. Treat it as a one-way door.
+    </p>
+
+    <p>
+      So my position for this debate is: the v1.0 design as locked is already close to right, but it has crept in three or four places where my peers will push it further into cleverness. I will push back on each, hard. The default answer to "should we add X?" in v1.0 is <em>no</em>, and the burden of proof is on the person proposing X to show a user-visible benefit measured in hours saved, not microseconds or lines of code.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments against my four peers</h2>
+
+    <h3>vs. tokio-pragmatist — "idiomatic async Rust" can mean over-engineered</h3>
+
+    <p>
+      I agree with my tokio-pragmatist peer on 90% of things: tokio for the runtime, <code>tracing</code> for logs, <code>tower</code> patterns where they actually help. Where I push back is the temptation to reach for the <em>full</em> tower stack — middleware layers, service traits, retry/timeout/buffer/load-shed wrappers — for a daemon that handles, at peak, a few dozen connections per minute from clients on the same machine. Half the tower ecosystem is designed for HTTP services facing the public internet at meaningful QPS. We are not that. We are one user, one socket, ten editors. <code>tower::Service</code> is a generalization we don't need yet.
+    </p>
+
+    <p>
+      Concretely: a JSON-RPC handler dispatch table built as a <code>HashMap&lt;&amp;'static str, fn(Request) -&gt; BoxFuture&lt;Result&gt;&gt;</code>, wrapped in a single <code>tokio::spawn</code> per accepted connection, is fine. It's twenty lines. It has no layers. It logs via <code>tracing::info_span!</code>. It does not need a <code>Layer</code>. The day we need rate-limiting or auth-aware middleware is the day we add it — and that day, in v1.0, is not coming because the auth is "the kernel says you're the same UID" (SO_PEERCRED) and the rate limit is "the user's hands."
+    </p>
+
+    <p>
+      I'll also push back on async-everywhere. <code>tokio::fs::read_to_string</code> is async, sure, but reading a 4KB TOML config off a local disk has no business being async. The blocking call takes microseconds. Using <code>tokio::task::spawn_blocking</code> just to satisfy the runtime is worse than the synchronous call. Async pays its keep when you have I/O concurrency to exploit; for a one-shot CLI dispatch that reads one file, parses it, writes another, and exits, <code>std::fs</code> is correct. The "everything must be async because tokio" instinct produces code that is harder to read, harder to test (Rust async ecosystems still have rough testing edges<a href="#cite-async-testing"><sup>[6]</sup></a>), and not meaningfully faster.
+    </p>
+
+    <p>
+      And on streaming: my peer will want <code>logs.tail</code> to use a bidirectional stream with backpressure tokens, ack windows, the whole thing. I'll counter: JSON-RPC notifications on the same UDS connection, written one line at a time, with the bounded <code>tokio::sync::mpsc</code> we already have, is the boring answer. If the client can't keep up, the channel fills, the producer awaits — backpressure is free. We don't need a protocol-level flow control window. We have OS-level TCP-equivalent backpressure on a UDS for the same reason: the kernel will not let the writer outrun the reader.
+    </p>
+
+    <h3>vs. systems-veteran — sans-I/O is a beautiful idea that costs more than it saves</h3>
+
+    <p>
+      Sans-I/O is genuinely elegant. The hyper team uses it, h2 uses it, quinn uses it<a href="#cite-sans-io"><sup>[7]</sup></a>. When it works, it gives you a state machine you can test exhaustively without spinning up tokio. I respect this. But I have watched three projects adopt sans-I/O and end up with a state machine that is <em>more</em> complex than the I/O it replaced, because now every byte enters and exits the machine as a typed event, every partial parse needs a buffered-not-yet-ready state, and every test is a sequence of "feed these bytes, assert this state" assertions that are coupled to internal representation.
+    </p>
+
+    <p>
+      For a JSON-RPC server reading line-delimited frames off a UDS, the I/O <em>is</em> the boring part. <code>tokio::io::BufReader::new(stream).lines()</code> gives you an async iterator of <code>String</code>s. Parse each line with <code>serde_json::from_str</code>. Done. The "state machine" is: read a line, dispatch, write a line. There is no protocol state worth modeling separately. Sans-I/O is the right answer when the protocol has its own framing layer with cross-frame state (HTTP/2 multiplexing, QUIC connection setup). It is the wrong answer when the protocol is "one line, one message" and the connection is "the user's CLI subprocess."
+    </p>
+
+    <p>
+      On the event journal: my systems-veteran peer will want a write-ahead log with sequence numbers, replay-on-startup, and a "rebuild in-memory state from the journal" startup path. I'll counter with a simpler model: the canonical state is the TOML files on disk. The audit log is append-only JSONL for <em>humans and security review</em>, not for daemon state reconstruction. On startup, mcpmanagerd reads <code>config.toml</code>, builds in-memory state from it, and that's the recovery path. If the daemon crashes mid-write, the atomic-temp-rename pattern means we never have a half-written config. Recovery is "re-read config.toml." We do not need a journal for state; we need a journal for <em>auditing</em>, which is what the existing JSONL audit log already does. Conflating the two would couple the daemon's startup correctness to the audit log's format, and then we'd be stuck with a schema we can never change.
+    </p>
+
+    <h3>vs. library-author — public API discipline is good; pre-publishing it is bad</h3>
+
+    <p>
+      My library-author peer cares about a clean public API and stable semver — values I share. The disagreement is about <em>which crates are public</em>. The <code>mcpm-protocol</code> split is correct: tiny, stable, semver-disciplined, for third-party clients. I'm with that. What I'll push back on is the temptation to make <em>every</em> crate in our workspace publishable to crates.io with a polished docs.rs page. We don't have third-party users of <code>mcpm-supervisor</code> or <code>mcpm-logs</code>. We never will. Those are internal. They should be <code>publish = false</code> in <code>Cargo.toml</code>, free to churn, free to refactor when we learn something. Polishing their interfaces preemptively is wasted effort that creates the wrong incentives: once a crate <em>looks</em> public, somebody starts treating it as public, and then we are committed to its shape.
+    </p>
+
+    <p>
+      Concretely: only two crates in our workspace should be <code>publish = true</code> in v1.0: <code>mcpm-protocol</code> (tiny wire types, semver-disciplined) and possibly <code>mcpm-cli</code> as a binary distribution. Everything else: <code>publish = false</code>, <code>doc(hidden)</code> on items we don't want documented, and a top-of-file comment that says "internal, do not depend on this from outside the workspace." This is what rustc does. It's what the Rust standard library does. It's what cargo does. We should do the same.
+    </p>
+
+    <p>
+      The library-author peer will also want a <code>#[non_exhaustive]</code> sprinkled on every public enum and struct so future variants can be added without a major-version bump. I agree for <code>mcpm-protocol</code>. I disagree for everything else, because everything else is not public. <code>#[non_exhaustive]</code> on internal types adds friction for our own code (we have to use <code>..</code> in match arms, we can't construct things outside the defining module without builders) and buys us nothing because we control all the call sites.
+    </p>
+
+    <p>
+      Finally, on convenience layers vs. wire types: I support the <code>mcpm-protocol</code> / <code>mcpm-client</code> split exactly as the technical design has it. Wire types are the load-bearing surface; the client is allowed to churn. Treat the wire crate like an IETF spec, and the client crate like a CLI utility.
+    </p>
+
+    <h3>vs. kernel-hacker — cgroups are fine; reinventing the supervisor is not</h3>
+
+    <p>
+      My kernel-hacker peer is going to argue for clever OS-primitive use: cgroups for memory limits, eBPF for OOM detection, <code>pidfd_open</code> for child process tracking, <code>kqueue</code> on macOS for event-driven supervision. Some of this is good. Some of it is over-engineered.
+    </p>
+
+    <p>
+      What I support: cgroup v2 memory limits on Linux. They work, they're well-tested, they degrade gracefully with the <code>cgroups-rs</code> crate. The fallback to <code>RLIMIT_AS</code> on legacy cgroup v1 distros (the spec already documents this) is correct boring engineering.
+    </p>
+
+    <p>
+      What I push back on: <em>writing our own process reaper</em>. <code>tokio::process::Command</code> already handles SIGCHLD, zombie reaping, exit-status collection, and gives us a <code>Child</code> we can <code>.wait().await</code> on. We do not need <code>pidfd_open</code> in v1.0. We do not need <code>signalfd</code>. We do not need a custom <code>prctl(PR_SET_CHILD_SUBREAPER)</code> dance. The tokio team has already debugged the corner cases we would otherwise rediscover at 2am the night before launch. Read the tokio process docs<a href="#cite-tokio-process"><sup>[8]</sup></a> and follow them. The restart-on-crash policy is: spawn → tokio task watches → child exits → check backoff window → re-spawn. The whole supervisor is maybe 300 lines of Rust. Add cgroup attachment and OOM detection on top, another 200 lines. That is the entire <code>mcpm-supervisor</code> crate. If it gets bigger, we're overdoing it.
+    </p>
+
+    <p>
+      On macOS OOM detection: the spec already pragmatically settles for "all three of: SIGKILL + memory pressure within 30s + RSS &gt; 80% of limit." That is exactly the boring, pragmatic, won't-be-perfect-but-will-ship answer. My kernel-hacker peer will want to look at jetsam telemetry via private APIs or <code>kperf</code>. Those break between macOS releases. We are not in that game. Document the heuristic, log "may have been OOM" when we're unsure, move on.
+    </p>
+
+    <p>
+      On <code>SO_PEERCRED</code> for auth: I support it. That's already boring tech — it's been in Linux since 1.0 and on macOS via <code>LOCAL_PEERCRED</code> for ages. One getsockopt call per connection, compare to the daemon's UID, done. No bearer tokens, no TLS, no cert rotation. The kernel is the source of truth. This is the boring answer and it is also the correct answer.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>The minimum-viable backend</h2>
+
+    <p>
+      The locked v1.0 decisions already do most of my work. Here I'll walk through each of the ten crates and call out, for each, the simplest implementation that meets the requirements — and, where I can, identify a deliberate cut from what a more ambitious team would have built. Every cut needs a justification grounded in "user-visible benefit not earned."
+    </p>
+
+    <h3><code>mcpm-core</code> — TOML files. That's it.</h3>
+
+    <p>
+      Owns canonical config (<code>~/.config/mcp-manager/config.toml</code>), the lockfile, the audit log sink, and the in-memory registry of running servers. Reads files with <code>std::fs</code>. Writes with the atomic-temp-rename pattern: write to <code>config.toml.tmp.&lt;pid&gt;</code>, fsync, <code>rename(2)</code>. POSIX guarantees rename atomicity on the same filesystem<a href="#cite-rename"><sup>[9]</sup></a>. No SQLite. No embedded KV store. No state machine library. The "in-memory registry of running servers" is a <code>HashMap&lt;String, ServerState&gt;</code> protected by a <code>tokio::sync::Mutex</code>. If contention ever shows up in a flame graph (it won't, the QPS is single-digit), we can switch to <code>dashmap</code>.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no schema migration framework. v1.0 ships with one config schema. When v1.1 changes it, we write a one-shot <code>mcpm migrate</code> command. Frameworks like Diesel migrations are appropriate when you're at v17; we're at v1.
+    </p>
+
+    <h3><code>mcpm-daemon</code> → <code>mcpmanagerd</code> — line-delimited JSON-RPC over UDS, period</h3>
+
+    <p>
+      The whole IPC layer fits in roughly the following structure. I'm sketching it because the conversation tends to drift toward complexity unless you can point at the simple version and say "this works." Listen on the UDS. <code>SO_PEERCRED</code> check on accept. Spawn a tokio task per connection. In each task: <code>BufReader::lines()</code> yields one JSON-RPC message per line<a href="#cite-jsonrpc"><sup>[10]</sup></a>. <code>serde_json::from_str</code> into a <code>Request</code> enum. Match on method name. Call the handler. Serialize the response with <code>serde_json::to_string</code>, write the line, flush.
+    </p>
+
+    <p>
+      For streaming methods (<code>logs.tail</code>): the handler returns an <code>mpsc::Receiver&lt;LogLine&gt;</code>. The connection task pumps from it, serializing each line as a JSON-RPC notification with a correlation field tying it to the original request id. Client cancels by closing the socket — the task notices on the next write, drops the receiver, log producer notices the dropped channel and stops sending. End-to-end backpressure for free. No flow-control protocol on top.
+    </p>
+
+    <p>
+      Framing: line-delimited. Not length-prefixed. Not <code>Content-Length</code> headers (which LSP uses<a href="#cite-lsp"><sup>[11]</sup></a> — a sensible choice for LSP, but unnecessary here because JSON-RPC requests are usually small and we control both ends). One JSON object per line, newline-separated. Anything serde-able that contains an unescaped newline inside a string is normal-escaped by serde. The framing fits on a postcard.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no MessagePack, no CBOR, no protobuf "for performance." Wire-format performance is not our bottleneck. The bottleneck is process startup, registry fetch, sandbox setup. JSON parsing of a 200-byte request is nanoseconds. Optimizing this is choosing the wrong battle.
+    </p>
+
+    <h3><code>mcpm-protocol</code> — minimum viable type set</h3>
+
+    <p>
+      The smallest stable surface I can defend. Roughly:
+    </p>
+
+    <pre><code>// In mcpm-protocol/src/lib.rs
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "method", content = "params")]
+pub enum Request {
+    #[serde(rename = "server.list")]   ServerList,
+    #[serde(rename = "server.start")]  ServerStart { name: String },
+    #[serde(rename = "server.stop")]   ServerStop { name: String, graceful: bool },
+    #[serde(rename = "install")]       Install { source: InstallSource },
+    #[serde(rename = "logs.tail")]     LogsTail { stream: LogStream, follow: bool },
+    #[serde(rename = "config.get")]    ConfigGet { scope: Option&lt;Scope&gt; },
+    #[serde(rename = "config.put")]    ConfigPut { scope: Option&lt;Scope&gt;, content: String, prior_hash: String },
+    #[serde(rename = "secret.set")]    SecretSet { name: String, /* value via streaming param */ },
+    #[serde(rename = "secret.list")]   SecretList,
+    #[serde(rename = "registry.search")] RegistrySearch { query: String, source: Option&lt;String&gt; },
+    #[serde(rename = "projection.sync")]  ProjectionSync { tool: Option&lt;String&gt; },
+    #[serde(rename = "project.detect")]   ProjectDetect { cwd: PathBuf },
+    #[serde(rename = "daemon.status")]    DaemonStatus,
+    // ... a few more from the technical-design wire spec
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Response&lt;T&gt; {
+    pub jsonrpc: &'static str,    // always "2.0"
+    pub mcpm_wire_version: &'static str,
+    pub id: serde_json::Value,
+    #[serde(flatten)]
+    pub body: ResponseBody&lt;T&gt;,
+}</code></pre>
+
+    <p>
+      That's most of the public surface. <code>#[non_exhaustive]</code> on the public enums so we can add methods in minor versions. Semver discipline: adding variants is a minor bump; removing or renaming is major. We will resist the urge to add a method until a real user need shows up. Every method is a permanent promise (Hyrum<a href="#cite-hyrum"><sup>[5]</sup></a>).
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no codegen from a schema file (OpenAPI, JSON Schema, protobuf). The types <em>are</em> the schema; <code>serde_json</code> derives the wire format from them. If a third party needs a TypeScript or Python client, they can write one from the docs. We are not Stripe. We do not need a 14-language SDK.
+    </p>
+
+    <h3><code>mcpm-client</code> — the dial-or-auto-spawn dance, retry, error mapping</h3>
+
+    <p>
+      Lives in-tree, churns freely. Wraps <code>mcpm-protocol</code>. Single public entrypoint: <code>Client::connect() -&gt; Result&lt;Client&gt;</code>, which tries to dial the socket, falls back to fork+exec mcpmanagerd, polls for the socket for up to 5 seconds, retries the dial. <code>flock</code> on a sibling lockfile prevents two parallel <code>mcpm</code> invocations from racing to spawn two daemons. Method calls become <code>client.server_list().await -&gt; Result&lt;Vec&lt;ServerSummary&gt;&gt;</code> — one Rust function per wire method. Streaming methods return <code>impl Stream&lt;Item = Result&lt;LogLine&gt;&gt;</code>.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no async trait for "the client" so it can be mocked. We use <code>#[cfg(test)]</code> integration tests with a real daemon spawned in a temp directory. Mocking a UDS client trait is the kind of thing that looks elegant in slides and creates four hours of "why doesn't the mock match the real behavior?" debugging in practice. A real daemon, fast to start (sub-200ms), is the better test seam.
+    </p>
+
+    <h3><code>mcpm-supervisor</code> — the simplest restart policy that meets the spec</h3>
+
+    <p>
+      One tokio task per managed child. The task:
+    </p>
+
+    <pre><code>loop {
+    let child = Command::new(...).spawn()?;
+    let exit = child.wait().await?;
+    record_audit(server.name, exit);
+    if exit.success() { break; }            // clean shutdown, don't restart
+    if !restart_policy.should_retry(&amp;state) { mark_failed(); break; }
+    sleep(backoff(state.attempt)).await;
+    state.attempt += 1;
+}</code></pre>
+
+    <p>
+      Add the cgroup attachment as a wrapper around <code>spawn()</code>: create a cgroup, attach the child PID before <code>exec</code>, watch <code>memory.events</code> for OOM events. The OOM watcher is another tokio task that loops on <code>inotify</code>-style events from the cgroup. On macOS, the OOM watcher is replaced by the three-signal heuristic (SIGKILL + memory pressure + RSS&gt;80%) the spec already pinned. Total LOC for <code>mcpm-supervisor</code>: I bet under 800 including OOM detection.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no custom process group / session leader fanciness in v1.0. <code>tokio::process</code> spawns with the same session as the daemon, signals propagate via group only if we ask. The default is fine. If we ever need "kill the whole tree including bash subshells the MCP server spawned," we add <code>setpgid</code> at that point. Not before.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no health checks beyond "is the process alive." Per-server health endpoints would be nice but they're a v1.1 feature. Every MCP server we know of either responds to JSON-RPC or it doesn't; if we can talk to it, it's alive.
+    </p>
+
+    <h3><code>mcpm-registry</code> — least code for three sources</h3>
+
+    <p>
+      One trait, three implementations. The trait is small:
+    </p>
+
+    <pre><code>trait RegistrySource {
+    async fn search(&amp;self, query: &amp;str) -&gt; Result&lt;Vec&lt;Entry&gt;&gt;;
+    async fn fetch_index(&amp;self) -&gt; Result&lt;Index&gt;;   // cached on disk
+    async fn install(&amp;self, entry: &amp;Entry) -&gt; Result&lt;InstalledPackage&gt;;
+}</code></pre>
+
+    <p>
+      Three implementations: <code>OfficialRegistry</code> (HTTP fetch + minisign verify), <code>GitHubRegistry</code> (a curated list at a known URL, same as official but a different baked-in pubkey), <code>DockerRegistry</code> (subprocess to <code>cosign verify</code> for OCI image signature + <code>docker pull</code>). Multi-source search is a fan-out then a sort by <code>(priority, score)</code>. BM25 over the cached indexes is provided by the <code>tantivy</code> crate or, simpler still, a hand-rolled BM25 in 100 lines because our corpus is small (the entire registry index fits in memory). I'd default to the hand-rolled version because tantivy is a hefty dependency for a few thousand documents.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no lazy/incremental index updates. On TTL expiry, re-fetch the whole index. Indexes are small (tens of KB). Caching is "the file on disk." If we ever ship a registry with 100k entries, we'll revisit.
+    </p>
+
+    <h3><code>mcpm-secrets</code> — do we even need a trait in v1.0?</h3>
+
+    <p>
+      This is where I push back the hardest. The spec lists <code>SecretStore</code> trait + <code>OsKeyringStore</code> + <code>EnvVarPassthroughStore</code> + <code>LayeredSecretStore</code>. That's four types for what is, in v1.0, one concrete behavior: "read/write the OS keychain via the <code>keyring</code> crate; if the user opted into env-var passthrough, also look up env vars."
+    </p>
+
+    <p>
+      My proposal: in v1.0, ship one concrete type. Call it <code>SecretStore</code>. It has an <code>env_passthrough: bool</code> field. Its <code>get</code> method does:
+    </p>
+
+    <pre><code>fn get(&amp;self, name: &amp;str) -&gt; Option&lt;SecretString&gt; {
+    if self.env_passthrough {
+        if let Ok(v) = std::env::var(name) { return Some(SecretString::new(v)); }
+    }
+    self.keyring_entry(name).get_password().ok().map(SecretString::new)
+}</code></pre>
+
+    <p>
+      That's the whole API. No trait. No dyn dispatch. No layered-store composition. When v1.1 adds 1Password support, <em>then</em> we extract a trait, because at that point we have two concrete implementations and the trait pays for itself (Rule of Three<a href="#cite-rule-of-three"><sup>[12]</sup></a> — wait for the third use case before abstracting; or, since we'll only have two at that point, the second use case combined with a clear roadmap for the third).
+    </p>
+
+    <p>
+      <strong>Cut:</strong> the trait. Inline the keychain logic. Save 200 lines, 1 indirection layer, 1 mental model. When the next backend arrives, refactor — that's a 30-minute change in Rust with a good IDE.
+    </p>
+
+    <h3><code>mcpm-projector</code> — file-rewrite-on-change, dumb as a hammer</h3>
+
+    <p>
+      For each editor: read its config file, find the <code>BEGIN MCP MANAGED BLOCK</code> / <code>END MCP MANAGED BLOCK</code> fence (the managed-block pattern<a href="#cite-managed-block"><sup>[13]</sup></a> — boring tech borrowed from Ansible, Puppet, and a thousand dotfile managers), replace the contents between the fences with the projected config, write back atomically. The per-editor logic (where the file lives, what format inside the block, JSON vs. XML vs. YAML vs. JetBrains XML) is data-driven from TOML manifests in <code>manifests/toolchains/</code>. The Rust code is a generic block-replacer; the per-editor knowledge lives in TOML.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no LSP-style diagnostic emission for "your editor config has a syntax error." If it does, we tell the user "your <code>~/.cursor/mcp.json</code> isn't valid JSON; can't manage it." Three sentences. Move on.
+    </p>
+
+    <h3><code>mcpm-logs</code> — files and seek, not a database</h3>
+
+    <p>
+      Three streams per server: stdout, stderr, audit. Each backed by an in-memory ring buffer (Vec&lt;LogLine&gt; with a write index) plus on-disk rotation (every N MB or daily, rename to <code>.1.gz</code>, <code>.2.gz</code>, …). <code>logs.tail</code> is implemented as: stream the in-memory ring to the client, then if <code>follow: true</code>, subscribe to new writes via a <code>tokio::sync::broadcast</code> channel and pump those too.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> no log indexing, no full-text search over historical logs, no log-query DSL. Users who want that pipe the file through <code>grep</code> or <code>ripgrep</code>. They already know how. We do not need a JQL.
+    </p>
+
+    <h3><code>mcpm-trust</code> — do we even need this in v1.0?</h3>
+
+    <p>
+      The hardest call. The spec calls for TUF-lite<a href="#cite-tuf"><sup>[14]</sup></a> — a fetched <code>trust.toml</code> that lists registry pubkeys, refreshable via HTTP, with a 7-day TTL and fallback to baked-in keys on network failure. The reason TUF exists is to handle key rotation and compromise. Both real risks.
+    </p>
+
+    <p>
+      My pushback is not "remove TUF-lite" — it's "make sure the implementation is as boring as the spec implies." Specifically: do not implement the full TUF metadata hierarchy (root.json, targets.json, snapshot.json, timestamp.json with role delegation and threshold signing). We don't need that in v1.0. What we need:
+    </p>
+
+    <ol>
+      <li>Baked-in root pubkey in the binary (one minisign pubkey, 32 bytes).</li>
+      <li>Fetch <code>trust.toml</code> from a known URL; verify with the baked-in pubkey.</li>
+      <li>Cache it on disk with a TTL; refresh on TTL expiry.</li>
+      <li>On any network failure, fall back to baked-in pubkeys for the 3 default registries.</li>
+    </ol>
+
+    <p>
+      That's not TUF. That's a signed-document fetch with a TTL. Calling it "TUF-lite" is fine for marketing; just don't actually pull in the <code>tough</code> crate or implement role-delegation metadata. Three hundred lines of Rust, leaning on <code>minisign-verify</code><a href="#cite-minisign"><sup>[15]</sup></a>, replaces a 10k-LOC TUF implementation we'd otherwise have to debug.
+    </p>
+
+    <p>
+      <strong>Cut:</strong> role delegation, threshold signing, freeze attacks, mirror metadata. All real TUF features. None earn their keep against the v1.0 threat model (one user, one machine, trying to install MCP servers from a small set of well-known registries we control the root keys for).
+    </p>
+
+    <h3>Subcommand surface — twelve is acceptable, eight would be better</h3>
+
+    <p>
+      The spec lists twelve subcommands on the CLI: <code>install, search, test, logs, secret, registry, project, update, init, uninstall, exec, tui</code>. I'm pleasantly surprised it's not more. I'd consider three consolidations:
+    </p>
+
+    <ul>
+      <li><strong>Merge <code>install</code> and <code>update</code></strong>: <code>mcpm install &lt;name&gt;</code> installs or updates. <code>mcpm install</code> with no args updates everything. <code>--accept-breaking</code> opts into major upgrades. Saves a subcommand and matches how brew, apt, and npm already behave for "install something you already have."</li>
+      <li><strong>Move <code>init</code> behavior into first-run-of-anything-else</strong>: any subcommand on a system without a config triggers the init flow inline. Saves the user a step.</li>
+      <li><strong>Keep <code>exec</code> separate</strong>: it's load-bearing for editor integration. Don't touch.</li>
+    </ul>
+
+    <p>
+      Net: from 12 to 10. Not dramatic; not nothing. Every removed subcommand is a row in the help text the user no longer has to read.
+    </p>
+
+    <h3>What we deliberately do not have in v1.0</h3>
+
+    <ul>
+      <li>No plugin system. Not as a feature, not as an internal trait scaffolded "for later." When a real plugin use case shows up (a customer pays us for one), we add a trait. Until then, every internal interface is a concrete type.</li>
+      <li>No metric collection. The <code>tracing</code> spans give us structured logs; if a user wants Prometheus, they can grep them.</li>
+      <li>No web UI. Locked decision. Respect it.</li>
+      <li>No remote daemon. UDS only. No "mcpm connect ssh://server" mode. If you want that in v1.x, you tunnel the socket yourself with <code>ssh -L</code>.</li>
+      <li>No multi-user mode. One user, one UID, one daemon. SO_PEERCRED enforces this and we lean on it.</li>
+    </ul>
+
+    <h3>The shape of the team I'd hire to build this</h3>
+
+    <p>
+      Two engineers. Three at most. One full-time on <code>mcpm-daemon</code> + <code>mcpm-supervisor</code> + <code>mcpm-core</code> (the spine). One full-time on <code>mcpm-cli</code> + <code>mcpm-projector</code> + <code>mcpm-registry</code> (the user-facing leaves). A third part-time on <code>mcpm-trust</code> + <code>mcpm-secrets</code> + release engineering. v1.0 ships in three months with that team because we are not building a Cap'n-Proto-and-eBPF spaceship. We are building a daemon that reads files, spawns processes, and writes to a socket. That is fundamentally a small problem.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li id="cite-boring">Dan McKinley, "Choose Boring Technology." <a href="https://mcfunley.com/choose-boring-technology">https://mcfunley.com/choose-boring-technology</a></li>
+      <li id="cite-hillel">Hillel Wayne, "Tell Don't Ask, or Why I Can't Just Set the Field" — on accidental vs essential complexity. <a href="https://www.hillelwayne.com/post/cleancode/">https://www.hillelwayne.com/post/cleancode/</a></li>
+      <li id="cite-hickey">Rich Hickey, "Simple Made Easy" (Strange Loop 2011). <a href="https://www.infoq.com/presentations/Simple-Made-Easy/">https://www.infoq.com/presentations/Simple-Made-Easy/</a></li>
+      <li id="cite-kernighan">Brian Kernighan + P.J. Plauger, <em>The Elements of Programming Style</em>, 2nd ed. (1978). The "debugging is twice as hard as writing" quote: <a href="https://en.wikiquote.org/wiki/Brian_Kernighan">https://en.wikiquote.org/wiki/Brian_Kernighan</a></li>
+      <li id="cite-hyrum">Hyrum's Law. <a href="https://www.hyrumslaw.com/">https://www.hyrumslaw.com/</a></li>
+      <li id="cite-async-testing">tokio book, "Testing" — on the rough edges of async Rust testing. <a href="https://tokio.rs/tokio/topics/testing">https://tokio.rs/tokio/topics/testing</a></li>
+      <li id="cite-sans-io">Brett Cannon, "Network protocols, sans I/O" — the canonical sans-I/O argument. <a href="https://snarky.ca/network-protocols-sans-i-o/">https://snarky.ca/network-protocols-sans-i-o/</a></li>
+      <li id="cite-tokio-process"><code>tokio::process</code> documentation. <a href="https://docs.rs/tokio/latest/tokio/process/index.html">https://docs.rs/tokio/latest/tokio/process/index.html</a></li>
+      <li id="cite-rename">POSIX <code>rename(2)</code> man page — atomicity guarantee on same-filesystem renames. <a href="https://man7.org/linux/man-pages/man2/rename.2.html">https://man7.org/linux/man-pages/man2/rename.2.html</a></li>
+      <li id="cite-jsonrpc">JSON-RPC 2.0 specification. <a href="https://www.jsonrpc.org/specification">https://www.jsonrpc.org/specification</a></li>
+      <li id="cite-lsp">LSP base protocol — Content-Length framing. <a href="https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#baseProtocol">https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#baseProtocol</a></li>
+      <li id="cite-rule-of-three">Martin Fowler / WikiWikiWeb on the Rule of Three (refactoring). <a href="https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)">https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)</a></li>
+      <li id="cite-managed-block">Ansible <code>blockinfile</code> module — the prior art for fenced managed-block writes. <a href="https://docs.ansible.com/ansible/latest/collections/ansible/builtin/blockinfile_module.html">https://docs.ansible.com/ansible/latest/collections/ansible/builtin/blockinfile_module.html</a></li>
+      <li id="cite-tuf">The Update Framework specification (full TUF — what we are <em>not</em> implementing). <a href="https://theupdateframework.io/specification/latest/">https://theupdateframework.io/specification/latest/</a></li>
+      <li id="cite-minisign"><code>minisign</code> — Frank Denis's small, boring signature format. <a href="https://jedisct1.github.io/minisign/">https://jedisct1.github.io/minisign/</a></li>
+      <li id="cite-worse-is-better">Richard Gabriel, "Worse Is Better." <a href="https://www.dreamsongs.com/RiseOfWorseIsBetter.html">https://www.dreamsongs.com/RiseOfWorseIsBetter.html</a></li>
+      <li id="cite-spolsky">Joel Spolsky, "Things You Should Never Do, Part I" — on rewrites and over-engineering. <a href="https://www.joelonsoftware.com/2000/04/06/things-you-should-never-do-part-i/">https://www.joelonsoftware.com/2000/04/06/things-you-should-never-do-part-i/</a></li>
+      <li id="cite-yagni">Martin Fowler, "Yagni" (You Aren't Gonna Need It). <a href="https://martinfowler.com/bliki/Yagni.html">https://martinfowler.com/bliki/Yagni.html</a></li>
+    </ol>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Backend debate panel · boring-tech-defender stance. Peer agents: tokio-pragmatist, systems-veteran, library-author, kernel-hacker.
+  </p>
+</main>
+</body>
+</html>

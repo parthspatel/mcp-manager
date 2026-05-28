@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onboarding Specialist — UX deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">ux · onboarding-specialist</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">ux overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Onboarding Specialist's UX</h1>
+  <p class="lede">
+    60 seconds to first MCP. Five questions, not fifty. Detect over prompt. Preview before commit. The release gate is the wall-clock between <code>curl | sh</code> and an AHA-moment: the user watching Claude Code call the <code>time</code> MCP server they didn't know they'd just installed. Everything else in v1.0 is in service of that arc.
+  </p>
+
+  <p>
+    <span class="evidence-badge">60-second AHA target</span>
+    <span class="evidence-badge">env detection &gt; prompts</span>
+    <span class="evidence-badge">5-question max</span>
+    <span class="evidence-badge">preview-before-commit</span>
+    <span class="evidence-badge">demo-MCP-on-by-default</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments</a>
+        <ul>
+          <li><a href="#vs-empathy">vs. empathy-led-designer</a></li>
+          <li><a href="#vs-pm">vs. data-driven-pm</a></li>
+          <li><a href="#vs-recovery">vs. error-recovery-advocate</a></li>
+          <li><a href="#vs-mental">vs. mental-model-coach</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design</a>
+        <ul>
+          <li><a href="#aha">The AHA-moment definition</a></li>
+          <li><a href="#detect">Env-detection algorithm</a></li>
+          <li><a href="#five">The five-question script</a></li>
+          <li><a href="#preview">Preview-before-commit spec</a></li>
+          <li><a href="#transcripts">Four first-launch transcripts (line-by-line, timed)</a></li>
+          <li><a href="#gate">60-second release gate</a></li>
+        </ul>
+      </li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <h3>The north star: 60 seconds, one running MCP, one connected editor</h3>
+    <p>
+      Every product that has ever crossed the chasm has had a moment where the user, sometimes against their better judgement, leans forward and says "wait, that actually works." Activation people call this the "aha moment" — a phrase that has become so over-used it risks meaninglessness, but the underlying observation is true and load-bearing<a class="citation-ref" href="#cite-aha">[1]</a><a class="citation-ref" href="#cite-reforge">[2]</a>. For MCP Manager v1.0, the AHA-moment is unambiguous: the user types one query in Claude Code (or Cursor, or Zed, or Codex) and the model invokes an MCP tool that <em>we installed</em> in the previous minute, returns a real answer, and the user understands that this is now a stable platform on which to install more servers. The release gate I want is wall-clock: 60 seconds, from the end of <code>curl -fsSL https://install.mcp-manager.dev | sh</code> to that first tool call returning data. That is the bar. Everything in this document is reverse-engineered from it.
+    </p>
+
+    <h3>Why 60 seconds and not 5 minutes</h3>
+    <p>
+      Stripe ships its CLI to be useful within seconds of installation<a class="citation-ref" href="#cite-stripe">[3]</a>; Vercel's CLI puts you on a deployed URL faster than most tools render their splash screen<a class="citation-ref" href="#cite-vercel">[4]</a>; GitHub CLI asks the questions it cannot infer and nothing more<a class="citation-ref" href="#cite-ghcli">[5]</a>. The pattern is consistent: the first encounter must be a working encounter, in seconds, not minutes. Five minutes is a coffee break and a Slack context-switch; sixty seconds is "the demo is still running" and the dopamine spike lands at peak attention.
+    </p>
+
+    <h3>The single highest-leverage move: detect, don't prompt</h3>
+    <p>
+      Every prompt in <code>mcpm init</code> costs the user attention. The empathy-led peer wants more "kind" prompts, the recovery-advocate wants more "did you mean…?" branches. I disagree with both at the margin: a prompt the user could have skipped because we knew the answer is not kind, it's lazy. The kindness <em>is</em> the inference. mcpm has access to <code>$SHELL</code>, <code>$EDITOR</code>, the filesystem (which editor configs exist?), <code>which docker</code>, <code>uname</code>, the canonical config paths of <code>~/.claude/</code> / <code>~/.cursor/</code> / <code>~/.config/zed/</code> / <code>~/.codex/</code>, and the locale. From those signals we can pre-fill every answer that has a "right" default. The prompt becomes "I detected these three things; press Enter to accept" — a single keystroke instead of four.
+    </p>
+
+    <h3>The second highest-leverage move: install one trivial demo MCP automatically</h3>
+    <p>
+      The most user-hostile possible outcome of <code>mcpm init</code> is success with zero servers installed. The user has now configured a manager but has nothing to manage. They have to read more docs, decide which server to try, run another command, and re-attempt activation — all while their motivation is bleeding out. The fix is the oldest trick in onboarding playbooks: <em>install a stub on their behalf</em>. The community ships <code>mcp-server-time</code> (or equivalent — current-time, fortune, echo) that has zero secrets, zero config, zero permissions, and a single tool. <code>mcpm init</code> installs it by default, projects it into every detected editor, and the post-init message says "open Claude Code and ask it what time it is — that tool call goes through MCP Manager." That sentence is the AHA-moment, written in advance, and we control the path from "init complete" to "tool call returns" so tightly that we can measure it as a release gate.
+    </p>
+
+    <h3>Why a non-secret demo server matters</h3>
+    <p>
+      <code>E_SECRET_MISSING</code> is the single most common reason a first-launch dies — the user installs <code>github-mcp</code>, doesn't have a <code>GITHUB_TOKEN</code>, hits the error, leaves. A demo server with zero secret requirements sidesteps that path on first run. Users graduate to secret-requiring servers after the AHA has landed. This mirrors <code>create-next-app</code>: the starter app works locally with no configuration; env vars come later<a class="citation-ref" href="#cite-cna">[6]</a>.
+    </p>
+
+    <h3>Preview-before-commit as the central trust mechanism</h3>
+    <p>
+      The locked spec's "show what you're about to change" principle is right but understated. On first launch the user has zero installed mental model of what files mcpm touches; if we just write 7 files across <code>~/.config/</code>, <code>~/Library/Application Support/</code>, <code>~/.claude/</code>, and the project tree, the user feels invaded. The fix: a single "Here is the plan" screen that lists every file we will create or modify, with byte counts, before any write happens. Press Enter to apply. Press <code>e</code> to edit individual lines (toggle a projection off, change the demo server, etc.). Press <code>q</code> to abort with zero files written. This pattern is borrowed directly from <code>terraform plan</code> and from package managers like <code>apt</code> that show the change set before applying<a class="citation-ref" href="#cite-terraform">[7]</a>. Combined with the idempotency guarantee already in the spec, the user can hit Enter knowing that worst case they can re-run.
+    </p>
+
+    <h3>What 5 questions look like (max — usually fewer)</h3>
+    <p>
+      The locked transcripts have 4 questions in Transcript 1, 3 in Transcript 3, 1 in Transcript 4, and 1 in Transcript 5. That's already lean. I want to compress further by collapsing Question 1 ("project into detected toolchains?") into the preview screen — show the user "we'll touch <code>~/.claude/mcp_servers.json</code> and <code>~/.cursor/mcp.json</code>" in the preview rather than asking up-front. That drops the lucky-day count from 4 to 3 prompts: docker-enable, demo-server, service-register. Each is a single keystroke with a sensible default. The hard cap is 5; the practical goal is 3.
+    </p>
+
+    <h3>What should NOT be surfaced on first run</h3>
+    <p>
+      Three locked-spec features that should be deliberately invisible during init:
+    </p>
+    <ul>
+      <li><strong>Idle TTL.</strong> The fact that an unused server suspends after 1800s is operationally correct and conceptually irrelevant to a 60-second goal. Surfacing it confuses users who don't yet know what a server <em>is</em> in our world. It lives in advanced docs.</li>
+      <li><strong>Singleton vs per-client process model.</strong> The default (singleton=true) is correct; the alternative is an edge case. Mentioning it costs us thirty seconds of attention for zero first-run value.</li>
+      <li><strong>Telemetry.</strong> Because there is none (data-driven-pm's local-only metrics live entirely on the user's machine), there is no prompt. The only mention is a single line in the post-init "what just happened" message — "we collected zero data about you; metrics live in <code>~/.local/share/mcp-manager/metrics.db</code> if you want to read them."</li>
+    </ul>
+
+    <h3>The four transcripts we owe the spec</h3>
+    <p>
+      The locked v1.0 spec names four first-launch transcripts (lucky-day, non-interactive, project-scope, cloned-from-elsewhere). I design each line-by-line in the <a href="#transcripts">design section</a> with timing annotations. Three observations carry across all four: env-detection runs once at the top and pre-fills everything; the preview screen is identical in shape across all four (non-interactive echoes the preview to stderr); the post-init "Now what?" message ends with one mdbook URL — but the AHA arrives before they need it.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments</h2>
+
+    <h3 id="vs-empathy">Against <code>empathy-led-designer</code></h3>
+    <p>
+      My empathy-led peer wants tone audits on every string, "kind defaults," extra confirmations so the user feels in control. We agree on 80% of substance — both reject error messages that read like dmesg. But where they want <em>more</em> moments of pause, I want fewer. Empathy is not synonymous with caution; sometimes empathy is "I respect your time enough to do the obvious work for you." Krug's rule — "Don't make me think" — applies<a class="citation-ref" href="#cite-krug">[8]</a>. A prompt with a default I'd accept 95% of the time is one I should not be shown at all.
+    </p>
+    <p>
+      Concretely, where I diverge:
+    </p>
+    <ul>
+      <li><strong>Tone audits, yes; extra prompts, no.</strong> I will happily concede every word of every error message to my empathy-led peer. What I will not concede is splitting a single 3-keystroke decision into three separate "are you sure?" screens.</li>
+      <li><strong>Confirmation friction matches reversibility (locked spec).</strong> The spec already nails this: <code>y/N</code> for delete, type-the-name for purge, type-WIPE for nuclear. First-launch <code>mcpm init</code> is the least destructive action in the entire tool — every file it writes is recoverable from <code>--force</code> backups. It does not need extra friction.</li>
+      <li><strong>The empathy <em>is</em> the inference.</strong> The kindest thing we can do for a tired developer at 4pm on a Thursday is to not make them confirm that yes, they do have Claude Code installed, when we just read the directory three milliseconds ago.</li>
+    </ul>
+
+    <h3 id="vs-pm">Against <code>data-driven-pm</code></h3>
+    <p>
+      My PM peer wants local-only metrics so we can answer "is the 60-second goal actually met?" without violating privacy. We agree completely on the goal. We diverge on the timing of when those metrics get collected and whether the user ever sees a prompt about them.
+    </p>
+    <ul>
+      <li><strong>Zero telemetry prompt on first run, ever.</strong> If the metrics are truly local-only, there is nothing to consent to. Asking the user to "consent" to data they own and never leaves their machine creates the false impression that we're collecting something. We're not. The fact gets one line in the post-init message and a sentence in the docs.</li>
+      <li><strong>Metric: time-to-first-tool-call, computed locally.</strong> mcpd records the wall-clock between the audit-log <code>init.complete</code> entry and the first <code>server.tool_call</code> entry. That delta is the user's personal 60-second-or-not number. <code>mcpm status</code> can show it. We never see it.</li>
+      <li><strong>Don't put a "skip telemetry?" prompt in the 5-question budget.</strong> That's a question that doesn't deserve a slot because the answer is always the same: there's no telemetry to skip. Spending a prompt on it would be a wasted user attention unit.</li>
+    </ul>
+    <p>
+      Where my PM peer is right and I'm wrong: I would shortcut metric collection to "only collect if user has run <code>mcpm init</code> with the demo server." The PM is correct that we should collect the timing data unconditionally in the local audit log so a power user who wants to investigate their own setup can. I cede this.
+    </p>
+
+    <h3 id="vs-recovery">Against <code>error-recovery-advocate</code></h3>
+    <p>
+      My recovery peer wants the 12-row error taxonomy from the locked spec to grow more branches — more "did you mean…?", more interactive recovery flows, more in-init guidance for when things go wrong. We agree on the principle that every error must carry a fix. We diverge on <em>where</em> in the user journey those branches belong.
+    </p>
+    <ul>
+      <li><strong>Make first-launch errors structurally impossible, don't recover from them.</strong> The 12-row taxonomy includes <code>E_SECRET_MISSING</code> (no secret in keychain), <code>E_REGISTRY_UNREACHABLE</code> (network), <code>E_KEYCHAIN_UNAVAILABLE</code> (Linux without libsecret). All three can hit a user during init. My answer: install the demo server, which requires zero secrets, ships with the binary (no registry fetch), and uses no keychain. The first-launch error rate for these three codes drops to zero by construction. Recovery branches matter on day 2; on day 1 we engineer them out.</li>
+      <li><strong>The error taxonomy applies <em>after</em> the AHA.</strong> Once the user has seen the tool work, an <code>E_SECRET_MISSING</code> error on their second server install is a teachable moment — they understand what an MCP server is, what secrets are, why we need one. The same error on minute one is a wall.</li>
+      <li><strong>One first-launch error I do want to handle gracefully:</strong> the editor we projected into wasn't actually running. mcpm can't auto-launch the editor, but the post-init message should say "if Claude Code is already open, restart it so it picks up the new server." That sentence prevents a confused user who got the projection right but didn't know to reload.</li>
+    </ul>
+    <p>
+      Where the recovery peer is right: a non-trivial fraction of users will hit locked libsecret or no GUI keychain. The demo server saves them on day 1; on day 2, their <code>github-mcp</code> install needs the recovery branches. Structural prevention on first run; recovery taxonomy from second run on.
+    </p>
+
+    <h3 id="vs-mental">Against <code>mental-model-coach</code></h3>
+    <p>
+      My mental-model peer wants to fight every jargon term and rename our vocabulary so users acquire a correct mental model fast. We agree on this completely — "projection" is a load-bearing term, "managed block" is another, and we should both be religious about consistency. We diverge on how much vocabulary the user must acquire <em>during init</em>.
+    </p>
+    <ul>
+      <li><strong>The init flow should teach zero concepts.</strong> Users learn vocabulary by needing it. On day 1, they need exactly two terms: "MCP server" (the thing being managed) and "editor" (the thing that calls the server). Everything else — registries, projection, isolation, devenv, scope — is not in the lucky-day script at all.</li>
+      <li><strong>Project-scope adds exactly one concept: trust.</strong> The cloned-from-elsewhere transcript introduces "trust" the same way <code>direnv</code> does, because the user has a concrete reason to care (someone else's code is about to run). That's a justified vocabulary expansion. Anything more is premature.</li>
+      <li><strong>"Toolchain" is wrong; say "editor."</strong> My mental-model peer is going to argue that "toolchain" is more accurate. They're right. But on first-run, the user knows "editor"; they don't know "toolchain." The internal docs and config files can say toolchain; the first-run prompts say editor.</li>
+    </ul>
+    <p>
+      Net concession to my peer: yes, the vocabulary we do introduce must be perfectly consistent — if we say "MCP server" once we never say "tool" or "plugin" to mean the same thing. I'll review every prompt string against their vocabulary doc.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3 id="aha">The AHA-moment definition</h3>
+    <p>
+      The AHA-moment is the first time the user observes their editor (Claude Code, Cursor, Zed, Codex) successfully invoke an MCP tool that mcpm installed. Concretely, in the local audit log we look for two adjacent events:
+    </p>
+    <pre><code>2026-05-27T14:33:01Z  init.complete       scope=user demo_server=time
+2026-05-27T14:33:48Z  server.tool_call    server=time tool=now editor=claude-code ok=true</code></pre>
+    <p>
+      Wall-clock delta: 47 seconds. That is the metric. The 60-second release gate is failed if, in our internal beta sample (N≥10 reasonable Mac/Linux laptops with Claude Code installed), the median delta exceeds 60 seconds. The metric is computed locally, on the user's machine, from the audit log they own. No data leaves the host.
+    </p>
+
+    <h3 id="detect">Env-detection algorithm</h3>
+    <p>
+      Run once, at the very start of <code>mcpm init</code>, before any prompt. The detector emits a JSON blob that pre-fills every default. The algorithm is intentionally cheap (no network, no shelling out to package managers; just filesystem reads + <code>which</code>):
+    </p>
+    <ol>
+      <li><strong>OS + shell.</strong> <code>uname -s</code> → mac|linux. <code>$SHELL</code> → bash|zsh|fish|nu. <code>$XDG_CONFIG_HOME</code> falls back to platform-default.</li>
+      <li><strong>Editors.</strong> Probe canonical config paths:
+        <ul>
+          <li>Claude Code: <code>~/.claude/</code> exists</li>
+          <li>Cursor: <code>~/.cursor/</code> or <code>~/Library/Application Support/Cursor/</code> exists</li>
+          <li>Zed: <code>~/.config/zed/</code> exists</li>
+          <li>Codex CLI: <code>~/.codex/</code> exists, or <code>which codex</code> succeeds</li>
+          <li>VS Code: <code>~/Library/Application Support/Code/User/</code> or <code>~/.config/Code/User/</code> exists</li>
+        </ul>
+      </li>
+      <li><strong>Docker.</strong> <code>which docker</code> succeeds AND <code>docker info</code> exits 0 (i.e., daemon is running, not just installed).</li>
+      <li><strong>Keychain.</strong> macOS always yes; Linux: <code>secret-tool</code> on PATH OR <code>kwallet5</code> binary exists.</li>
+      <li><strong>Service manager.</strong> macOS launchd is always available; Linux: <code>systemctl --user is-system-running</code> doesn't error.</li>
+      <li><strong>Project context.</strong> If <code>./.mcp-manager.toml</code> exists, switch to project-scope flow (trust-gate transcript). If <code>./.git</code> exists, project-scope is offered as a non-default.</li>
+      <li><strong>Existing init.</strong> If <code>$XDG_CONFIG_HOME/mcp-manager/config.toml</code> exists, switch to idempotent re-run (print "already initialized" + sha + exit 0).</li>
+    </ol>
+    <p>
+      Output: a small TOML blob displayed at the top of the interactive flow ("We detected:"), and a JSON blob written to <code>$XDG_STATE_HOME/mcp-manager/last-detect.json</code> for debugging.
+    </p>
+
+    <h3 id="five">The five-question script</h3>
+    <p>
+      Worst case (everything detected, lucky day): 3 prompts. Hard cap: 5. The questions, in order, with their detection-default:
+    </p>
+    <table class="compare">
+      <thead><tr><th>#</th><th>Question</th><th>Default from detect</th><th>Skippable?</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>"Install the <code>time</code> demo MCP server so you can test the setup?"</td><td>Y</td><td>No — this is the AHA path. <code>--no-demo</code> opts out.</td></tr>
+        <tr><td>2</td><td>"Enable the Docker MCP Catalog as an additional registry?"</td><td>Y if docker daemon running, else N (skip question entirely)</td><td>Yes (only asked if docker present)</td></tr>
+        <tr><td>3</td><td>"Register mcpmanagerd to start at login?"</td><td>N (auto-spawn covers the common case)</td><td>Always asked; one keystroke to default-No</td></tr>
+        <tr><td>4</td><td>(project-scope only) "Trust this project's MCP config?"</td><td>N (direnv-style explicit allow)</td><td>Only asked for project-scope; mandatory there</td></tr>
+        <tr><td>5</td><td>(reserved) "Capture a first secret now?"</td><td>N</td><td>Only asked if the demo server is opted-out AND a registered registry advertises a server requiring a known secret.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      The locked spec's Transcript 1 has four prompts; my script has three on the lucky day (Q1, Q2 only if docker, Q3) and four max for any user. Question 5 is reserved and not shown on the lucky day.
+    </p>
+
+    <h3 id="preview">Preview-before-commit spec</h3>
+    <p>
+      After all questions are answered (or for <code>--defaults -y</code>, immediately after detection), mcpm renders a single preview screen. Nothing has been written yet. The user can:
+    </p>
+    <ul>
+      <li>Press <strong>Enter</strong> — apply the plan.</li>
+      <li>Press <strong>e</strong> — open <code>$EDITOR</code> on the plan TOML; on save, re-render the preview with edits applied.</li>
+      <li>Press <strong>q</strong> — abort. No files written. Exit 0.</li>
+      <li>Press <strong>d</strong> — show a unified diff of every file we will create/modify against current state (current state being either empty or the previous config, in re-init).</li>
+    </ul>
+    <p>
+      The preview is structured as: header (target scope + version), files-to-create section (with byte counts), files-to-modify section (managed-block diff), background-effects section (service register? auto-spawn? demo install?), and a footer with the three keystrokes. Width: 80 cols. Renders identically in non-interactive mode but skips the keystroke handler.
+    </p>
+    <pre><code>┌─ mcpm init — Plan preview ────────────────────────────────────┐
+│ Scope: user (~/.config/mcp-manager/)                            │
+│ Detected: macOS · zsh · Claude Code · Cursor · docker (running) │
+│                                                                  │
+│ Will CREATE (3 files):                                           │
+│   ~/.config/mcp-manager/config.toml              ~640 B          │
+│   ~/Library/Application Support/mcp-manager/audit.log (empty)    │
+│   ~/Library/Application Support/mcp-manager/servers.lock (empty) │
+│                                                                  │
+│ Will MODIFY (2 files, managed-block insert):                     │
+│   ~/.claude/mcp_servers.json                     +1 entry: time  │
+│   ~/.cursor/mcp.json                             +1 entry: time  │
+│                                                                  │
+│ Will INSTALL:                                                    │
+│   mcp-server-time @ 1.0.0  (zero secrets, zero config)           │
+│                                                                  │
+│ Will NOT do:                                                     │
+│   • Register a background service (auto-spawn covers this)       │
+│   • Send any telemetry (no network calls at all)                 │
+│                                                                  │
+│ Press Enter to apply · e to edit · d for diff · q to abort      │
+└──────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <h3 id="transcripts">Four first-launch transcripts (line-by-line, timed)</h3>
+
+    <h4>Transcript 1 — Lucky-day (target: 47s to AHA, hard gate: 60s)</h4>
+    <pre><code>$ curl -fsSL https://install.mcp-manager.dev | sh
+[install] downloading mcpm-1.0.0-aarch64-apple-darwin.tar.gz ......... 8s
+[install] verifying minisign signature ............................... 0.4s
+[install] installing to /usr/local/bin/mcpm ......................... 0.1s
+[install] done. run `mcpm init` to set up.                            ← T+9s
+
+$ mcpm init                                                            ← T+9s
+mcpm v1.0.0 first-run setup
+
+Detecting environment …                                              ← T+9.3s
+  ✓ macOS · zsh · ~/.config writeable
+  ✓ Claude Code   (~/.claude/)
+  ✓ Cursor        (~/Library/Application Support/Cursor/)
+  ● Zed, Codex CLI not installed
+  ✓ Docker daemon running                                            ← T+10s
+
+[1/3] Install the `time` demo MCP server so you can test the setup?
+      It has zero secrets, zero config, and ships in the binary.
+      [Y/n]: ↩                                                        ← T+12s
+
+[2/3] Enable the Docker MCP Catalog as an additional registry?
+      You can add it later with `mcpm registry add docker-catalog`.
+      [Y/n]: n ↩                                                      ← T+15s
+
+[3/3] Register mcpmanagerd to start at login?
+      It will auto-spawn either way; this only avoids the ~200ms
+      cold-start between runs. [y/N]: ↩                              ← T+17s
+
+┌─ Plan preview ──────────────────────────────────────────────────┐
+│ Will create 3 files, modify 2 editor configs, install 1 demo MCP │
+│ Press Enter to apply · e edit · d diff · q abort                 │
+└──────────────────────────────────────────────────────────────────┘
+[Enter]                                                              ← T+19s
+
+Writing config.toml ............ ok                                  ← T+19.1s
+Writing audit.log .............. ok
+Writing servers.lock ........... ok
+Projecting into claude-code .... ok                                  ← T+19.4s
+Projecting into cursor ......... ok                                  ← T+19.6s
+Installing mcp-server-time@1.0.0 (bundled, no download) .. ok        ← T+20.1s
+Starting mcpmanagerd (auto-spawn) .. pid 47821 .. ready              ← T+20.4s
+
+✓ Done in 1.4s. Next:
+
+  Open Claude Code (or Cursor) — restart it if it was already open.
+  Ask it: "what time is it?"
+  That call goes through MCP Manager.
+
+  Read more:  https://docs.mcp-manager.dev/v1.0/first-mcp           ← T+21s
+
+[user opens Claude Code, types: "what time is it?"]                  ← T+30s
+[Claude Code calls mcp.time.now]                                     ← T+45s
+[Audit log: server.tool_call server=time tool=now ok=true]           ← T+47s
+                                                                       ↑
+                                                              AHA-MOMENT
+                                                          (well inside 60s gate)
+</code></pre>
+
+    <h4>Transcript 2 — Non-interactive (CI / Nix / Ansible)</h4>
+    <pre><code>$ mcpm init --defaults -y                                            ← T+0s
+mcpm v1.0.0 first-run (non-interactive)
+Detected: macOS · zsh · claude-code · cursor · docker(yes)            ← T+0.3s
+
+Plan (preview to stderr):
+  CREATE  ~/.config/mcp-manager/config.toml          (640 B)
+  CREATE  ~/Library/Application Support/mcp-manager/audit.log
+  CREATE  ~/Library/Application Support/mcp-manager/servers.lock
+  MODIFY  ~/.claude/mcp_servers.json                 +time
+  MODIFY  ~/.cursor/mcp.json                         +time
+  INSTALL mcp-server-time@1.0.0
+  SKIP    docker-catalog registry (non-interactive default)
+  SKIP    service registration   (auto-spawn)
+
+Applying ....................... ok                                  ← T+1.2s
+mcpd auto-spawned (pid 49102, ready)                                 ← T+1.4s
+
+$ echo $?
+0
+
+# Re-run is a no-op
+$ mcpm init --defaults -y
+mcpm v1.0.0 already initialized (config sha matches defaults).
+No changes.
+$ echo $?
+0
+</code></pre>
+    <p>
+      No AHA-moment timing for this transcript because there's no human in the loop. The contract: identical end-state to Transcript 1 (modulo timestamps), in &lt;2s, with the preview written to stderr so CI logs still capture the change set.
+    </p>
+
+    <h4>Transcript 3 — Project-scope (`mcpm project init` in a repo)</h4>
+    <pre><code>$ cd ~/work/acme-data-pipeline                                       ← T+0s
+$ mcpm project init                                                  ← T+0s
+mcpm v1.0.0 project-scope init
+Detecting environment …                                              ← T+0.3s
+  ✓ Project context: ~/work/acme-data-pipeline (.git present)
+  ✓ User-scope mcpm already initialized                              ← T+0.5s
+
+[1/2] Inherit user-level servers in this project? [all]: ↩          ← T+2s
+
+[2/2] Description (one-liner, shown to teammates):
+      ACME data pipeline tooling ↩                                   ← T+8s
+
+┌─ Plan preview ──────────────────────────────────────────────────┐
+│ Will create:                                                     │
+│   .mcp-manager.toml          (commit this)            ~310 B    │
+│   .mcp-manager.lock          (commit this)            ~80 B     │
+│                                                                  │
+│ Inherits all servers from your user config (including `time`).   │
+│ This file is safe to commit; teammates run `mcpm project init`   │
+│ in this dir to opt-in.                                           │
+│                                                                  │
+│ [Enter] apply · e edit · d diff · q abort                        │
+└──────────────────────────────────────────────────────────────────┘
+[Enter]                                                              ← T+10s
+
+✓ Wrote .mcp-manager.toml and .mcp-manager.lock                      ← T+10.2s
+
+Next:
+  git add .mcp-manager.toml .mcp-manager.lock
+  Commit and push. Teammates: `cd` here and `mcpm project init`.
+</code></pre>
+    <p>
+      No "first AHA" because the user already had one in Transcript 1 (or via <code>mcpm init</code>). Project-scope is about <em>extending</em> the working setup to a teammate-shareable config; it inherits the working demo server, so the project transcript is silently re-AHA-ing on every teammate's machine.
+    </p>
+
+    <h4>Transcript 4 — Cloned-from-elsewhere (trust gate, the friction point)</h4>
+    <pre><code>$ git clone git@github.com:acme/data-pipeline.git                    ← T+0s
+$ cd data-pipeline                                                   ← T+5s
+$ mcpm project init                                                  ← T+5s
+mcpm v1.0.0 project-scope init
+Detecting environment …                                              ← T+5.3s
+  ✓ Project context: ./data-pipeline (.git present, just cloned)
+  ! .mcp-manager.toml present, NOT YET TRUSTED                       ← T+5.5s
+
+The project declares:
+  • acme-db        (registry: official, package: postgres-mcp)
+  • github         (project-local override; inherits user-scope)
+  • acme-internal  ← LOCAL EXECUTABLE: ./tools/acme-mcp
+
+The `acme-internal` server runs a local binary from this repo
+(./tools/acme-mcp). Review that path before trusting.                ← T+6s
+
+[1/1] Trust this project's MCP config?
+      y) trust this exact config (sha256: 8a9f2d…)
+      n) decline (continue with user-scope only)
+      e) open .mcp-manager.toml in $EDITOR before deciding
+      r) review ./tools/acme-mcp in $EDITOR
+      [y/n/e/r]: r ↩                                                  ← T+15s
+
+[user reads ./tools/acme-mcp briefly, $EDITOR closes]                ← T+45s
+
+[1/1] Trust this project's MCP config?
+      [y/n/e/r]: y ↩                                                 ← T+47s
+
+✓ Trust recorded                                                      ← T+47.2s
+  Path: ~/work/data-pipeline
+  Config sha256: 8a9f2d…
+  Granted at: 2026-05-27T14:34:11Z
+
+Running mcpm project sync …                                          ← T+47.5s
+  Projecting acme-db into claude-code .... ok
+  Projecting github (override) into cursor .... ok
+  Projecting acme-internal into claude-code .... ok                  ← T+48.5s
+
+✓ Done. The 3 project servers are now available in your editor.
+</code></pre>
+    <p>
+      This transcript intentionally has the longest user-attended time (47s) because the friction is the feature — the user is being asked to consent to running someone else's code. The 60-second AHA gate doesn't apply here because the user already had their first AHA on a different machine. What matters here is that the trust prompt is unambiguous, names every local-executable server explicitly, and offers <code>r</code> to review before yes.
+    </p>
+
+    <h3 id="gate">60-second release gate</h3>
+    <p>
+      The release gate has two enforcement points:
+    </p>
+    <ol>
+      <li><strong>Internal beta dogfood metric.</strong> Before v1.0 ships, 10+ team members run the full <code>curl | sh → mcpm init → first tool call</code> path on personal machines (Mac + Linux mix, Claude Code + Cursor mix). Median wall-clock must be ≤ 60s. 90th-percentile must be ≤ 90s. We track in a shared sheet (filled in by hand from each tester's local audit log, which they own).</li>
+      <li><strong>Public-launch readiness check.</strong> The mdbook docs include a one-page "Quickstart" that the user can clock themselves; the page tells them "if this took you more than 90 seconds, we screwed up — please open an issue with your output."</li>
+    </ol>
+    <p>
+      Failing the gate blocks v1.0 release. Mitigations if the gate is failing: shrink the demo server's startup time (it's already &lt;100ms), ship more pre-bundled binaries to skip download steps, drop a question, improve the projector to be parallel rather than sequential.
+    </p>
+
+    <h3 id="accessibility">Accessibility commitments (first-run-specific)</h3>
+    <p>
+      The locked v1.0 spec's a11y commitments (color+glyph, NO_COLOR, keyboard-only) apply throughout. Three first-run-specific extras:
+    </p>
+    <ul>
+      <li><strong>Screen-reader-friendly preview.</strong> The boxed preview ASCII renders an alternate plain-text version when <code>NO_COLOR</code> is set OR <code>TERM=dumb</code> OR <code>$ACCESSIBILITY_MODE</code> is exported. The plain-text version is the same content with no box-drawing characters.</li>
+      <li><strong>Pace your own output.</strong> No timed animations or spinners during the wait between detect and first prompt. The status output is line-oriented so a screen reader can read it as it's written.</li>
+      <li><strong>Locale honored.</strong> mcpm reads <code>$LANG</code>; if v1.0 only ships English (it does), the post-init message includes a "translations welcome" pointer for non-English users.</li>
+    </ul>
+
+    <h3 id="docs">"Now what?" — linking into mdbook</h3>
+    <p>
+      The post-init message has exactly one outbound link: <code>https://docs.mcp-manager.dev/v1.0/first-mcp</code>. That page has three sections: (1) "you just installed the time server, here's how it works" — confirming the AHA they just had; (2) "your next install" — walking through <code>mcpm install official/github-mcp</code> with secrets; (3) "common patterns" — a small catalog. Update notifications are the only other in-flow link, surfaced by <code>mcpm status</code> when a new version is detected, never during init itself (we don't want to distract a fresh user with "you should upgrade me" before they've finished installing).
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li id="cite-aha">Mind the Product — "What is the 'Aha Moment'? A guide for product managers." <a href="https://www.mindtheproduct.com/aha-moments-the-eureka-moment-for-pms/">https://www.mindtheproduct.com/aha-moments-the-eureka-moment-for-pms/</a></li>
+      <li id="cite-reforge">Reforge — "The Aha Moment Is a Myth. Build For Activation Instead." <a href="https://www.reforge.com/blog/aha-moment-myth-activation">https://www.reforge.com/blog/aha-moment-myth-activation</a></li>
+      <li id="cite-stripe">Stripe CLI — installation and first-request quickstart. <a href="https://docs.stripe.com/stripe-cli">https://docs.stripe.com/stripe-cli</a></li>
+      <li id="cite-vercel">Vercel CLI — getting started. <a href="https://vercel.com/docs/cli">https://vercel.com/docs/cli</a></li>
+      <li id="cite-ghcli">GitHub CLI — first-run <code>gh auth login</code> flow design. <a href="https://cli.github.com/manual/gh_auth_login">https://cli.github.com/manual/gh_auth_login</a></li>
+      <li id="cite-cna">Vercel — <code>create-next-app</code> CLI defaults. <a href="https://nextjs.org/docs/app/api-reference/cli/create-next-app">https://nextjs.org/docs/app/api-reference/cli/create-next-app</a></li>
+      <li id="cite-terraform">HashiCorp — <code>terraform plan</code> preview-before-apply pattern. <a href="https://developer.hashicorp.com/terraform/cli/commands/plan">https://developer.hashicorp.com/terraform/cli/commands/plan</a></li>
+      <li id="cite-krug">Steve Krug — "Don't Make Me Think: A Common Sense Approach to Web Usability" (3rd ed., New Riders, 2014). <a href="https://www.sensible.com/dont-make-me-think/">https://www.sensible.com/dont-make-me-think/</a></li>
+      <li id="cite-npm">npm — <code>npm init</code> and <code>npm init -y</code> documentation. <a href="https://docs.npmjs.com/cli/v10/commands/npm-init">https://docs.npmjs.com/cli/v10/commands/npm-init</a></li>
+      <li id="cite-direnv">direnv — <code>direnv allow</code> trust model. <a href="https://direnv.net/docs/permissions.html">https://direnv.net/docs/permissions.html</a></li>
+      <li id="cite-clig">Command Line Interface Guidelines (clig.dev) — defaults and idempotency. <a href="https://clig.dev/#defaults">https://clig.dev/#defaults</a></li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

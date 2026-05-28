@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library Author — Backend deep dive — MCP Manager v1.0</title>
+<meta name="description" content="Public API is forever. A library-author's view of mcpm-protocol as a tiny, stable, semver-disciplined wire crate, with mcpm-client as the convenience layer that churns.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">backend · library-author</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">backend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Library Author's Backend</h1>
+  <p class="lede">
+    Public API is forever. The other four backend agents are debating runtime tactics, kernel primitives, and event journals;
+    I am debating <em>what gets exported with <code>pub</code></em>. If we get the wire crate wrong, every alternative client
+    written against MCP Manager v1.0 dies on the rocks when we ship v1.1. Tiny <code>mcpm-protocol</code>, deliberately
+    stable; everything else can churn behind it.
+  </p>
+
+  <p>
+    <span class="evidence-badge">stance: library-author</span>
+    <span class="evidence-badge">facet: backend</span>
+    <span class="evidence-badge">#[non_exhaustive] everywhere</span>
+    <span class="evidence-badge">cargo-semver-checks in CI</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments against peers</a>
+        <ul>
+          <li><a href="#vs-tokio-pragmatist">vs tokio-pragmatist</a></li>
+          <li><a href="#vs-systems-veteran">vs systems-veteran</a></li>
+          <li><a href="#vs-kernel-hacker">vs kernel-hacker</a></li>
+          <li><a href="#vs-boring-tech-defender">vs boring-tech-defender</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design — per crate</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <p>
+      The v1.0 spec already pinned the right structural decision: <code>mcpm-protocol</code> is the small, stable, public
+      surface; <code>mcpm-client</code> is the in-tree convenience layer that wraps it
+      (<a href="../../technical-design.html#components">per-crate table</a>). What it did <em>not</em> pin is the discipline
+      that makes that structural decision actually pay off five years from now. Without that discipline,
+      <code>mcpm-protocol</code> drifts into "whatever the daemon happens to need this week," picks up a tokio dependency
+      because somebody hand-wrote an async stream impl, accidentally re-exports a 30-variant <code>Error</code> enum that we
+      then can't extend without a major bump, and at v1.4 we discover we cannot rename a field anybody might be matching on.
+      I have seen this happen in three of the last four crates I shipped. The defaults of the Rust ecosystem
+      <em>tilt toward fragility</em>: <code>pub enum E { A, B }</code> is exhaustive unless you say otherwise; <code>pub struct
+      S { pub x: u32 }</code> is constructible by name unless you say otherwise; <code>pub trait T</code> is implementable by
+      anyone unless you say otherwise. Every default in Rust says "you are stuck with this forever." Library authors must
+      consciously reverse each one.
+    </p>
+
+    <p>
+      My core position: <strong>everything public in <code>mcpm-protocol</code> must be designed under the assumption that
+      tomorrow we'll need to add a variant, a field, or a method without breaking the world.</strong> That single discipline
+      drives every concrete choice that follows: <code>#[non_exhaustive]</code> on every public enum and struct, sealed
+      traits for "we want to add methods later" patterns, no leaked transitive dependencies, no exposed re-exports of types
+      from crates we don't control, no async on the wire-type crate (the type definitions are sync data; the I/O happens in
+      <code>mcpm-client</code>), and cargo-semver-checks in CI as a hard gate. The Cargo team have explicitly endorsed this
+      tool and Cargo itself uses it on its own library
+      components<sup><a href="https://github.com/obi1kenobi/cargo-semver-checks">[semver-checks]</a></sup>.
+    </p>
+
+    <p>
+      The other axis I obsess over is the <strong>0.x vs 1.0+ contract.</strong> Cargo's semver page is explicit that 0.x
+      treats minor as breaking and patch as compatible, but at 1.0 the rules tighten dramatically: adding a public enum
+      variant, adding a non-defaulted method to a trait, even widening a field's type from <code>u32</code> to <code>u64</code>
+      becomes major<sup><a href="https://doc.rust-lang.org/cargo/reference/semver.html">[cargo-semver]</a></sup>. The trap is
+      shipping a crate at 1.0.0 before its public surface has been adversarially reviewed for "what can we never change?". My
+      recommendation: <code>mcpm-protocol</code> starts at <strong>0.1</strong> and stays at 0.x through v1.0, v1.1, and
+      maybe v1.2 of the binary. We only bump <code>mcpm-protocol</code> to 1.0 when we have a deprecation cycle behind us and
+      external clients in the wild verifying that what we marked stable actually is. <em>mcpmanagerd</em> itself ships at 1.0
+      because the user-facing binary needs the marketing signal; the wire crate, which third parties Cargo-depend-on, does
+      not get to share that bath water.
+    </p>
+
+    <p>
+      Finally: the "double-version" question. The spec adds a custom <code>mcpm_wire_version</code> on every JSON-RPC message
+      (<a href="../../technical-design.html#wire">wire section</a>). That's good — it gives us in-band detection of drift —
+      but it's not enough on its own. We <em>also</em> need <code>mcpm-protocol</code>'s Cargo version to track the wire
+      version cleanly. A third party who pins <code>mcpm-protocol = "1.2"</code> in their Cargo.toml must get exactly the
+      same set of methods + types that a daemon advertising <code>mcpm_wire_version = "1.2"</code> understands. Two version
+      numbers for the same thing are a debugging tax; we make them identical. The version of the binary
+      (<code>mcpmanagerd</code> 1.4.3) is a separate axis and can drift faster.
+    </p>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments against peers</h2>
+
+    <h3 id="vs-tokio-pragmatist">vs <a href="./agent-tokio-pragmatist.html#design">tokio-pragmatist</a></h3>
+
+    <p>
+      The tokio-pragmatist will want <code>mcpm-protocol</code> to expose ergonomic streaming wrappers using <code>tokio::
+      sync</code>, <code>tower::Service</code>, and <code>futures::Stream</code>. They will argue this is idiomatic and that
+      forcing every consumer to wire up their own stream-of-frames adaptor is busy-work. They are right about the busy-work.
+      They are wrong about where it goes.
+    </p>
+
+    <p>
+      <strong>Where I'll concede:</strong> the convenience layer absolutely belongs in the tree. <code>mcpm-client</code>
+      should expose a tokio-flavoured API: <code>Client::tail_logs(&amp;self, server: &amp;str) -&gt; impl Stream&lt;Item =
+      Result&lt;LogLine, Error&gt;&gt;</code>, the dial-or-auto-spawn dance baked in, retry policies, all of it. First-party
+      clients (the CLI, the TUI, a future GUI) should depend on <code>mcpm-client</code> and never see the raw frame format.
+      That's exactly what the v1.0 spec already says.
+    </p>
+
+    <p>
+      <strong>Where I'll dig in:</strong> the wire-types crate <code>mcpm-protocol</code> must not depend on tokio. Not
+      transitively, not optionally, not behind a feature flag enabled by default. The reason is concrete: someone will want
+      to build a non-async <code>mcpm</code>-aware tool — a CI gate that introspects a project's lockfile, a static
+      analysis pass, a Python binding via PyO3 that runs in a synchronous request handler, an `embeddedfile`-style status
+      probe written in C calling our types through bindgen. The moment <code>mcpm-protocol</code> pulls tokio into its
+      compile graph, every one of those use cases either gains 80 transitive crates of build cost or becomes impossible.
+      Serde supports no_std cleanly via feature
+      flags<sup><a href="https://serde.rs/no-std.html">[serde-no-std]</a></sup>, and we should at minimum ship
+      <code>mcpm-protocol</code> with <code>default-features = ["std"]</code> and a working <code>no_std</code> profile (no
+      <code>alloc</code> is unrealistic since we have <code>String</code> and <code>Vec</code> in payloads; <code>alloc</code>
+      yes, <code>std</code> optional).
+    </p>
+
+    <p>
+      The async streams the tokio-pragmatist wants live in <code>mcpm-client</code>, where churn is fine. We can rev the
+      stream ergonomics every six months without breaking anyone who only depends on the wire types. That's the entire point
+      of the split.
+    </p>
+
+    <h3 id="vs-systems-veteran">vs <a href="./agent-systems-veteran.html#design">systems-veteran</a></h3>
+
+    <p>
+      The systems-veteran preaches sans-I/O cores and explicit state machines — and they're right that the supervisor's
+      lifecycle should be a state machine, not a tangle of <code>Mutex&lt;HashMap&lt;String, ServerHandle&gt;&gt;</code>. Where
+      we'll clash is the <em>encoding</em> of those state machines in the public API.
+    </p>
+
+    <p>
+      Concretely: the systems-veteran will propose exposing the supervisor's state machine as a public type, perhaps
+      something like <code>pub enum ServerState { Spawning, Running, IdleTimerArmed, RestartingBackoff(Duration), OomFailed,
+      Stopped }</code> so that callers can match on it for diagnostic UIs. <strong>This is a load-bearing public surface
+      decision.</strong> Today there are six states; tomorrow we add <code>Quarantined</code> (server flagged by registry
+      audit) and <code>WarmRestart</code> (config change, no full crash) and we've broken everyone who matched on the enum.
+    </p>
+
+    <p>
+      My counter: every public enum that represents a state, an error, a kind, or a category gets <code>#[non_exhaustive]</code>.
+      RFC 2008 is the canonical reference and it stabilized
+      cleanly<sup><a href="https://rust-lang.github.io/rfcs/2008-non-exhaustive.html">[rfc-2008]</a></sup>; downstream
+      pattern matches require a wildcard arm and our future-self gets to add variants in <em>minor</em> releases. Same goes
+      for any public struct in <code>mcpm-protocol</code> where we might add fields — <code>ServerDetail</code>,
+      <code>InstallResult</code>, <code>LogLine</code> — every one of them <code>#[non_exhaustive]</code>, constructed
+      internally via builder or with a private constructor, never with struct literal syntax from outside.
+    </p>
+
+    <p>
+      Where I'll partially yield: the systems-veteran's event journal is exactly the right shape for diagnostics, and the
+      journal entries should be a public type in <code>mcpm-protocol</code> so that external observers can subscribe. But
+      that just makes the <code>#[non_exhaustive]</code> discipline more urgent: <code>AuditEvent</code> will grow new
+      variants every release.
+    </p>
+
+    <h3 id="vs-kernel-hacker">vs <a href="./agent-kernel-hacker.html#design">kernel-hacker</a></h3>
+
+    <p>
+      The kernel-hacker lives for cgroup v2 events, RLIMIT_AS plumbing, and macOS jetsam inference. Excellent. These belong
+      <strong>inside</strong> <code>mcpm-supervisor</code> as private implementation. The public surface should be
+      a single behavior-level concept: <code>OomDetected</code> with platform-detail in an opaque <code>details</code> map.
+    </p>
+
+    <p>
+      Where we'll clash: the kernel-hacker will want to expose, say, <code>CgroupV2OomEvent { count: u32, last_seen:
+      Instant }</code> as a typed event variant, because that's what the kernel actually told them. The first time we run on
+      a cgroup v1 kernel that variant becomes nonsensical, and the first time we add jetsam-inference on macOS we now need
+      a parallel variant <code>JetsamInferred { signal: i32, mem_pressure: bool, rss_pct: f32 }</code>. Five years from now
+      the audit log enum has 14 platform-specific variants and removing any of them is a major bump.
+    </p>
+
+    <p>
+      My pattern: one variant per <em>behavior class</em> (<code>ServerCrash</code>, <code>ServerOom</code>,
+      <code>ServerStopped</code>), each holding a <code>#[non_exhaustive]</code> struct that carries platform-specific detail
+      in a stable shape (an <code>oom_signal: OomSignal</code> enum that is itself <code>#[non_exhaustive]</code> with
+      variants like <code>CgroupV2OomKill</code>, <code>RLimitSigkillInferred</code>, <code>JetsamInferred</code>, future).
+      That way: (a) downstream code matching on the high-level variant keeps working; (b) downstream code that wants to
+      drill into the platform detail must already be doing wildcard matches; (c) we can add a new kernel feature
+      (memory.swap.events, PSI integration, eBPF probes) without bumping major. Behavior-class enums are stable; the detail
+      structs grow.
+    </p>
+
+    <p>
+      Cargo's semver reference is explicit that adding new public items is <em>minor</em>, but extending an existing
+      exhaustive enum is <em>major</em><sup><a href="https://doc.rust-lang.org/cargo/reference/semver.html">[cargo-semver]</a></sup>.
+      The kernel-hacker's instinct ("expose the truth") and my discipline ("expose a forward-compatible shape") only conflict
+      at the boundary; inside <code>mcpm-supervisor</code> they get to be as truth-y as they like.
+    </p>
+
+    <h3 id="vs-boring-tech-defender">vs <a href="./agent-boring-tech-defender.html#design">boring-tech-defender</a></h3>
+
+    <p>
+      Of all four peers I'm closest to the boring-tech-defender — we both push for <em>less</em> public surface. Where we
+      diverge: I think the small extra effort of <code>#[non_exhaustive]</code>, sealed traits, and cargo-semver-checks in
+      CI is <em>cheaper</em> than the boring-tech alternative of "just refuse to make anything public until v2." Refusing to
+      make things public is the right move for 90% of types; the remaining 10% (wire types, error kinds, audit-event
+      enums) are public no matter what we do because they cross the JSON-RPC boundary, and pretending otherwise just means
+      the boundary types live as <code>serde_json::Value</code> blobs with stringly-typed event names. That trades static
+      verification for "we'll catch it in tests if we're disciplined." We will not catch it.
+    </p>
+
+    <p>
+      Where I cede the point: <code>mcpm-client</code>'s convenience layer should be ruthlessly minimal at v1.0. Three
+      operations: <code>connect()</code> with auto-spawn, <code>call::&lt;Method&gt;()</code> for unary RPC,
+      <code>stream::&lt;Method&gt;()</code> for streaming. No retry policies hidden behind config (let callers pass a
+      tower retry layer if they want). No global state. No magic. The boring-tech-defender's distrust of "convenience layers
+      that grow into frameworks" is dead right; <code>mcpm-client</code> is allowed to grow only as far as duplication
+      between CLI and TUI actually justifies. Every helper goes through the test "does this remove three or more lines of
+      duplication in <code>mcpm-cli</code>?" and dies otherwise.
+    </p>
+
+    <p>
+      A specific agreement-with-fortification: the boring-tech-defender will reject <code>tower::Service</code> as
+      overengineering for an internal IPC dispatcher. I agree, but the JSON-RPC handler dispatch table inside
+      <code>mcpm-daemon</code> is not <em>public surface</em>. It can be a giant <code>match</code> on method name, or a
+      typed router, or a procedural macro — all internal. The wire types it accepts and returns are public; the dispatch
+      mechanism is private. Public/private discipline matters everywhere, but only the public side gets the
+      <code>#[non_exhaustive]</code> tax.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design — per crate</h2>
+
+    <p>
+      I'll go through the 11-crate workspace and call out the public-API discipline each crate needs. The two crates I own
+      most strongly are <code>mcpm-protocol</code> (the locked-down wire crate) and <code>mcpm-secrets</code> (the
+      <code>SecretStore</code> trait, which is the only trait we ship to be implemented by users).
+    </p>
+
+    <h3>mcpm-protocol — the small, stable, public surface</h3>
+
+    <p>
+      The hard line: <code>mcpm-protocol</code> exports <em>only</em> what crosses the JSON-RPC boundary. Method names as
+      string constants, request/response/error types, the event-stream payload types, the wire-version constant. Nothing
+      else. No clients, no helpers, no traits that downstream consumers might want to <em>impl</em>.
+    </p>
+
+    <pre><code>// crates/mcpm-protocol/Cargo.toml
+[package]
+name    = "mcpm-protocol"
+version = "0.1.0"      # stays 0.x until v1.2-ish of mcpmanagerd
+edition = "2024"
+description = "Wire types for the mcpmanagerd JSON-RPC API. Stable. Tiny."
+license = "Apache-2.0"
+rust-version = "1.80"   # MSRV pinned and tested in CI
+
+[features]
+default = ["std"]
+std     = ["serde/std", "serde_json/std"]
+alloc   = ["serde/alloc"]
+# No `tokio` feature. No `async` feature. Wire types are pure data.
+
+[dependencies]
+serde      = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+# That's it. No tokio. No tower. No tracing. No thiserror in the API surface
+# (we use thiserror internally but its error types are not re-exported).</code></pre>
+
+    <p>
+      The Cargo book is explicit that adding required features is a breaking
+      change<sup><a href="https://doc.rust-lang.org/cargo/reference/semver.html">[cargo-semver]</a></sup>, so we ship the
+      <code>std</code> feature default-enabled from day one and accept that someone needs to opt out for embedded use.
+      Microsoft's Rust engineering training has a chapter on exactly this no_std + feature
+      verification<sup><a href="https://microsoft.github.io/RustTraining/engineering-book/ch09-no-std-and-feature-verification.html">[ms-rust-eng]</a></sup>;
+      we follow their playbook including <code>cargo hack check --each-feature</code> in CI.
+    </p>
+
+    <p>
+      Now the types. Every public enum: <code>#[non_exhaustive]</code>. Every public struct: <code>#[non_exhaustive]</code>.
+      Constructors take builders or factory functions that we can keep evolving:
+    </p>
+
+    <pre><code>// crates/mcpm-protocol/src/lib.rs (excerpt)
+#![cfg_attr(not(feature = "std"), no_std)]
+extern crate alloc;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+/// The wire version. Bumped in lock-step with the crate's Cargo version.
+/// Clients send this on every request; daemons echo it on every response.
+pub const WIRE_VERSION: &amp;str = "0.1";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ServerSummary {
+    pub name: String,
+    pub state: ServerState,
+    pub version: String,
+    // future fields go here; downstream cannot construct by struct-literal
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum ServerState {
+    Running,
+    Stopped,
+    Crashed,
+    Starting,
+    // future variants: Quarantined, WarmRestart, etc.
+}
+
+#[derive(Debug, thiserror::Error, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+#[serde(tag = "code", content = "details")]
+pub enum WireError {
+    #[error("config conflict (prior_hash mismatch)")]
+    ConfigConflict { current_hash: String },
+    #[error("server not found: {name}")]
+    ServerNotFound { name: String },
+    #[error("unknown method: {0}")]
+    UnknownMethod(String),
+    #[error("wire-version mismatch: client={client}, daemon={daemon}")]
+    WireVersionMismatch { client: String, daemon: String },
+    // ...
+}
+
+/// Method-name constants. Stable. New methods are minor bumps.
+pub mod method {
+    pub const SERVER_LIST: &amp;str = "server.list";
+    pub const SERVER_GET: &amp;str = "server.get";
+    pub const SERVER_START: &amp;str = "server.start";
+    // ...
+}</code></pre>
+
+    <p>
+      Things I deliberately keep <em>out</em> of <code>mcpm-protocol</code>: no <code>Client</code> struct, no
+      <code>async fn</code>, no <code>impl Future</code>, no transport abstraction, no <code>tracing</code> spans woven
+      through types, no <code>secrecy::SecretString</code> in public payloads (we use opaque <code>String</code> at the wire
+      and the <em>caller</em> wraps it in <code>SecretString</code> on their side). The principle: nothing in this crate's
+      public types should require the consumer to also depend on a specific runtime, allocator, or logging framework.
+    </p>
+
+    <p>
+      Versioning policy in one sentence: <code>mcpm-protocol</code>'s Cargo version equals <code>WIRE_VERSION</code> at all
+      times. They bump together, they ship together, and they age together.
+    </p>
+
+    <h3>mcpm-secrets — the only trait we publish for users to implement</h3>
+
+    <p>
+      <code>SecretStore</code> is the one type we ship that users are expected to <em>extend</em>. The v1.0 backends are
+      <code>OsKeyringStore</code>, <code>EnvVarPassthroughStore</code>, and <code>LayeredSecretStore</code> wrapping them.
+      The whole point of having a trait is that v1.1 will add 1Password, Bitwarden, Vault, Doppler, and a long tail of
+      enterprise vaults. The trait must be designed so that adding a method later doesn't break every implementor.
+    </p>
+
+    <p>
+      Two patterns for that: <strong>sealed traits</strong> (only the parent crate can implement) and <strong>trait
+      methods with default implementations</strong>. Sealed is wrong here — we explicitly want third parties to implement
+      this trait. So every method gets a default. The
+      <a href="https://predr.ag/blog/definitive-guide-to-sealed-traits-in-rust/">definitive guide to sealed
+      traits</a><sup><a href="https://predr.ag/blog/definitive-guide-to-sealed-traits-in-rust/">[sealed-guide]</a></sup>
+      lays out the trade-off cleanly: sealed is for "I am the only one allowed to add types"; defaulted methods are for
+      "anyone can implement, and I can extend the trait without breaking them."
+    </p>
+
+    <pre><code>// crates/mcpm-secrets/src/store.rs
+use secrecy::SecretString;
+use async_trait::async_trait;
+
+/// A backend that can store and retrieve named secrets.
+///
+/// Implementors must provide `get` and `set` at minimum. Every method below
+/// has a default; adding new methods to this trait in future MINOR releases
+/// is non-breaking because all implementors automatically inherit the default.
+#[async_trait]
+pub trait SecretStore: Send + Sync {
+    /// Fetch a secret by name. Returns Ok(None) if not present.
+    async fn get(&amp;self, name: &amp;str) -&gt; Result&lt;Option&lt;SecretString&gt;, SecretError&gt;;
+
+    /// Store a secret. Replaces existing value at the same name.
+    async fn set(&amp;self, name: &amp;str, value: SecretString) -&gt; Result&lt;(), SecretError&gt;;
+
+    /// Remove a secret. Returns Ok(false) if not present.
+    async fn unset(&amp;self, name: &amp;str) -&gt; Result&lt;bool, SecretError&gt; { Ok(false) }
+
+    /// List secret names (never values).
+    async fn list(&amp;self) -&gt; Result&lt;Vec&lt;String&gt;, SecretError&gt; { Ok(Vec::new()) }
+
+    /// Future v1.1: rotate, ttl, audit_id. All defaulted.
+    async fn rotate(&amp;self, _name: &amp;str) -&gt; Result&lt;(), SecretError&gt; {
+        Err(SecretError::Unsupported { op: "rotate" })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum SecretError {
+    #[error("backend error: {0}")]
+    Backend(String),
+    #[error("operation not supported: {op}")]
+    Unsupported { op: &amp;'static str },
+    // future variants
+}</code></pre>
+
+    <p>
+      The pattern: <strong>every method except the two required ones has a default</strong>. <code>rotate()</code> in
+      particular defaults to <code>Err(Unsupported)</code>, which is the right semantic — the caller asks "can you rotate?"
+      and the backend says "no." When v1.1 adds <code>refresh()</code> for token-bearing stores, every existing implementor
+      automatically inherits an Unsupported default and nothing breaks.
+    </p>
+
+    <p>
+      One subtle point: I use <code>async_trait</code> here, not native async-trait. As of Rust 1.75 native async-fn-in-trait
+      is stable, but it imposes object-safety restrictions that bite when we want to dyn-dispatch <code>Box&lt;dyn
+      SecretStore&gt;</code>. <code>async_trait</code> macro-expands to a <code>Box&lt;dyn Future&gt;</code>, which costs a
+      heap allocation per call but makes the trait actually usable as a dyn-object. That's the right trade-off for a
+      backend trait — these calls are not in any hot path, and dyn-dispatch is what makes <code>LayeredSecretStore</code>
+      and runtime plug-ins work.
+    </p>
+
+    <h3>mcpm-client — the convenience layer that churns</h3>
+
+    <p>
+      The hard line in the other direction: <code>mcpm-client</code> is allowed to break minor-to-minor. It is documented
+      as such in the crate's README, its crates.io description, and its rustdoc top-level module comment. First-party
+      consumers (CLI, TUI, future GUI) treat it as an internal helper; third parties are pointed at
+      <code>mcpm-protocol</code> instead.
+    </p>
+
+    <pre><code>// crates/mcpm-client/src/lib.rs (sketch)
+//! Convenience layer over `mcpm-protocol`. **Not stable across minor versions.**
+//! Third parties building alternative mcpmanagerd clients should depend on
+//! `mcpm-protocol` directly. This crate exists for CLI/TUI/GUI use only.
+
+pub use mcpm_protocol as wire;  // re-export the entire stable surface
+
+pub struct Client { /* tokio UDS handle, retry policy, etc. */ }
+
+impl Client {
+    pub async fn connect() -&gt; Result&lt;Self, ConnectError&gt; { /* dial-or-spawn */ }
+    pub async fn server_list(&amp;self) -&gt; Result&lt;Vec&lt;wire::ServerSummary&gt;, CallError&gt; { /* */ }
+    pub fn logs_tail(&amp;self, name: &amp;str)
+        -&gt; impl futures::Stream&lt;Item = Result&lt;wire::LogLine, CallError&gt;&gt; { /* */ }
+}</code></pre>
+
+    <p>
+      The re-export of <code>mcpm_protocol as wire</code> is the key ergonomic move: first-party code writes
+      <code>client.server_list()</code> and gets back <code>Vec&lt;wire::ServerSummary&gt;</code> without two separate Cargo
+      dependencies in scope. But the types they're handling are still the stable ones from <code>mcpm-protocol</code>; the
+      churn is only in the methods.
+    </p>
+
+    <h3>mcpm-core — internal canonical state, no public surface to speak of</h3>
+
+    <p>
+      <code>mcpm-core</code> is consumed only by <code>mcpm-daemon</code>. Its public surface should be the absolute
+      minimum: a <code>ConfigStore</code> entry point, a <code>Lockfile</code> entry point, an <code>AuditSink</code> entry
+      point. Nothing exported with <code>pub</code> unless <code>mcpm-daemon</code> actually uses it. Everything else is
+      <code>pub(crate)</code>. If someone in v1.1 wants to write their own alternative daemon, they re-implement against
+      <code>mcpm-protocol</code> + <code>mcpm-secrets</code> + <code>mcpm-supervisor</code>; they do not Cargo-depend on
+      <code>mcpm-core</code> as a library.
+    </p>
+
+    <p>
+      The CAS guard <code>prior_hash</code> on <code>config.put</code> needs one public type:
+    </p>
+
+    <pre><code>#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ConfigSnapshot {
+    pub content: String,
+    pub hash: String,
+    pub scope: ConfigScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigScope { User, Project, Merged }</code></pre>
+
+    <p>
+      Both live in <code>mcpm-protocol</code> (they cross the wire). <code>mcpm-core</code> reads and writes them but
+      doesn't re-export anything.
+    </p>
+
+    <h3>mcpm-supervisor — public methods are behavior, not mechanism</h3>
+
+    <p>
+      Behind the public API of <code>mcpm-supervisor</code>, the kernel-hacker gets to do whatever they want with cgroup v2
+      event fds, RLIMIT_AS bookkeeping, and jetsam inference. The public surface exposes <em>behavior</em>:
+    </p>
+
+    <pre><code>pub trait Supervisor: Send + Sync {
+    async fn spawn(&amp;self, spec: &amp;SpawnSpec) -&gt; Result&lt;ServerHandle, SupervisorError&gt;;
+    async fn stop(&amp;self, handle: &amp;ServerHandle, grace: Duration) -&gt; Result&lt;(), SupervisorError&gt;;
+    async fn watch(&amp;self, handle: &amp;ServerHandle) -&gt; impl Stream&lt;Item = SupervisorEvent&gt;;
+}
+
+#[non_exhaustive]
+pub enum SupervisorEvent {
+    Spawned   { pid: u32, ts: SystemTime },
+    Crashed   { detail: CrashDetail },
+    OomKilled { detail: OomDetail },
+    Stopped   { reason: StopReason },
+}
+
+#[non_exhaustive]
+pub struct OomDetail {
+    pub signal: OomSignal,
+    pub rss_at_kill_bytes: Option&lt;u64&gt;,
+    pub last_log_line: Option&lt;String&gt;,
+}
+
+#[non_exhaustive]
+pub enum OomSignal {
+    /// cgroup v2 memory.events.oom_kill incremented. Deterministic.
+    CgroupV2OomKill { count: u32 },
+    /// RLIMIT_AS-based SIGKILL inference (cgroupv1 or old kernels).
+    RLimitSigkillInferred,
+    /// macOS heuristic: SIGKILL + mem pressure + RSS &gt; 80% of limit.
+    JetsamInferred { mem_pressure: bool, rss_pct: f32 },
+    // future: PSI, eBPF, etc.
+}</code></pre>
+
+    <p>
+      The kernel-hacker writes <code>OomSignal::CgroupV2OomKill</code> when the kernel told them; otherwise
+      <code>RLimitSigkillInferred</code> or <code>JetsamInferred</code>. When we add PSI integration in v1.1, that's a new
+      variant on the <code>#[non_exhaustive]</code> enum and it's a <em>minor</em> bump. Downstream pattern matches
+      already have a wildcard arm.
+    </p>
+
+    <h3>mcpm-daemon — binary crate, zero public library surface</h3>
+
+    <p>
+      Binary crates can publish library targets, but I'd argue <code>mcpm-daemon</code> should explicitly opt out:
+      <code>[lib]</code> stanza omitted, <code>main.rs</code> only. Nothing inside the daemon is intended for re-use by
+      other crates. The line "no public surface" is enforced by the build system, not just by convention.
+    </p>
+
+    <h3>mcpm-registry, mcpm-projector, mcpm-logs, mcpm-trust — internal helpers, pub(crate) by default</h3>
+
+    <p>
+      Same pattern: minimal public surface, only what <code>mcpm-daemon</code> needs. Each crate exposes one or two entry
+      types (<code>RegistrySource</code> trait, <code>ProjectionTarget</code> trait, <code>LogSink</code>,
+      <code>TrustVerifier</code>). All <code>#[non_exhaustive]</code>. The <code>RegistrySource</code> trait is sealed to
+      our crate in v1.0 (<code>mod private { pub trait Sealed {} }</code> superbound) because v1.0 only supports the three
+      baked-in registries; if v1.1 opens it up for third-party registry sources, we unsealed it then. The Cargo book's
+      semver page lists "unsealing a trait" as a <em>minor</em>-safe
+      change<sup><a href="https://github.com/rust-lang/api-guidelines/blob/master/src/future-proofing.md">[api-guidelines-future]</a></sup>;
+      sealing-then-unsealing is the conservative direction.
+    </p>
+
+    <p>
+      The <code>ProjectionTarget</code> trait in <code>mcpm-projector</code> is the one I'd argue we keep sealed even in
+      v1.1 — managed-block projection requires understanding our internal config schema, and we don't want third parties
+      writing "creative" projection adapters that break on schema evolution. Bundled per-editor logic, data-driven from
+      <code>manifests/toolchains/</code>, is sufficient extension surface.
+    </p>
+
+    <h3>CI gates — making the discipline mechanical</h3>
+
+    <p>
+      Discipline that depends on humans remembering is doomed. Three CI gates make this mechanical:
+    </p>
+
+    <ol>
+      <li>
+        <strong>cargo-semver-checks on every PR that touches <code>mcpm-protocol</code> or <code>mcpm-secrets</code>.</strong>
+        Configured to <code>deny</code> for these two crates. Companies like Amazon and Google use cargo-semver-checks to
+        prevent accidental
+        breakage<sup><a href="https://github.com/obi1kenobi/cargo-semver-checks">[semver-checks]</a></sup>; we adopt the
+        same gate. Other crates (<code>mcpm-core</code>, <code>mcpm-supervisor</code>, etc.) run it at <code>warn</code>
+        level so we see what's churning but aren't blocked.
+      </li>
+      <li>
+        <strong><code>cargo hack check --each-feature</code> on <code>mcpm-protocol</code> in CI</strong> to verify that
+        the no_std feature combination actually compiles, per Microsoft's Rust training
+        chapter<sup><a href="https://microsoft.github.io/RustTraining/engineering-book/ch09-no-std-and-feature-verification.html">[ms-rust-eng]</a></sup>.
+        Without this, the no_std support silently bitrots the first time someone adds a <code>std::collections::HashMap</code>
+        to a public type.
+      </li>
+      <li>
+        <strong>A "public-surface diff" check</strong> that runs <code>cargo public-api</code> against the previous
+        release and emits a PR comment showing every added/removed/changed public item. Not a hard gate — adding public
+        items is fine — but a forcing function for review. It's the kind of thing that makes a maintainer pause when they
+        accidentally re-exported something they meant to keep private.
+      </li>
+    </ol>
+
+    <h3>The deprecation pipeline</h3>
+
+    <p>
+      Final piece: we will get something wrong. When we do, we need a deprecation path that doesn't break consumers. The
+      pattern:
+    </p>
+
+    <ol>
+      <li>v1.4 ships the new shape alongside the old; old gets <code>#[deprecated(since = "1.4", note = "use Foo::v2 instead")]</code>.</li>
+      <li>v1.5 keeps both, deprecation warnings fire louder in rustdoc and crate-level docs.</li>
+      <li>v2.0 removes the old shape. Major bump. Documented in CHANGELOG with migration commands.</li>
+    </ol>
+
+    <p>
+      Effective Rust's chapter on semver<sup><a href="https://effective-rust.com/semver.html">[effective-rust-semver]</a></sup>
+      is the right operational reference for our reviewers. Every public-API PR description has a checkbox: "I have read
+      Effective Rust item 21 and considered whether this change is minor or major." That's not bureaucracy; it's how the
+      discipline propagates to new contributors.
+    </p>
+
+    <h3>What I'm consciously not doing</h3>
+
+    <p>
+      A few patterns I'd <em>like</em> to use but am declining for v1.0:
+    </p>
+
+    <ul>
+      <li>
+        <strong>Typestate.</strong> A <code>ServerHandle&lt;Running&gt;</code> vs <code>ServerHandle&lt;Stopped&gt;</code>
+        type-state design would catch a lot of bugs at compile time. Across an IPC boundary it's incoherent — the
+        wire types are data, the type-state doesn't survive serialization. So I keep type-state inside the daemon's private
+        code (<code>mcpm-supervisor</code>) and use plain runtime enum state on the wire.
+      </li>
+      <li>
+        <strong>Generics on public types.</strong> Tempting to make <code>SecretStore</code> generic over an
+        <code>Error</code> type the implementor chooses. Don't. A concrete <code>SecretError</code> with <code>#[non_exhaustive]</code>
+        is easier for users and easier to extend; the parameterization saves us nothing.
+      </li>
+      <li>
+        <strong>Feature flags as semver escape hatches.</strong> Some crates use <code>#[cfg(feature = "unstable")]</code>
+        to ship experimental APIs without the semver weight. We could do this for <code>mcpm-protocol</code>, but I'd
+        rather force ourselves to think before shipping. Experimental APIs go in <code>mcpm-client</code> (which churns
+        anyway) until they bake.
+      </li>
+    </ul>
+
+    <h3>Cross-references</h3>
+
+    <ul>
+      <li>The <a href="./agent-tokio-pragmatist.html#design">tokio-pragmatist</a>'s convenience-layer design — agreed, but
+        the layer lives in <code>mcpm-client</code>, not <code>mcpm-protocol</code>.</li>
+      <li>The <a href="./agent-systems-veteran.html#design">systems-veteran</a>'s state-machine encoding — agreed, but
+        every public enum representing a state gets <code>#[non_exhaustive]</code>.</li>
+      <li>The <a href="./agent-kernel-hacker.html#design">kernel-hacker</a>'s platform-specific event detail — lives in
+        an inner <code>OomSignal</code> enum that is itself <code>#[non_exhaustive]</code>; the outer
+        <code>SupervisorEvent::OomKilled</code> variant stays stable.</li>
+      <li>The <a href="./agent-boring-tech-defender.html#design">boring-tech-defender</a>'s minimalism — agreed, plus
+        cargo-semver-checks in CI to make minimalism mechanical rather than aspirational.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li>
+        <a href="https://doc.rust-lang.org/cargo/reference/semver.html">The Cargo Book — SemVer Compatibility</a>.
+        Cargo team's authoritative reference for what counts as major vs minor vs patch in Rust: adding enum variants to
+        an exhaustive enum is major; adding to a <code>#[non_exhaustive]</code> enum is minor; adding default-required
+        features is breaking. The whole document is the law for <code>mcpm-protocol</code>'s version policy.
+      </li>
+      <li>
+        <a href="https://rust-lang.github.io/rfcs/2008-non-exhaustive.html">Rust RFC 2008 — non_exhaustive</a>. The
+        canonical reference for the attribute. Explains the design rationale: enums to allow new variants without
+        breaking matches; structs to forbid struct-literal construction so new fields don't break. Stabilized cleanly;
+        every public type in <code>mcpm-protocol</code> uses it.
+      </li>
+      <li>
+        <a href="https://github.com/rust-lang/api-guidelines/blob/master/src/future-proofing.md">Rust API Guidelines —
+        Future-proofing</a>. Section "Sealed traits protect against downstream implementations (C-SEALED)" and the
+        <code>#[non_exhaustive]</code> guidance. The starting point for every public-surface review on this project.
+      </li>
+      <li>
+        <a href="https://predr.ag/blog/definitive-guide-to-sealed-traits-in-rust/">Definitive guide to sealed traits in
+        Rust (Predrag Gruevski)</a>. Walks through the supertrait-pattern for sealing and explains when to seal vs
+        when to use defaulted methods. We seal <code>RegistrySource</code> and <code>ProjectionTarget</code> in v1.0;
+        we deliberately do <em>not</em> seal <code>SecretStore</code> because users implement it.
+      </li>
+      <li>
+        <a href="https://github.com/obi1kenobi/cargo-semver-checks">cargo-semver-checks</a>. The linter we run in CI as
+        a hard gate on <code>mcpm-protocol</code> and <code>mcpm-secrets</code>. Detects accidental semver violations
+        (3% of releases ship them per the project's own research). Cargo itself uses it; we follow that lead.
+      </li>
+      <li>
+        <a href="https://serde.rs/no-std.html">Serde — no_std support</a>. The recipe for shipping
+        <code>mcpm-protocol</code> with <code>alloc</code>-only feature configuration so it builds in embedded /
+        bindgen / FFI use cases that need our wire types but don't want std.
+      </li>
+      <li>
+        <a href="https://microsoft.github.io/RustTraining/engineering-book/ch09-no-std-and-feature-verification.html">Microsoft
+        Rust Engineering — no_std and feature verification</a>. Operational playbook for verifying that no_std + feature
+        flag combinations actually compile in CI via <code>cargo hack check --each-feature</code>. Without this,
+        no_std support silently rots.
+      </li>
+      <li>
+        <a href="https://rust-lang.github.io/rfcs/1105-api-evolution.html">Rust RFC 1105 — API evolution</a>. The original
+        framework for what counts as "breaking" in a Rust API: signatures, traits, lifetimes, type inference. Predates
+        most modern tooling but its taxonomy is still the basis of cargo-semver-checks' rules.
+      </li>
+      <li>
+        <a href="https://effective-rust.com/semver.html">Effective Rust — Item 21: Understand what semantic versioning
+        promises</a>. The operational chapter: when to bump major, the asymmetry of "easy to add, hard to remove,"
+        and how to design APIs so that you reserve the right to evolve them. Recommended reading for every PR reviewer
+        touching public surface.
+      </li>
+      <li>
+        <a href="https://predr.ag/blog/semver-in-rust-tooling-breakage-and-edge-cases/">SemVer in Rust: Tooling,
+        Breakage, and Edge Cases (FOSDEM 2024)</a>. Empirical look at how often Rust crates break semver in practice
+        and which categories of change cause the most surprises. Validates the case for CI tooling over human
+        discipline alone.
+      </li>
+      <li>
+        <a href="https://internals.rust-lang.org/t/pre-rfc-sealed-traits-via-non-exhaustive/20535">Pre-RFC: Sealed
+        traits via #[non_exhaustive] (Rust Internals)</a>. Discussion of language-level support for sealing, including
+        why the supertrait pattern is the current best practice. We follow the supertrait pattern; if/when the
+        language adopts a first-class mechanism we migrate.
+      </li>
+      <li>
+        <a href="https://predr.ag/blog/turning-rust-struct-to-enum-is-not-always-breaking/">Turning a Rust struct into
+        an enum is not always a major breaking change (Predrag Gruevski)</a>. Edge cases in semver classification; argues
+        why a careful API design lets you make changes that look major but are actually minor. Useful for thinking
+        about <code>ConfigSnapshot</code>-style types where we might want to add an enum'd <code>scope</code> later.
+      </li>
+    </ol>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Back to <a href="./overview.html">backend overview</a> · sibling stances:
+    <a href="./agent-tokio-pragmatist.html">tokio-pragmatist</a> ·
+    <a href="./agent-systems-veteran.html">systems-veteran</a> ·
+    <a href="./agent-kernel-hacker.html">kernel-hacker</a> ·
+    <a href="./agent-boring-tech-defender.html">boring-tech-defender</a>.
+  </p>
+</main>
+</body>
+</html>

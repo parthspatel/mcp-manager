@@ -1,0 +1,100 @@
+{
+  "title": "How each frontend stance scores against the v1.0 priorities. Drag the sliders to re-weight.",
+  "options": [
+    "agent-vim-power-user",
+    "agent-accessibility-advocate",
+    "agent-onboarding-novice",
+    "agent-cli-unix-purist",
+    "agent-visual-designer"
+  ],
+  "criteria": [
+    { "key": "keyboard_efficiency", "label": "Keyboard efficiency",        "weight": 0.15 },
+    { "key": "accessibility",       "label": "Accessibility",              "weight": 0.20 },
+    { "key": "discoverability",     "label": "Discoverability",            "weight": 0.20 },
+    { "key": "pipeability",         "label": "Pipe/automation friendliness","weight": 0.15 },
+    { "key": "visual_polish",       "label": "Visual polish",              "weight": 0.15 },
+    { "key": "consistency",         "label": "Consistency CLI ↔ TUI", "weight": 0.15 }
+  ],
+  "scores": {
+    "agent-vim-power-user": {
+      "keyboard_efficiency": 5,
+      "accessibility":       3,
+      "discoverability":     3,
+      "pipeability":         4,
+      "visual_polish":       3,
+      "consistency":         5,
+      "_evidence": {
+        "keyboard_efficiency": ["../agent-vim-power-user.html#design-keymap"],
+        "accessibility":       ["../agent-vim-power-user.html#vs-accessibility"],
+        "discoverability":     ["../agent-vim-power-user.html#design-palette"],
+        "pipeability":         ["../agent-vim-power-user.html#design-cli"],
+        "visual_polish":       ["../agent-vim-power-user.html#design-layout"],
+        "consistency":         ["../agent-vim-power-user.html#design-palette"]
+      }
+    },
+    "agent-accessibility-advocate": {
+      "keyboard_efficiency": 3,
+      "accessibility":       5,
+      "discoverability":     4,
+      "pipeability":         4,
+      "visual_polish":       3,
+      "consistency":         4,
+      "_evidence": {
+        "keyboard_efficiency": ["../agent-accessibility-advocate.html#design"],
+        "accessibility":       ["../agent-accessibility-advocate.html#design"],
+        "discoverability":     ["../agent-accessibility-advocate.html#design"],
+        "pipeability":         ["../agent-accessibility-advocate.html#design"],
+        "visual_polish":       ["../agent-accessibility-advocate.html#design"],
+        "consistency":         ["../agent-accessibility-advocate.html#design"]
+      }
+    },
+    "agent-onboarding-novice": {
+      "keyboard_efficiency": 2,
+      "accessibility":       4,
+      "discoverability":     5,
+      "pipeability":         3,
+      "visual_polish":       4,
+      "consistency":         3,
+      "_evidence": {
+        "keyboard_efficiency": ["../agent-onboarding-novice.html#design"],
+        "accessibility":       ["../agent-onboarding-novice.html#design"],
+        "discoverability":     ["../agent-onboarding-novice.html#design"],
+        "pipeability":         ["../agent-onboarding-novice.html#design"],
+        "visual_polish":       ["../agent-onboarding-novice.html#design"],
+        "consistency":         ["../agent-onboarding-novice.html#design"]
+      }
+    },
+    "agent-cli-unix-purist": {
+      "keyboard_efficiency": 4,
+      "accessibility":       4,
+      "discoverability":     3,
+      "pipeability":         5,
+      "visual_polish":       2,
+      "consistency":         5,
+      "_evidence": {
+        "keyboard_efficiency": ["../agent-cli-unix-purist.html#design"],
+        "accessibility":       ["../agent-cli-unix-purist.html#arg-a11y"],
+        "discoverability":     ["../agent-cli-unix-purist.html#design-help"],
+        "pipeability":         ["../agent-cli-unix-purist.html#design-output"],
+        "visual_polish":       ["../agent-cli-unix-purist.html#arg-visual"],
+        "consistency":         ["../agent-cli-unix-purist.html#design"]
+      }
+    },
+    "agent-visual-designer": {
+      "keyboard_efficiency": 3,
+      "accessibility":       4,
+      "discoverability":     4,
+      "pipeability":         3,
+      "visual_polish":       5,
+      "consistency":         4,
+      "_evidence": {
+        "keyboard_efficiency": ["../agent-visual-designer.html#design"],
+        "accessibility":       ["../agent-visual-designer.html#arguments"],
+        "discoverability":     ["../agent-visual-designer.html#design"],
+        "pipeability":         ["../agent-visual-designer.html#arguments"],
+        "visual_polish":       ["../agent-visual-designer.html#design"],
+        "consistency":         ["../agent-visual-designer.html#design"]
+      }
+    }
+  }
+}

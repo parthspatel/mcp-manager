@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frontend Synthesis — MCP Manager v1.0 deep dive</title>
+<meta name="description" content="Reconciliation of the five frontend stances for MCP Manager v1.0: agreement, disagreement, per-component decisions, open questions, and ranking.">
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+<script type="module" src="../../assets/matrix.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">frontend · synthesis</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="../synthesis.html">master synthesis</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Frontend — Facet Synthesis</h1>
+  <p class="lede">
+    Where the five frontend stances converge, where they diverge, and what gets adopted in v1.0. Five
+    perspectives — <a href="./agent-vim-power-user.html#design">vim-power-user</a>,
+    <a href="./agent-accessibility-advocate.html#design">accessibility-advocate</a>,
+    <a href="./agent-onboarding-novice.html#design">onboarding-novice</a>,
+    <a href="./agent-cli-unix-purist.html#design">cli-unix-purist</a>, and
+    <a href="./agent-visual-designer.html#design">visual-designer</a> — were asked to fight for their
+    constituency inside the locked v1.0 envelope: ratatui + crossterm TUI, clap-derive CLI with 19
+    subcommands, lazygit/k9s single-screen shape, mouse + keyboard, macOS + Linux, no telemetry. This
+    synthesis picks winners per sub-decision, names the live tensions, and parks what we can't decide
+    yet under <a href="#open">open questions</a>.
+  </p>
+
+  <p>
+    <span class="evidence-badge">5 stances reconciled</span>
+    <span class="evidence-badge">CLI ↔ TUI parity</span>
+    <span class="evidence-badge">a11y as regression test</span>
+    <span class="evidence-badge">pipe-aware by default</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#agreement">Agreement — convergence</a></li>
+      <li><a href="#disagreement">Disagreement — live tensions</a></li>
+      <li><a href="#decisions">Decisions — per-component picks</a></li>
+      <li><a href="#open">Open questions</a></li>
+      <li><a href="#matrix">Ranking matrix</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="agreement">
+    <h2>Agreement — convergence</h2>
+
+    <p>
+      The encouraging discovery from reading all five briefs side-by-side is that the
+      <em>structural</em> debates were already settled by the locked v1.0 UX page. None of the five
+      agents tried to relitigate ratatui vs. tview, single-screen vs. wizard, mouse+keyboard vs.
+      keyboard-only, or the 19-subcommand surface. Every fight that remains is about
+      <em>refinement</em>: which knob defaults which way, what gets a flag equivalent, what the bottom
+      hint bar says when the focused server is failed. That's a much better place to negotiate from
+      than "should we have a TUI at all."
+    </p>
+
+    <p>
+      Six convergent principles emerged across all five briefs, in many cases word-for-word:
+    </p>
+
+    <ol>
+      <li>
+        <strong>Color is decoration; the word is the carrier.</strong> Every stance agreed status must
+        be conveyed by glyph + word + color, never color alone. The
+        <a href="./agent-accessibility-advocate.html#design">accessibility-advocate</a> argued this on
+        WCAG 1.4.1 grounds; the <a href="./agent-visual-designer.html#arguments">visual-designer</a>
+        agreed because color discipline produces better visual hierarchy; the
+        <a href="./agent-cli-unix-purist.html#arg-visual">cli-unix-purist</a> agreed because the data
+        on stdout shouldn't be a Unicode character; the
+        <a href="./agent-vim-power-user.html#vs-visual">vim-power-user</a> agreed because dim+bold
+        modal hierarchy survives <code>NO_COLOR</code>; the
+        <a href="./agent-onboarding-novice.html#design">onboarding-novice</a> agreed because spelled-out
+        verbs ("RUNNING", "FAILED") read better aloud than colored dots.
+      </li>
+      <li>
+        <strong>Every interactive flow has a non-interactive flag equivalent.</strong> The
+        cli-unix-purist makes this a contract; the accessibility-advocate notes it doubles as
+        keyboard-only support; the onboarding-novice accepts the contract as long as the interactive
+        path stays user-friendly; the visual-designer treats non-interactive as "the CI-and-Nix
+        aesthetic"; the vim-power-user already lives in CI-land. No live disagreement.
+      </li>
+      <li>
+        <strong>Pipe-detection is the right auto-default.</strong> When <code>isatty(stdout)</code> is
+        false, mcpm becomes a different program: no color, no spinner, no glyphs, no boxes, no
+        progress chatter on stdout. All five stances endorse this; the only quibble is whether the
+        plain mode is named <code>--plain</code> (accessibility), <code>--ascii</code> (visual-designer),
+        or auto-implied by <code>!isatty</code> (purist). The synthesis below picks one.
+      </li>
+      <li>
+        <strong>Error codes are an asset, not a sin.</strong> The 12-row
+        <code>E_*</code> taxonomy from <a href="../../ux-design.html#errors">ux-design.html#errors</a>
+        gets unanimous praise. Accessibility-advocate frames it as "screen-reader gold";
+        cli-unix-purist as "the basis for sysexits mapping"; onboarding-novice as "the hook the
+        recovery transcript hangs off"; vim-power-user as "exit-code branching for shell wrappers";
+        visual-designer as "the right size of severity vocabulary for a modal-overlay treatment."
+      </li>
+      <li>
+        <strong>The TUI never autolaunches.</strong> Every stance independently arrived at this rule.
+        Bare <code>mcpm</code> with no args prints help (to stderr) and exits. <code>mcpm tui</code>
+        is the only entry point into the interactive surface, and it refuses to start when stdin/stdout
+        isn't a TTY, when <code>$TERM=dumb</code>, when <code>$CI</code> is set, or when
+        <code>--no-tty</code> is passed.
+      </li>
+      <li>
+        <strong>Trust the user's editor.</strong> All five briefs say "spawn <code>$EDITOR</code>; don't
+        invent a TUI text editor." The vim-power-user and onboarding-novice both add the
+        <code>$VISUAL → $EDITOR → vi</code> fallback chain that matches
+        <code>git-var(1)</code>; accessibility-advocate cites it as "the user's editor already has their
+        assistive-tech setup"; cli-unix-purist documents <code>$MCPM_EDITOR</code> as the in-house
+        override; visual-designer designs the "editing… save and quit to apply" status-line indicator.
+      </li>
+    </ol>
+
+    <p>
+      Two more convergences worth flagging because they're often missed in TUI design and
+      <em>everyone</em> agreed unprompted: the bottom hint bar must always be visible and context-aware
+      (it's the discoverability layer for novices, the muscle-memory reinforcement for vim users, the
+      keyboard map for screen-reader users, and the visual rhythm anchor for the designer); and the
+      <code>?</code> key in the TUI must open a full keymap modal, not just a help URL. Both of these
+      are already in the locked spec; the synthesis ratifies them louder.
+    </p>
+  </section>
+
+  <section class="section" id="disagreement">
+    <h2>Disagreement — live tensions</h2>
+
+    <p>
+      Three real disagreements survived the convergence pass. Each needs a per-component decision
+      below; this section names them honestly.
+    </p>
+
+    <h3>Tension 1 — The default output mode on a TTY</h3>
+
+    <p>
+      The <a href="./agent-visual-designer.html#design">visual-designer</a> wants the default
+      <code>mcpm status</code> on a TTY to render a padded table with glyphs in the first column, server
+      name in bold, registry in dim, ellipsized "last error" column, ANSI color throughout. The
+      <a href="./agent-cli-unix-purist.html#design-output">cli-unix-purist</a> wants the same TTY output
+      to be a tab-separated table with no chrome, on the theory that a user who later does
+      <code>mcpm status | tee out.log</code> shouldn't end up with mojibake in their log file. The
+      <a href="./agent-accessibility-advocate.html#design">accessibility-advocate</a> wants a third
+      mode — <code>--plain</code> — that drops Unicode glyphs entirely so a Braille display reads
+      sentences instead of "black-circle filled space github filled space running."
+    </p>
+
+    <p>
+      The compromise: three discrete modes, one auto-detection rule. <strong>Default on a TTY:
+      visual-designer's rendering wins.</strong> Pipe-detected (i.e., stdout is not a TTY): degrade to
+      TSV with no chrome (cli-unix-purist wins). <code>--plain</code> flag exists as an explicit opt-in
+      for screen-reader users who want prose even on a TTY (accessibility-advocate's add). Pipe-detected
+      output is <em>identical</em> to <code>--plain</code>, which means
+      <code>mcpm status | cat</code> and <code>mcpm status --plain</code> produce the same bytes — a
+      property the screen-reader user can exploit without learning a new flag.
+    </p>
+
+    <h3>Tension 2 — Onboarding's "20th subcommand" doctor</h3>
+
+    <p>
+      The <a href="./agent-onboarding-novice.html#design">onboarding-novice</a> argues for an
+      <code>mcpm doctor</code> command that walks the failure chain (config → lockfile → binary →
+      signature → runtime → secrets) and points at the first broken link. The locked v1.0 spec names
+      19 subcommands; adding a 20th breaks that contract. The cli-unix-purist counters that
+      <code>mcpm test &lt;server&gt;</code> already exists and can absorb diagnostic depth via a
+      <code>--diagnostic</code> flag. The vim-power-user is indifferent. The accessibility-advocate
+      and visual-designer want <em>something</em> like doctor because the diagnostic output is
+      manifestly easier to read and to render with severity glyphs than a 12-step debugging session.
+    </p>
+
+    <p>
+      The synthesis: <strong>fold the doctor flow into <code>mcpm test &lt;server&gt; --diagnostic</code></strong>
+      so the subcommand count stays at 19. The diagnostic output uses the same row-by-row chain the
+      onboarding-novice's transcript shows, with the same <code>✓</code>/<code>✗</code> indicators
+      visual-designer specified. <code>mcpm test</code> without <code>--diagnostic</code> stays the
+      lightweight smoke test (spawn → initialize → tools/list → report) the locked spec describes.
+    </p>
+
+    <h3>Tension 3 — Browse mode in the TUI command palette</h3>
+
+    <p>
+      The <a href="./agent-vim-power-user.html#design-palette">vim-power-user</a> proposes a
+      <code>:</code> command palette with two modes: fuzzy (default) and browse (toggled with
+      <code>Ctrl+B</code>). Browse mode shows the full grouped command list with descriptions — a gift
+      to novices and screen-reader users. The
+      <a href="./agent-onboarding-novice.html#arguments">onboarding-novice</a> loves browse mode and
+      wants it discoverable from the help bar. The
+      <a href="./agent-cli-unix-purist.html#arg-vim">cli-unix-purist</a> is skeptical of TUI-only
+      affordances that don't map back to the CLI. The
+      <a href="./agent-visual-designer.html#design">visual-designer</a> wants the browse-mode panel
+      to be a styled overlay with proper typography. The
+      <a href="./agent-accessibility-advocate.html#design">accessibility-advocate</a> is fine with it
+      as long as the same data is reachable via <code>mcpm help</code> on the CLI.
+    </p>
+
+    <p>
+      Synthesis: <strong>adopt the palette + browse-mode</strong>, with the constraint that every
+      palette command dispatches through the same internal command registry the CLI uses (vim-power-user's
+      explicit ask). Browse mode reuses the prose from <code>mcpm help &lt;subcommand&gt;</code>, so
+      maintaining one keeps the other in sync. Bottom hint bar advertises the toggle when in the
+      palette: <code>: cmd · Ctrl+B browse · Tab complete · Esc cancel</code>.
+    </p>
+  </section>
+
+  <section class="section" id="decisions">
+    <h2>Decisions — per-component picks</h2>
+
+    <p>
+      Eight components, one approach each, with rationale. Links go to the carrying agent's
+      <code>#design</code> section.
+    </p>
+
+    <h3>1. mcpm-cli — 19 subcommands, output, completion, exit codes</h3>
+
+    <p>
+      <strong>Adopt the <a href="./agent-cli-unix-purist.html#design">cli-unix-purist</a>'s 9-point CLI
+      charter as the spec.</strong> Every subcommand supports
+      <code>--format=human|json|ndjson|yaml|tsv</code> (default <code>human</code> on TTY,
+      <code>tsv</code> when piped). Exit codes follow <code>sysexits.h</code> (64–78) with the mapping
+      table in the purist's brief. <code>stdout</code> is data; <code>stderr</code> is chatter; the
+      JSON error wrapper goes to <code>stdout</code> so it can be piped. <code>mcpm help X</code> and
+      <code>mcpm X --help</code> produce byte-identical output. Manpages are generated from the same
+      clap AST via <code>clap_mangen</code>. Shell completions ship for bash, zsh, fish, elvish, and
+      powershell via <code>clap_complete</code>, with dynamic completion against mcpmanagerd's cached
+      registry index when the daemon is up.
+    </p>
+
+    <p>
+      The <a href="./agent-vim-power-user.html#design-cli">vim-power-user's</a> "every long flag has a
+      short alias" ask is folded in; the
+      <a href="./agent-onboarding-novice.html#design">onboarding-novice's</a> "every <code>--help</code>
+      ends with 3 worked examples" rule is locked as a PR-rule. The
+      <a href="./agent-accessibility-advocate.html#design">accessibility-advocate's</a>
+      <code>--plain</code> flag is added to the universal-flags list and auto-implied when stdout is
+      not a TTY. The <a href="./agent-visual-designer.html#design">visual-designer's</a>
+      <code>--ascii</code> flag is added as a sibling: <code>--no-color</code> strips ANSI but keeps
+      Unicode glyphs; <code>--ascii</code> strips both. The matrix of NO_COLOR / --no-color / --plain /
+      --ascii / pipe-detect is in the accessibility brief's "behavior table" — that table is the spec.
+    </p>
+
+    <h3>2. TUI app — lazygit/k9s layout, modal model, keymap</h3>
+
+    <p>
+      <strong>Adopt the <a href="./agent-vim-power-user.html#design">vim-power-user's</a> four-state
+      modal model</strong> (<code>NORMAL</code> / <code>SEARCH</code> / <code>COMMAND</code> /
+      <code>MODAL</code>) with <code>Esc</code> always returning to <code>NORMAL</code>. The keymap
+      extends the locked baseline with: <code>g/G</code>, <code>Ctrl+D</code>/<code>Ctrl+U</code>,
+      digits <code>1</code>–<code>4</code> for direct pane focus (k9s-style),
+      <code>Tab</code>/<code>Shift+Tab</code> per the locked spec, <code>t</code> for test and
+      <code>u</code> for update on the focused entity, <code>i</code> as Enter alias. Arrow keys remain
+      first-class equivalents to <code>j/k/h/l</code>.
+    </p>
+
+    <p>
+      Layout uses the <a href="./agent-visual-designer.html#design">visual-designer's</a> measured
+      proportions: 40-column fixed left pane at ≥120 cols (visual 30/70 because the right pane has
+      lower density), 36 cols at 100–119, 32 cols at 80–99, stacked single-pane below 80. Density is a
+      user setting (<code>compact</code> / <code>comfortable</code> / <code>roomy</code>) with
+      <code>comfortable</code> as default. The status-line / hint bar fuses the vim-power-user's mode
+      tag with the visual-designer's four-answer structure: daemon-health glyph · focused entity · scope
+      indicator · context-aware key hints.
+    </p>
+
+    <p>
+      Mouse stays on by default per the locked spec but is trivially disabled via
+      <code>:set mouse off</code> in the palette (vim-power-user's compromise). The Option/Alt drag
+      bypass for native terminal selection stays. Pane separators are single-line box-drawing per
+      visual-designer's standard glyph set.
+    </p>
+
+    <h3>3. Help system — mcpm help, --help, mdbook</h3>
+
+    <p>
+      <strong>Adopt the <a href="./agent-cli-unix-purist.html#design-help">cli-unix-purist's</a> dual
+      contract</strong>: <code>mcpm help X</code> and <code>mcpm X --help</code> produce byte-identical
+      output; both go through <code>$PAGER</code> when stdout is a TTY. The
+      <a href="./agent-onboarding-novice.html#design">onboarding-novice's</a> three-worked-examples
+      rule is locked in; the
+      <a href="./agent-visual-designer.html#design">visual-designer's</a> typographic hierarchy
+      (bold + underlined section heads, accent-colored flag names, dim inline comments) renders on
+      TTY and degrades cleanly. <code>?</code> in the TUI opens a contextual keymap modal with sections
+      a screen reader can land on (accessibility-advocate's structural ask).
+    </p>
+
+    <p>
+      mdbook at <code>docs.mcp-manager.dev/v1.0/</code> remains the deep-docs surface; every error
+      code and every <code>--help</code> output links into it. Print-friendly mdbook rendering is
+      verified for <code>w3m</code>/<code>lynx</code>/<code>links</code> per the vim-power-user; mdbook
+      theme passes WCAG AA contrast per the accessibility-advocate; ASCII architecture diagrams get
+      <code>&lt;figcaption&gt;</code>-equivalent text descriptions.
+    </p>
+
+    <h3>4. Error UX — 12-row taxonomy presentation</h3>
+
+    <p>
+      <strong>Adopt the <a href="./agent-visual-designer.html#design">visual-designer's</a> severity ×
+      glyph × color matrix</strong> for which errors get modal overlays vs. inline blocks. Critical
+      errors (<code>E_SERVER_OOM</code>, <code>E_SERVER_FAILED</code>, <code>E_REGISTRY_SIGFAIL</code>)
+      get TUI modals; informational ones (<code>E_REGISTRY_UNREACHABLE</code>) stay as status-line
+      notices. Layered on top: the
+      <a href="./agent-accessibility-advocate.html#design">accessibility-advocate's</a> rule that the
+      error code appears first, on its own visual line, before the prose, and is included when the user
+      presses <code>y</code> to copy the suggested fix to the clipboard. The
+      <a href="./agent-onboarding-novice.html#design">onboarding-novice's</a> error template — code ·
+      what we tried · why · what to do · what to retry — is the prose schema for every error.
+    </p>
+
+    <p>
+      The <a href="./agent-vim-power-user.html#design-error-ux">vim-power-user's</a> single-key
+      navigation inside the error modal (<code>y</code> copy, <code>l</code> logs, <code>e</code> edit
+      offending config when applicable, <code>?</code> docs, <code>Esc</code> dismiss) is the
+      keystroke spec. The <a href="./agent-cli-unix-purist.html#design-error-codes">cli-unix-purist's</a>
+      machine-readable error payload (<code>error.code</code>, <code>error.exit_code</code>,
+      <code>error.suggested[]</code>) is the JSON contract. Stack traces never appear in user-facing
+      output — they live in <code>mcpm logs --daemon</code> at trace level.
+    </p>
+
+    <h3>5. Onboarding — four worked transcripts</h3>
+
+    <p>
+      <strong>Adopt the <a href="./agent-onboarding-novice.html#design">onboarding-novice's</a> four
+      transcripts as the canonical reference</strong>, with three structural overlays. From
+      cli-unix-purist: every prompt has a flag equivalent (the table in his
+      <a href="./agent-cli-unix-purist.html#design-non-interactive">non-interactive flags</a> section
+      is the contract). From accessibility-advocate: verbs first, glyphs second
+      ("<code>OK  wrote ~/.config/...</code>", not "<code>✓ Wrote</code>"); checkmark stays as
+      decoration. From visual-designer: each transcript has a designed tone (lucky-day = warm,
+      non-interactive = terse, project-scope = ritual, cloned-project = airlock); the cloned-project
+      trust gate gets the warn-rule visual treatment.
+    </p>
+
+    <p>
+      The novice's <code>--help-me</code> tutorial mode is <strong>adopted as opt-in</strong>: never
+      autolaunched, <code>q</code> exits cleanly, SPACE-paced (accessibility-advocate's reasoning:
+      auto-advance is hostile to screen-reader users), real commands not simulations, state persisted
+      to <code>~/.config/mcp-manager/state.toml</code> for resume. The first-launch TUI overlay (three
+      callouts, dismissable, never re-shown) is adopted. The "<code>mcpm</code> with no args is an
+      orientation page" pattern is adopted (vim-power-user concedes since
+      <code>mcpm --help</code> still produces the bare list).
+    </p>
+
+    <h3>6. $EDITOR integration</h3>
+
+    <p>
+      <strong>Adopt the <a href="./agent-cli-unix-purist.html#design-editor">cli-unix-purist's</a>
+      resolution order</strong>:
+      <code>$MCPM_EDITOR → $VISUAL → $EDITOR → vi</code>. Temp file lives in <code>$TMPDIR</code> at
+      mode <code>0600</code> with a <code>.toml</code> suffix and a header banner including
+      <code>vim: ft=toml</code> modeline (vim-power-user). On editor exit non-zero: abort, print the
+      temp-file path to stderr for recovery. On exit zero with changed content: validate, atomic
+      write back, audit-log, mcpmanagerd reload. On validation failure: TUI modal with the
+      line:column pointer (visual-designer's danger-coloured offending line), <code>e</code> re-enters
+      the editor with changes preserved.
+    </p>
+
+    <p>
+      The onboarding-novice's fallback chain for macOS users with no <code>$EDITOR</code> set is
+      adopted as <strong>opt-in via <code>[ui] preferred_editor</code> in config.toml</strong>, not
+      auto-magic — the cli-unix-purist's concern about surprising the user wins on the default. The
+      "Tip: set <code>$EDITOR</code>" disclosure after first use stays. <code>mcpm config edit
+      --in-place</code> reads TOML from stdin for CI use.
+    </p>
+
+    <h3>7. Project-scope behaviors</h3>
+
+    <p>
+      <strong>Adopt the layered overlay model</strong> as locked in the
+      <a href="../../ux-design.html#config">UX config section</a>, with three rendering improvements
+      from the synthesis. From accessibility-advocate: per-line source tags
+      (<code>[USER]</code>, <code>[PROJECT]</code>, <code>[USER+PROJECT]</code>,
+      <code>[USER, DISABLED]</code>) on <code>mcpm project show --plain</code> so indentation isn't
+      the only signal. From visual-designer: <code>mcpm config show --layered</code> uses three
+      semantic colors (success-green for project-wins, info-blue for user-survives, dim for keys) plus
+      bold for server names. From vim-power-user: the TUI title bar shows
+      <code>scope:user</code> or <code>scope:project (acme)</code> at all times; a
+      <code>:project diff</code> palette command surfaces the overlay.
+    </p>
+
+    <p>
+      The onboarding-novice's "like venv" mental-model analogy is locked verbatim into
+      <code>mcpm help project</code>: <code>inherit="all"</code> ≈ venv with
+      <code>--system-site-packages</code>, allowlist ≈ named system packages, <code>"none"</code> ≈
+      vanilla venv. The cli-unix-purist's <code>mcpm project diff</code> exit-code contract (0 if no
+      drift, <code>EX_CONFIG</code> 78 if drift) is the CI hook.
+    </p>
+
+    <h3>8. Trust gate prompts</h3>
+
+    <p>
+      <strong>Adopt the direnv-style sha256 pinning</strong> from the locked spec, rendered per the
+      <a href="./agent-visual-designer.html#design">visual-designer's</a> airlock treatment (yellow
+      warn-rule, diff-style additions/overrides, bracketed accent-coloured choice letters). Layered
+      on: from <a href="./agent-accessibility-advocate.html#design">accessibility-advocate</a>: a
+      textual <code>UNTRUSTED</code> header (color is not the only signal), one option per line,
+      explicit default ("default N"), a <code>[D]</code> "show full diff" option added. From
+      onboarding-novice: a <code>?</code> "explain trust gates" option in the prompt — pressing it
+      prints eight lines of plain prose naming the direnv analogy and the commands to change one's
+      mind later. From vim-power-user: <code>q</code> aliases to <code>n</code>; danger-tier
+      <code>!</code> for "trust forever" stays an audit-logged escape hatch.
+    </p>
+
+    <p>
+      Non-interactive equivalents from cli-unix-purist:
+      <code>--trust-from-file=PATH</code> (file contains expected sha256, CLI fails on mismatch),
+      <code>--expected-sha=sha256:&lt;hex&gt;</code>, <code>--force</code> (audit-logged loudly),
+      and the belt-and-suspenders <code>MCPM_AUTO_TRUST_PROJECTS=1</code> +
+      <code>--allow-auto-trust</code> double-opt-in. Default refusal exits <code>EX_NOUSER</code> (67)
+      so CI can branch on it.
+    </p>
+  </section>
+
+  <section class="section" id="open">
+    <h2>Open questions</h2>
+
+    <p>
+      Five questions the synthesis cannot close without either more research or a project-level
+      decision. None blocks v1.0 implementation; each gets a default position and a re-visit trigger.
+    </p>
+
+    <ol>
+      <li>
+        <strong>Does v1.0 ship the <code>--announce</code> sidecar stream?</strong> The
+        <a href="./agent-accessibility-advocate.html#design">accessibility-advocate's</a>
+        emacspeak-style "TUI writes state transitions to stderr when <code>--announce</code> is set"
+        is a low-cost win for screen-reader users but adds a code path. Default position: <em>ship in
+        v1.0</em> because the implementation is &lt;100 LoC and the user base is real.
+        Re-visit if implementation cost balloons.
+      </li>
+      <li>
+        <strong>Does the <code>--help-me</code> tutorial bundle into v1.0 or slip to v1.1?</strong>
+        The <a href="./agent-onboarding-novice.html#design">onboarding-novice's</a> five-lesson
+        tutorial is the largest single feature add in this synthesis. Default position: <em>v1.0
+        ships lessons 1–3 (orient, search, install); lessons 4–5 (TUI tour, Claude Code verification)
+        defer to v1.1.</em> Re-visit at feature freeze.
+      </li>
+      <li>
+        <strong>YAML output format — ship or defer?</strong> The
+        <a href="./agent-cli-unix-purist.html#design-output">cli-unix-purist</a> argued for
+        five formats (human/json/ndjson/yaml/tsv) with the caveat that YAML is droppable. Default
+        position: <em>ship human/json/ndjson/tsv in v1.0; defer YAML to v1.1</em>. Four formats covers
+        every cited use case; the fifth pays for itself when users start asking.
+      </li>
+      <li>
+        <strong>Themed color palette — Okabe-Ito as the default, or as a bundled alternative?</strong>
+        The <a href="./agent-accessibility-advocate.html#design">accessibility-advocate</a> wants
+        deep-blue / orange as the default running/failed pair (colorblind-safe); the
+        <a href="./agent-visual-designer.html#design">visual-designer's</a> default theme uses
+        green/red. They both agree the high-contrast and Okabe-Ito themes ship; they disagree on the
+        default. Default position: <em>visual-designer's green/red default ships; Okabe-Ito is one of
+        the three bundled themes and is recommended in the docs.</em> Re-visit if user research
+        surfaces a colorblind-base in the first 100 users.
+      </li>
+      <li>
+        <strong>Hint-bar auto-hide after first 24h.</strong> The
+        <a href="./agent-visual-designer.html#arguments">visual-designer</a> proposed an
+        <code>hint_bar = "auto"</code> mode that hides after a day, resurfacing on <code>?</code>. The
+        vim-power-user is open to it; the accessibility-advocate is wary. Default position: <em>v1.0
+        ships hint bar always-on; "auto" mode is a v1.x community-driven config knob.</em>
+      </li>
+    </ol>
+  </section>
+
+  <section class="section" id="matrix">
+    <h2>Ranking matrix</h2>
+
+    <p>
+      Five stances scored against six v1.0 frontend priorities. Drag the weight sliders to re-weight
+      and see how the ranking shifts; click a score to see the source citation. Scores reflect how well
+      each stance, taken on its own, would score on the criterion — not "did the stance care about it,"
+      but "would a v1.0 shipped to that stance's preference score well on this dimension."
+    </p>
+
+    <div data-matrix-src="./data/ranking.json"></div>
+
+    <p style="font-size: 0.9rem; color: var(--fg-faint); margin-top: 1rem;">
+      The synthesis above doesn't pick a single winning stance — it picks per-component winners. The
+      matrix is for sanity-checking that the picks track the priorities the project committed to (a11y
+      and discoverability weighted highest, then pipeability, visual polish, keyboard efficiency, and
+      consistency).
+    </p>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Sibling facets: <a href="../backend/overview.html">backend</a> · <a href="../security/overview.html">security</a> ·
+    <a href="../devops/overview.html">devops</a> · <a href="../ux/overview.html">ux</a>.
+    Source stances:
+    <a href="./agent-vim-power-user.html#design">vim-power-user</a> ·
+    <a href="./agent-accessibility-advocate.html#design">accessibility-advocate</a> ·
+    <a href="./agent-onboarding-novice.html#design">onboarding-novice</a> ·
+    <a href="./agent-cli-unix-purist.html#design">cli-unix-purist</a> ·
+    <a href="./agent-visual-designer.html#design">visual-designer</a>.
+    Locked v1.0 baseline that bounds this synthesis:
+    <a href="../../ux-design.html#cli">CLI surface</a> ·
+    <a href="../../ux-design.html#tui">TUI layout</a> ·
+    <a href="../../ux-design.html#keymap">keymap</a> ·
+    <a href="../../ux-design.html#errors">error UX</a> ·
+    <a href="../../ux-design.html#a11y">accessibility commitments</a>.
+  </p>
+</main>
+</body>
+</html>

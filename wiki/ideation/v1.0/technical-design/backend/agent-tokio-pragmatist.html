@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokio Pragmatist — Backend deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">backend · tokio-pragmatist</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">backend overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Tokio Pragmatist's Backend</h1>
+  <p class="lede">
+    Idiomatic async Rust. Use the runtime you've got. Lean on <code>tower</code>, <code>tracing</code>, <code>tokio::process</code>, and the <code>rmcp</code> SDK's own conventions. Every line of bespoke supervision, framing, or middleware is a line we will be debugging at 2am — so we don't write it unless the ecosystem genuinely lacks the primitive.
+  </p>
+
+  <p>
+    <span class="evidence-badge">tokio</span>
+    <span class="evidence-badge">tower</span>
+    <span class="evidence-badge">tracing</span>
+    <span class="evidence-badge">rmcp</span>
+    <span class="evidence-badge">serde + thiserror</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments</a>
+        <ul>
+          <li><a href="#vs-systems-veteran">vs. systems-veteran</a></li>
+          <li><a href="#vs-library-author">vs. library-author</a></li>
+          <li><a href="#vs-kernel-hacker">vs. kernel-hacker</a></li>
+          <li><a href="#vs-boring-tech-defender">vs. boring-tech-defender</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design</a></li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <h3>The north star</h3>
+    <p>
+      The v1.0 spec already committed to tokio because <code>rmcp</code> — the official Rust MCP SDK — is built on it<a class="citation-ref" href="#cite-rmcp">[1]</a>. That single decision cascades. We are not designing an async architecture; we are <em>inheriting</em> one that thousands of engineers have battle-tested for years through axum, hyper, reqwest, sqlx, lapin, and the entire serverless-tower-of-babel that powers most production Rust. The honest pragmatist position is: don't fight the ecosystem you live in. Where a maintained crate already solves a sub-problem, use it. Where it doesn't quite fit, layer a thin adapter rather than fork. Where it's truly missing, contribute upstream so the next system benefits too.
+    </p>
+
+    <h3>Initial reaction to the v1.0 spec</h3>
+    <p>
+      The v1.0 spec gets the runtime call right and then under-specifies the <em>shape</em> of the daemon's request pipeline. "JSON-RPC 2.0 over UDS" tells me the wire format but not <em>how</em> we dispatch handlers, layer cross-cutting concerns (audit, peer-cred check, rate-limit on logs.tail), or evolve method namespaces. The spec also leans on words like "tokio task watches the child" without naming the structured-concurrency pattern (<code>JoinSet</code>? <code>tokio::select!</code>? task per child?). These are exactly the places where naming the abstraction tightens correctness for free.
+    </p>
+
+    <p>
+      My three highest-leverage moves:
+    </p>
+    <ol>
+      <li><strong>Adopt <code>tower::Service</code> + a middleware stack for the RPC server.</strong> Audit, peer-cred verification, structured tracing spans, rate-limiting, and graceful-shutdown propagation become <em>layers</em> — composable and individually testable. This is exactly the abstraction that powers <code>axum</code><a class="citation-ref" href="#cite-axum">[2]</a> and <code>tonic</code><a class="citation-ref" href="#cite-tonic">[3]</a>, and it is the cheapest path to a daemon that is auditable by reading the type of <code>Daemon</code> rather than 600 lines of handler imperative.</li>
+      <li><strong>Use <code>JoinSet&lt;ChildOutcome&gt;</code> for child-process supervision.</strong> One <code>JoinSet</code> per managed-process model (singleton + per-client), backed by <code>tokio::process::Command</code><a class="citation-ref" href="#cite-tokio-process">[4]</a>. Restart policy becomes "drive <code>join_next()</code> in a loop; on each completed task, consult the policy, optionally re-spawn." No hand-rolled reaper, no SIGCHLD juggling: <code>tokio::process</code> already drives <code>waitpid</code> for us through its <code>signal-hook</code>-style child-reaper task<a class="citation-ref" href="#cite-tokio-signal">[5]</a>.</li>
+      <li><strong>Adopt <code>tracing</code> end-to-end with one global subscriber, prod-JSON + dev-tree formatters behind a feature flag.</strong> Every span carries the request id, client id (from SO_PEERCRED), server name, and audit-correlation id. The audit log becomes a <em>tracing layer</em>, not a parallel logging system. Free observability for any future <code>tracing-opentelemetry</code> integration<a class="citation-ref" href="#cite-tracing">[6]</a>.</li>
+    </ol>
+
+    <h3>Key concerns about the v1.0 baseline</h3>
+    <p>
+      Three places where idiomatic-async hygiene matters and the spec leaves room to slip:
+    </p>
+    <ul>
+      <li><strong>Backpressure on <code>logs.tail</code>.</strong> The spec mentions "bounded tokio channel" but doesn't name the policy when the channel is full: drop-oldest, drop-newest, or block? With a TUI subscriber that pauses (alt-screen entry, suspended editor), we will hit this. I want drop-oldest with a counter emitted as a structured event ("tail-client lagging, dropped N lines"). <code>tokio::sync::broadcast</code><a class="citation-ref" href="#cite-tokio-sync">[7]</a> gives us this natively — the channel reports <code>RecvError::Lagged(n)</code> to slow consumers without blocking producers.</li>
+      <li><strong>Cancellation discipline.</strong> Every long-running task (logs.tail, child-process supervision, periodic trust-refresh) needs a single, named cancellation token. <code>tokio_util::sync::CancellationToken</code><a class="citation-ref" href="#cite-tokio-util">[8]</a> with parent/child relationships is the right primitive. Graceful daemon shutdown is then "cancel the root token; await <code>JoinSet</code> drain with a 5s deadline."</li>
+      <li><strong>Errors at module boundaries.</strong> Libraries (<code>mcpm-protocol</code>, <code>mcpm-supervisor</code>) need <code>thiserror</code>-derived enums with <code>#[non_exhaustive]</code>; binaries (<code>mcpm-daemon</code>, <code>mcpm-cli</code>) need <code>anyhow</code> at the seams. Mixing the two — anyhow inside a library — is the most common Rust hygiene smell I see in young projects<a class="citation-ref" href="#cite-thiserror">[9]</a>.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments</h2>
+
+    <h3 id="vs-systems-veteran">Against <code>systems-veteran</code></h3>
+    <p>
+      The veteran wants persistent journals, explicit state machines, and sans-I/O cores — and I broadly respect the discipline. But pushed to v1.0 implementation, the veteran's instinct over-engineers our scale. We are managing <strong>10s of MCPs</strong>, not 10,000 containers. A sans-I/O state machine for the supervisor would force us to invent a test harness, a side-channel for time, and a separate driver loop — three things <code>tokio</code> + <code>tokio::time::pause</code><a class="citation-ref" href="#cite-tokio-time">[10]</a> already give us for free in tests.
+    </p>
+    <p>
+      On persistent journals: yes, the audit log is JSONL and lives on disk. But the veteran's instinct to also journal the <em>supervisor's internal state</em> (which child has been restarted N times, in which window) ignores that <code>JoinSet</code> + an in-memory <code>HashMap&lt;ServerName, RestartHistory&gt;</code> is fine for our scale. If <code>mcpmanagerd</code> dies, we re-derive state from the canonical config + on-disk audit log on startup. We don't need a sled/sqlite-backed state store for a 10-server fleet that fits in 1KB of RAM. <em>Show me the user, at our scale, who benefits from journaling restart-attempt history across daemon restarts</em> — I'll bet you the cost of the sqlite dependency they don't exist.
+    </p>
+    <p>
+      Where I cede ground: explicit state machines for the supervisor child are correct (<code>Spawning → Running → Crashing → Restarting → Failed</code>). I just want them as <code>enum</code>s driven by <code>tokio::select!</code>, not as a sans-I/O reducer. See <a href="./agent-systems-veteran.html#design">systems-veteran's design</a> for the alternative.
+    </p>
+
+    <h3 id="vs-library-author">Against <code>library-author</code></h3>
+    <p>
+      The library-author wants <code>mcpm-protocol</code> to be a tiny, semver-disciplined, <code>#[non_exhaustive]</code>-everywhere public surface — and on this we mostly agree. Where I push back: the author's instinct to <em>also</em> make <code>mcpm-client</code> publicly versioned, with deprecation cycles and migration guides, is over-engineering for v1.0. <code>mcpm-client</code> is an <em>in-tree convenience layer</em>. The v1.0 spec already says so. Third parties depend on <code>mcpm-protocol</code>; we churn <code>mcpm-client</code> freely. Trying to ship two stable public surfaces is how you get a paralyzed maintainer who refuses to take patches because every change is breaking.
+    </p>
+    <p>
+      Second disagreement: the library-author tends to want <code>serde</code>'s <code>#[serde(deny_unknown_fields)]</code> on every wire type for strictness. I want the opposite — <code>#[serde(default)]</code> + forward-compatible unknown-field tolerance — because we explicitly designed the wire protocol to evolve with new methods and fields (the spec calls out semver-minor additive changes as the common case). Forward-compat tolerance on the client side, strict validation only at the daemon boundary, is the right asymmetry<a class="citation-ref" href="#cite-serde">[11]</a>.
+    </p>
+    <p>
+      Where I cede ground: <code>mcpm-protocol</code> deserves the full type-safety regimen — <code>#[non_exhaustive]</code>, narrow enums, no <code>String</code> where an enum will do, no <code>Value</code> in public types. See <a href="./agent-library-author.html#design">library-author's design</a>.
+    </p>
+
+    <h3 id="vs-kernel-hacker">Against <code>kernel-hacker</code></h3>
+    <p>
+      The kernel-hacker wants direct <code>libc</code>, hand-managed <code>cgroup</code> file writes, raw <code>signalfd</code>/<code>kqueue</code> on the supervisor, and possibly an <code>io_uring</code> log-write path. This is the place where my pragmatism kicks hardest.
+    </p>
+    <p>
+      <code>tokio::process::Command</code> is already a thin wrapper over <code>std::process::Command</code> + a shared reaper task; reaching for raw <code>fork/exec</code> + manual <code>waitpid</code> gives us nothing the runtime doesn't already give us, and costs us the entire community's investment in correctness around signal handling, process groups, and orphan reaping<a class="citation-ref" href="#cite-tokio-process">[4]</a>. <code>tokio::signal::unix</code> already exposes <code>SIGCHLD</code> / <code>SIGTERM</code> / <code>SIGHUP</code> as async streams — done<a class="citation-ref" href="#cite-tokio-signal">[5]</a>.
+    </p>
+    <p>
+      cgroupv2 OOM detection: yes, we read <code>memory.events</code>. But via the <code>cgroups-rs</code> crate, not by hand-parsing the file every 100ms<a class="citation-ref" href="#cite-cgroups-rs">[12]</a>. The kernel-hacker's argument is "but cgroups-rs is unmaintained!" — and they're partly right, the crate has stale issues — but the <code>cgroup-v2-fs-rs</code> fork and the simpler approach of "<code>inotify</code> on <code>memory.events</code> + read u64 counters" via <code>tokio::fs</code> covers the v1.0 requirement. Reach for libc if we hit a real ceiling at our scale; we won't.
+    </p>
+    <p>
+      Where I cede ground: the macOS jetsam heuristic genuinely needs platform-specific work (<code>host_processor_info</code>, <code>proc_pidinfo</code>) — that's a small, well-scoped FFI surface where the kernel-hacker is correct that there's no shortcut. See <a href="./agent-kernel-hacker.html#design">kernel-hacker's design</a> for the macOS path.
+    </p>
+
+    <h3 id="vs-boring-tech-defender">Against <code>boring-tech-defender</code></h3>
+    <p>
+      The boring-tech-defender wants line-delimited JSON over UDS, hand-rolled request dispatch with a giant <code>match</code> statement, no <code>tower</code>, no streaming-RPC abstractions, and probably <code>log</code> instead of <code>tracing</code>. Their argument: every layer of abstraction is a layer to debug. Fair.
+    </p>
+    <p>
+      But "boring" cuts two ways. <strong>tokio + tower + tracing IS the boring stack for async Rust in 2026.</strong> They power axum (the de-facto web framework), tonic (the gRPC client/server), reqwest (the HTTP client), and a large fraction of every production Rust service shipping today<a class="citation-ref" href="#cite-axum">[2]</a><a class="citation-ref" href="#cite-tower">[13]</a>. Picking them is the conservative move; picking line-delimited JSON + custom dispatch is the <em>contrarian</em> move that loses us middleware composition, instrumentation, and the ability to hire engineers who already know the stack.
+    </p>
+    <p>
+      Second disagreement: the defender's case against streaming-RPC abstractions ("<code>logs.tail</code> can be implemented as a long-lived JSON-RPC notification stream, that's all") misses that we have <em>multiple</em> streaming endpoints in the spec (<code>logs.tail</code>, and likely <code>server.events</code> in v1.1) and would benefit from a unified abstraction. A <code>tower::Service&lt;Request, Response = BoxStream&lt;Notification&gt;&gt;</code> shape generalizes; "just write a loop" doesn't.
+    </p>
+    <p>
+      Where I cede ground: not <code>tonic</code>, not <code>grpc</code>. The defender is right that JSON-RPC 2.0 over UDS framed by <code>tokio_util::codec::LengthDelimitedCodec</code><a class="citation-ref" href="#cite-tokio-codec">[14]</a> is the right wire format — small, debuggable with <code>socat</code>, no proto files. We're aligned on the wire; we disagree on the dispatcher. See <a href="./agent-boring-tech-defender.html#design">boring-tech-defender's design</a>.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3>Workspace at a glance</h3>
+    <p>
+      11 crates, two binaries. I keep the v1.0 layout intact and slot specific tokio-flavored crate picks into each.
+    </p>
+
+    <table class="matrix">
+      <thead>
+        <tr><th>Crate</th><th>Top-of-mind deps</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="option-name"><code>mcpm-core</code></td><td><code>serde</code>, <code>toml_edit</code>, <code>sha2</code>, <code>thiserror</code></td><td>Pure data; no <code>tokio</code> in the crate root. Async-free, easy to test.</td></tr>
+        <tr><td class="option-name"><code>mcpm-protocol</code></td><td><code>serde</code>, <code>thiserror</code>, <code>jsonrpsee-types</code> (optional)</td><td>Sans-I/O. Wire types + <code>Request</code>/<code>Response</code>/<code>Notification</code> enums.</td></tr>
+        <tr><td class="option-name"><code>mcpm-client</code></td><td><code>tokio</code>, <code>tokio-util</code>, <code>tower</code>, <code>tracing</code>, <code>anyhow</code></td><td>Convenience layer; dial-or-spawn dance lives here.</td></tr>
+        <tr><td class="option-name"><code>mcpm-daemon</code></td><td><code>tokio</code> (full), <code>tower</code>, <code>tracing-subscriber</code>, <code>clap</code>, <code>anyhow</code></td><td>Binary crate. Composes every other crate.</td></tr>
+        <tr><td class="option-name"><code>mcpm-supervisor</code></td><td><code>tokio</code> (process, sync, time), <code>cgroups-rs</code> (Linux), <code>libc</code> (macOS), <code>tracing</code>, <code>thiserror</code></td><td>One <code>JoinSet</code> per process-model; <code>CancellationToken</code> tree.</td></tr>
+        <tr><td class="option-name"><code>mcpm-secrets</code></td><td><code>keyring</code>, <code>secrecy</code>, <code>zeroize</code>, <code>async-trait</code>, <code>thiserror</code></td><td>Trait-based; backends are sync, wrapped in <code>spawn_blocking</code>.</td></tr>
+        <tr><td class="option-name"><code>mcpm-projector</code></td><td><code>tokio::fs</code>, <code>toml_edit</code>, <code>serde_json</code>, <code>quick-xml</code> (JetBrains), <code>thiserror</code></td><td>Per-editor adapters are stateless functions.</td></tr>
+        <tr><td class="option-name"><code>mcpm-registry</code></td><td><code>reqwest</code> (rustls), <code>tantivy</code> (BM25)<sup>*</sup>, <code>serde</code>, <code>minisign-verify</code>, <code>thiserror</code></td><td><sup>*</sup>fallback: hand-rolled BM25 over the cached index; tantivy is heavy.</td></tr>
+        <tr><td class="option-name"><code>mcpm-logs</code></td><td><code>tokio::sync::broadcast</code>, <code>tracing-appender</code>, <code>tokio::fs</code>, <code>serde_json</code></td><td>Three independent ring buffers; one broadcast channel per server.</td></tr>
+        <tr><td class="option-name"><code>mcpm-trust</code></td><td><code>reqwest</code>, <code>minisign-verify</code>, <code>tokio::time::interval</code>, <code>thiserror</code></td><td>Periodic refresh task; 7-day TTL.</td></tr>
+        <tr><td class="option-name"><code>mcpm-cli</code></td><td><code>tokio</code>, <code>clap</code>, <code>ratatui</code>, <code>crossterm</code>, <code>anyhow</code>, <code>rpassword</code></td><td>Binary crate; one-shot subcommands stay sync-style; TUI uses the runtime.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>The daemon main loop</h3>
+    <p>
+      Pure tokio + tower. Hyper-style: bind the UDS listener, build a <code>Service</code> stack with layered middleware, accept-loop into per-connection tasks tracked by a <code>JoinSet</code>.
+    </p>
+
+    <pre><code class="lang-rust">// crates/mcpm-daemon/src/main.rs
+use anyhow::Context;
+use tokio_util::sync::CancellationToken;
+use tower::ServiceBuilder;
+use tracing::instrument;
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -&gt; anyhow::Result&lt;()&gt; {
+    install_tracing()?;                       // tracing-subscriber: JSON in prod, tree in dev
+    let cfg = mcpm_core::Config::load()?;     // canonical config
+    let shutdown = CancellationToken::new();
+    install_signal_handlers(shutdown.clone()); // SIGTERM, SIGINT, SIGHUP → cancel root
+
+    // Component wiring. Each is Send + Sync + Clone (Arc-based internally).
+    let registry  = mcpm_registry::Registry::open(&amp;cfg).await?;
+    let secrets   = mcpm_secrets::LayeredStore::from_config(&amp;cfg)?;
+    let logs      = mcpm_logs::Hub::new(&amp;cfg);
+    let trust     = mcpm_trust::TrustStore::open(&amp;cfg, shutdown.child_token()).await?;
+    let supervisor = mcpm_supervisor::Supervisor::new(
+        secrets.clone(),
+        logs.clone(),
+        shutdown.child_token(),
+    );
+    let projector = mcpm_projector::Projector::new(&amp;cfg);
+    let core      = mcpm_core::Core::new(cfg, registry, supervisor, projector, logs.clone());
+
+    // tower middleware stack: ordered outer→inner.
+    let svc = ServiceBuilder::new()
+        .layer(PeerCredAuthLayer::new())            // SO_PEERCRED check
+        .layer(TraceLayer::with_correlation_id())   // tracing span per request
+        .layer(AuditLayer::new(logs.audit_sink())) // emit JSONL audit event
+        .layer(ConcurrencyLimitLayer::new(64))      // bound total in-flight
+        .service(RpcHandlers::new(core));           // the actual dispatch
+
+    let listener = bind_uds(&amp;runtime_socket_path())?;
+    accept_loop(listener, svc, shutdown.clone()).await
+}
+
+#[instrument(skip(listener, svc, shutdown))]
+async fn accept_loop&lt;S&gt;(listener: UnixListener, svc: S, shutdown: CancellationToken)
+    -&gt; anyhow::Result&lt;()&gt;
+where
+    S: tower::Service&lt;RpcRequest, Response = RpcResponse&gt; + Clone + Send + 'static,
+{
+    let mut conns: tokio::task::JoinSet&lt;()&gt; = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() =&gt; break,
+            res = listener.accept() =&gt; {
+                let (sock, _) = res.context("accept")?;
+                let svc = svc.clone();
+                let tok = shutdown.child_token();
+                conns.spawn(async move { drive_connection(sock, svc, tok).await; });
+            }
+        }
+    }
+    // graceful drain
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), conns.join_all()).await;
+    Ok(())
+}
+</code></pre>
+
+    <p>
+      Every cross-cutting concern is a <code>tower::Layer</code>. Audit is a layer. Tracing is a layer. PeerCred is a layer. The handler is a tower::Service. This composition is exactly the pattern axum and tonic use<a class="citation-ref" href="#cite-axum">[2]</a><a class="citation-ref" href="#cite-tonic">[3]</a>, and it gives us a single integration-test pattern: stack the service, call it directly without going through UDS, assert behavior.
+    </p>
+
+    <h3>mcpm-protocol: small, stable, sans-I/O</h3>
+    <p>
+      The library-author was right that this crate is special. It carries every wire type. I keep it sans-I/O, serde-derived, <code>#[non_exhaustive]</code> on every public enum, and <code>thiserror</code> for the single error type.
+    </p>
+
+    <pre><code class="lang-rust">// crates/mcpm-protocol/src/wire.rs
+use serde::{Deserialize, Serialize};
+
+pub const WIRE_VERSION: &amp;str = "1.0";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(tag = "method", content = "params", rename_all = "snake_case")]
+pub enum Request {
+    ServerList,
+    ServerGet { name: String },
+    ServerStart { name: String },
+    ServerStop { name: String, #[serde(default)] graceful: bool },
+    Install { source: InstallSource },
+    SecretSet { name: String },                          // value streamed
+    ConfigGet { #[serde(default)] scope: ConfigScope },
+    ConfigPut { #[serde(default)] scope: ConfigScope, content: String, prior_hash: String },
+    LogsTail { stream: LogStream, #[serde(default)] follow: bool, since: Option&lt;Timestamp&gt; },
+    // ... 30+ more
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LogStream {
+    Daemon,
+    Server { name: String },
+    Audit,
+    Combined,
+}
+
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum Error {
+    #[error("config conflict (CAS); current hash = {current_hash}")]
+    ConfigConflict { current_hash: String },
+    #[error("server not found: {name}")]
+    ServerNotFound { name: String },
+    // ...
+}
+</code></pre>
+
+    <p>
+      <code>#[serde(default)]</code> on optional params means a v1.1 client speaking to a v1.0 daemon (or vice versa) tolerates unknown fields. The wire-version handshake is a single <code>daemon.status</code> round-trip on connect.
+    </p>
+
+    <h3>mcpm-supervisor: JoinSet + state-machine enum + cancellation tokens</h3>
+
+    <p>
+      One <code>JoinSet&lt;ChildOutcome&gt;</code> per supervisor instance. Restart policy is a small function that takes <code>(history, now)</code> and returns <code>Either&lt;Sleep(Duration), Fail&gt;</code>. Process index is a <code>HashMap</code> keyed by <code>ProcessKey</code>, which is either <code>Server(name)</code> (singleton) or <code>(Server(name), ClientId)</code> (per-client). The cgroupv2 OOM-watch + RLIMIT_AS fallback live behind a single platform trait.
+    </p>
+
+    <pre><code class="lang-rust">// crates/mcpm-supervisor/src/lib.rs
+use std::collections::HashMap;
+use std::time::Duration;
+use tokio::process::{Child, Command};
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum ProcessKey {
+    Singleton(String),                       // server name
+    PerClient { server: String, client: ClientId },
+}
+
+#[derive(Debug)]
+pub enum ChildOutcome {
+    Exited { key: ProcessKey, status: std::process::ExitStatus },
+    OomKilled { key: ProcessKey, evidence: OomEvidence },
+    Cancelled { key: ProcessKey },
+}
+
+pub struct Supervisor {
+    procs: parking_lot::Mutex&lt;HashMap&lt;ProcessKey, ProcState&gt;&gt;,
+    secrets: mcpm_secrets::LayeredStore,
+    logs: mcpm_logs::Hub,
+    children: tokio::sync::Mutex&lt;JoinSet&lt;ChildOutcome&gt;&gt;,
+    root_cancel: CancellationToken,
+}
+
+struct ProcState {
+    spec: ServerSpec,
+    refcount: u32,
+    history: RestartHistory,
+    state: ProcLifecycle,           // Spawning | Running | Crashing | Restarting | Failed
+    idle_timer: Option&lt;tokio::task::JoinHandle&lt;()&gt;&gt;,
+    cancel: CancellationToken,      // child of root_cancel
+}
+
+impl Supervisor {
+    pub async fn ensure_running(&amp;self, key: ProcessKey) -&gt; Result&lt;StdioPipe, SupError&gt; {
+        let mut procs = self.procs.lock();
+        if let Some(state) = procs.get_mut(&amp;key) {
+            state.refcount += 1;
+            if let Some(t) = state.idle_timer.take() { t.abort(); }
+            return Ok(state.stdio_pipe());
+        }
+        drop(procs);
+        self.spawn(key).await
+    }
+
+    async fn spawn(&amp;self, key: ProcessKey) -&gt; Result&lt;StdioPipe, SupError&gt; {
+        let spec = self.lookup_spec(&amp;key)?;
+        let env = self.secrets.resolve_env(&amp;spec).await?;            // SecretString → OsString at syscall
+        let cancel = self.root_cancel.child_token();
+
+        let mut cmd = Command::new(&amp;spec.command);
+        cmd.args(&amp;spec.args).envs(env).stdin(std::process::Stdio::piped())
+           .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+           .kill_on_drop(true);
+        let child = cmd.spawn()?;
+
+        // Platform-specific memory limit setup (cgroup v2 / RLIMIT_AS / nothing on macOS).
+        platform::apply_memory_limit(&amp;child, spec.memory_max_mb)?;
+        let oom_watch = platform::oom_watch(child.id().unwrap(), spec.memory_max_mb, cancel.clone());
+
+        let pipe = StdioPipe::new(&amp;child, &amp;self.logs, &amp;spec.name);
+        let key2 = key.clone();
+        self.children.lock().await.spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() =&gt; ChildOutcome::Cancelled { key: key2 },
+                ev  = oom_watch =&gt; ChildOutcome::OomKilled { key: key2, evidence: ev },
+                res = child.wait() =&gt; ChildOutcome::Exited { key: key2, status: res.unwrap() },
+            }
+        });
+        // record state, return pipe
+        Ok(pipe)
+    }
+
+    /// Drives the JoinSet forever; runs as one background task on daemon start.
+    pub async fn drive(&amp;self) {
+        loop {
+            let mut children = self.children.lock().await;
+            tokio::select! {
+                biased;
+                _ = self.root_cancel.cancelled() =&gt; { children.shutdown().await; return; }
+                Some(outcome) = children.join_next() =&gt; {
+                    drop(children);
+                    self.handle_outcome(outcome.unwrap_or_else(panic_outcome)).await;
+                }
+            }
+        }
+    }
+
+    async fn handle_outcome(&amp;self, outcome: ChildOutcome) {
+        match outcome {
+            ChildOutcome::Exited { key, status } =&gt; self.maybe_restart(key, ExitKind::Crash(status)).await,
+            ChildOutcome::OomKilled { key, evidence } =&gt; self.maybe_restart(key, ExitKind::Oom(evidence)).await,
+            ChildOutcome::Cancelled { .. } =&gt; { /* expected on shutdown */ }
+        }
+    }
+
+    async fn maybe_restart(&amp;self, key: ProcessKey, kind: ExitKind) {
+        let decision = {
+            let mut p = self.procs.lock();
+            let st = match p.get_mut(&amp;key) { Some(s) =&gt; s, None =&gt; return };
+            st.history.record(kind, Instant::now());
+            restart_policy(&amp;st.spec.restart, &amp;st.history)
+        };
+        match decision {
+            Decision::Sleep(d) =&gt; {
+                tokio::time::sleep(d).await;
+                let _ = self.spawn(key).await;          // re-spawn
+            }
+            Decision::Fail =&gt; {
+                self.mark_failed(&amp;key, kind).await;     // emit audit + tracing event
+            }
+        }
+    }
+}
+
+fn restart_policy(p: &amp;RestartPolicy, h: &amp;RestartHistory) -&gt; Decision {
+    let attempts = h.in_last(p.window_secs);
+    if attempts &gt;= p.attempts_max { return Decision::Fail; }
+    // exponential + jitter
+    let base = Duration::from_millis(200);
+    let exp  = base.checked_mul(1 &lt;&lt; attempts.min(8)).unwrap_or(Duration::from_secs(60));
+    let jitter = rand::random::&lt;f64&gt;() * 0.3;
+    Decision::Sleep(exp.mul_f64(1.0 + jitter).min(Duration::from_secs(60)))
+}
+</code></pre>
+
+    <p>
+      The structure makes failure modes testable in isolation. <code>tokio::time::pause()</code><a class="citation-ref" href="#cite-tokio-time">[10]</a> lets a unit test fast-forward through the backoff schedule without sleeping for real. <code>JoinSet</code> handles fan-out; <code>CancellationToken</code> handles fan-in for shutdown.
+    </p>
+
+    <h3>OOM detection — platform trait</h3>
+
+    <table class="compare">
+      <thead><tr><th>Platform</th><th>Signal</th><th>Implementation</th></tr></thead>
+      <tbody>
+        <tr><td>Linux cgroupv2</td><td>deterministic</td><td><code>cgroups-rs</code> attach + <code>inotify</code> on <code>memory.events</code>; parse <code>oom_kill</code> counter delta</td></tr>
+        <tr><td>Linux cgroupv1</td><td>best-effort</td><td><code>setrlimit(RLIMIT_AS, …)</code> at <code>pre_exec</code>; on SIGKILL exit, emit "may have been OOM" audit note</td></tr>
+        <tr><td>macOS</td><td>heuristic</td><td>SIGKILL exit + <code>host_processor_info()</code> memory-pressure within 30s + RSS &gt; 80% of limit (sampled every 5s into a small ring) — all three required</td></tr>
+      </tbody>
+    </table>
+
+    <pre><code class="lang-rust">#[cfg(target_os = "linux")]
+mod platform {
+    pub async fn oom_watch(pid: u32, limit_mb: u32, cancel: CancellationToken)
+        -&gt; OomEvidence
+    {
+        let events_path = format!("/sys/fs/cgroup/mcpm/{}/memory.events", pid);
+        let mut watcher = inotify::Inotify::init().unwrap();
+        watcher.add_watch(&amp;events_path, inotify::WatchMask::MODIFY).unwrap();
+        let mut stream = watcher.event_stream(Vec::with_capacity(4096)).unwrap();
+        let mut last_oom = read_oom_count(&amp;events_path).await.unwrap_or(0);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() =&gt; return OomEvidence::Cancelled,
+                Some(_) = stream.next() =&gt; {
+                    let cur = read_oom_count(&amp;events_path).await.unwrap_or(last_oom);
+                    if cur &gt; last_oom { return OomEvidence::Cgroupv2(cur - last_oom); }
+                    last_oom = cur;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod platform {
+    pub async fn oom_watch(pid: u32, limit_mb: u32, cancel: CancellationToken)
+        -&gt; OomEvidence
+    {
+        // sample RSS every 5s into a ring; on cancel, return what we've got.
+        let mut ring = RssRing::with_capacity(32);
+        let mut ticker = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() =&gt; return OomEvidence::macOsRing(ring),
+                _ = ticker.tick() =&gt; {
+                    if let Some(rss) = libproc_rss_mb(pid) { ring.push(rss, Instant::now()); }
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+    <h3>mcpm-logs: three streams, one broadcast channel each</h3>
+
+    <p>
+      The spec's "3-stream tail API" maps cleanly to one <code>tokio::sync::broadcast::Sender</code> per stream class<a class="citation-ref" href="#cite-tokio-sync">[7]</a>. Broadcast natively reports <code>Lagged(n)</code> to slow receivers without blocking producers — exactly the backpressure semantics I want for <code>logs.tail</code>.
+    </p>
+
+    <pre><code class="lang-rust">// crates/mcpm-logs/src/lib.rs
+pub struct Hub {
+    daemon: tokio::sync::broadcast::Sender&lt;LogLine&gt;,
+    servers: dashmap::DashMap&lt;String, tokio::sync::broadcast::Sender&lt;LogLine&gt;&gt;,
+    audit_writer: tokio::sync::mpsc::Sender&lt;AuditEvent&gt;,
+    audit_task: tokio::task::JoinHandle&lt;()&gt;,
+}
+
+impl Hub {
+    pub fn subscribe_daemon(&amp;self) -&gt; impl Stream&lt;Item = LogLine&gt; {
+        let rx = self.daemon.subscribe();
+        broadcast_stream(rx).filter_map(|r| async move {
+            match r {
+                Ok(line) =&gt; Some(line),
+                Err(BroadcastStreamRecvError::Lagged(n)) =&gt; Some(LogLine::lagged(n)),
+            }
+        })
+    }
+    // similar for per-server, audit
+}
+</code></pre>
+
+    <p>
+      Audit JSONL is single-writer (one mpsc receiver flushing every 100ms or 4KB into a daily-rotated file via <code>tracing-appender::rolling::daily</code><a class="citation-ref" href="#cite-tracing-appender">[15]</a>).
+    </p>
+
+    <h3>mcpm-secrets: trait + spawn_blocking</h3>
+
+    <p>
+      The <code>keyring</code> crate is sync (it goes through libsecret/Keychain blocking APIs). Wrapping in <code>spawn_blocking</code> on the trait surface keeps the async story uniform and gives us a single place to apply a timeout if the keychain prompts for user attention.
+    </p>
+
+    <pre><code class="lang-rust">#[async_trait::async_trait]
+pub trait SecretStore: Send + Sync + 'static {
+    async fn get(&amp;self, name: &amp;str) -&gt; Result&lt;Option&lt;secrecy::SecretString&gt;, SecretError&gt;;
+    async fn set(&amp;self, name: &amp;str, value: secrecy::SecretString) -&gt; Result&lt;(), SecretError&gt;;
+    async fn unset(&amp;self, name: &amp;str) -&gt; Result&lt;bool, SecretError&gt;;
+    async fn list(&amp;self) -&gt; Result&lt;Vec&lt;String&gt;, SecretError&gt;;
+}
+
+pub struct OsKeyringStore { service: String }
+
+#[async_trait::async_trait]
+impl SecretStore for OsKeyringStore {
+    async fn get(&amp;self, name: &amp;str) -&gt; Result&lt;Option&lt;secrecy::SecretString&gt;, SecretError&gt; {
+        let service = self.service.clone();
+        let name = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let entry = keyring::Entry::new(&amp;service, &amp;name)?;
+            match entry.get_password() {
+                Ok(s) =&gt; Ok(Some(secrecy::SecretString::new(s.into_boxed_str()))),
+                Err(keyring::Error::NoEntry) =&gt; Ok(None),
+                Err(e) =&gt; Err(SecretError::Backend(e.to_string())),
+            }
+        }).await.map_err(|_| SecretError::Cancelled)?
+    }
+    // ...
+}
+
+pub struct LayeredStore { layers: Vec&lt;Box&lt;dyn SecretStore&gt;&gt; }
+// reads probe layers in order; writes go to the first writable layer
+</code></pre>
+
+    <h3>mcpm-projector: tokio::fs + atomic temp-rename</h3>
+
+    <p>
+      Per-editor adapters are stateless. Managed-block sync = read existing config, replace the fenced region (delimited by <code># BEGIN MANAGED BY MCPM</code> and <code># END MANAGED BY MCPM</code>), write to a temp file in the same directory, <code>fsync</code>, atomic <code>rename</code>. All async via <code>tokio::fs</code>.
+    </p>
+
+    <pre><code class="lang-rust">async fn write_managed_block(
+    path: &amp;Path,
+    block: &amp;str,
+    fence: &amp;ManagedFence,
+) -&gt; Result&lt;(), ProjectError&gt; {
+    let existing = match tokio::fs::read_to_string(path).await {
+        Ok(s) =&gt; s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound =&gt; String::new(),
+        Err(e) =&gt; return Err(e.into()),
+    };
+    let new = splice_fenced_region(&amp;existing, block, fence);
+
+    let tmp = path.with_extension("mcpm-tmp");
+    {
+        let mut f = tokio::fs::File::create(&amp;tmp).await?;
+        tokio::io::AsyncWriteExt::write_all(&amp;mut f, new.as_bytes()).await?;
+        f.sync_all().await?;
+    }
+    tokio::fs::rename(&amp;tmp, path).await?;
+    Ok(())
+}
+</code></pre>
+
+    <p>
+      JetBrains XML is the one outlier: we use <code>quick-xml</code> in serialize-from-typed mode, never raw string concatenation, to avoid XML-injection on server names with brackets in them.
+    </p>
+
+    <h3>mcpm-trust: a periodic refresh task on a CancellationToken</h3>
+
+    <pre><code class="lang-rust">// On daemon start:
+let trust_token = root_cancel.child_token();
+let trust_handle = tokio::spawn(async move {
+    let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60 * 24));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = trust_token.cancelled() =&gt; return,
+            _ = ticker.tick() =&gt; {
+                if let Err(e) = trust.maybe_refresh().await {
+                    tracing::warn!(error = ?e, "trust refresh failed; keeping cached manifest");
+                }
+            }
+        }
+    }
+});
+</code></pre>
+
+    <h3>mcpm-client: dial-or-spawn, then wrap in a tower service</h3>
+
+    <pre><code class="lang-rust">pub async fn connect() -&gt; Result&lt;Client, ConnectError&gt; {
+    let sock = runtime_socket_path()?;
+    for attempt in 0..5 {
+        match tokio::net::UnixStream::connect(&amp;sock).await {
+            Ok(s) =&gt; return Ok(Client::wrap(s)),
+            Err(e) if attempt == 0 &amp;&amp; should_autospawn(&amp;e) =&gt; {
+                spawn_daemon_under_flock(&amp;sock).await?;
+            }
+            Err(_) =&gt; tokio::time::sleep(Duration::from_millis(50)).await,
+        }
+    }
+    Err(ConnectError::Timeout)
+}
+</code></pre>
+
+    <h3>Cross-cutting: tracing + audit</h3>
+
+    <p>
+      One <code>tracing_subscriber::Registry</code> on daemon start, multiple layers fan in: <code>fmt::Layer</code> (human or JSON), <code>AuditLayer</code> (filtered by target=audit), <code>EnvFilter</code> for verbosity, <code>tracing_appender</code> for daily-rotated daemon log<a class="citation-ref" href="#cite-tracing-appender">[15]</a>. Every handler is <code>#[instrument(skip(...))]</code>. The audit JSONL is then just events with <code>target = "mcpm::audit"</code> — already filterable, already structured, already correlatable with daemon-log spans via the trace-id field.
+    </p>
+
+    <h3>Decision matrix — where I differ from the v1.0 spec</h3>
+
+    <table class="matrix">
+      <thead><tr><th>Decision</th><th>v1.0 baseline</th><th>This essay refines to</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>RPC dispatch shape</td><td>"tokio + UDS"</td><td><code>tower::Service</code> + middleware stack</td><td>Audit/PeerCred/Concurrency-limit as layers; testable in isolation.</td></tr>
+        <tr><td>Process supervision primitive</td><td>"one tokio task per child"</td><td>One <code>JoinSet</code>; <code>tokio::select!</code> over (cancel, oom-watch, child.wait)</td><td>Structured concurrency; <code>JoinSet::shutdown</code> for graceful drain.</td></tr>
+        <tr><td>Backpressure on <code>logs.tail</code></td><td>"bounded channel"</td><td><code>tokio::sync::broadcast</code> with <code>Lagged(n)</code> signal</td><td>Slow tail-clients don't block the producer; lag is observable.</td></tr>
+        <tr><td>Cancellation</td><td>(unspecified)</td><td><code>tokio_util::sync::CancellationToken</code> tree rooted at signal handler</td><td>One mechanism for graceful shutdown across every subsystem.</td></tr>
+        <tr><td>Logging</td><td><code>tracing</code> mentioned</td><td><code>tracing</code> + <code>tracing-subscriber</code> + <code>tracing-appender</code> + audit-as-layer</td><td>Audit log is a tracing target, not a parallel system.</td></tr>
+        <tr><td>Error type discipline</td><td>(unspecified)</td><td><code>thiserror</code> in libs (<code>#[non_exhaustive]</code>); <code>anyhow</code> in bins</td><td>Public/private boundary clean; downstream gets typed errors.</td></tr>
+        <tr><td>Secrets async story</td><td>"keyring crate"</td><td>Async <code>SecretStore</code> trait; <code>spawn_blocking</code> wrapping sync backends</td><td>Uniform async surface; per-call timeout possible.</td></tr>
+        <tr><td>Atomic config writes</td><td>"temp-rename"</td><td><code>tokio::fs</code> create → write → sync_all → rename</td><td>Same recipe, but explicit <code>sync_all</code> so we survive power loss.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>ASCII: where the tasks live in a running daemon</h3>
+
+    <pre><code>┌─ tokio multi-threaded runtime ──────────────────────────────────┐
+│                                                                  │
+│  [signal handler task] ── cancels ──▶ root CancellationToken     │
+│                                              │                   │
+│           ┌──────────────────────────────────┼─────────┐         │
+│           │                                  │         │         │
+│  [accept-loop task]              [supervisor.drive()]  [trust    │
+│      │                                  │              refresh]  │
+│      │ spawns per conn                  │ joins                  │
+│      ▼                                  ▼                        │
+│  [conn-N task] ── tower stack    [child-watcher task × N]        │
+│      │            (PeerCred│       (tokio::select! over          │
+│      │             Trace│           cancel | oom-watch |         │
+│      │             Audit│           child.wait)                   │
+│      │             ConcLim│                                       │
+│      │             Handlers)                                      │
+│      │                                                            │
+│      └─ broadcast::Receiver of mcpm_logs::Hub (for logs.tail)    │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+</code></pre>
+
+    <h3>What I explicitly will NOT do</h3>
+    <ul>
+      <li><strong>No bespoke async runtime.</strong> No glommio, no smol, no monoio. <code>rmcp</code> chose tokio; we choose tokio.</li>
+      <li><strong>No <code>actix</code>.</strong> Not idiomatic in this stack. Tower is idiomatic.</li>
+      <li><strong>No <code>tonic</code> / gRPC / protobuf.</strong> JSON-RPC 2.0 stays. <code>tokio_util::codec::LengthDelimitedCodec</code> for framing.</li>
+      <li><strong>No SQLite, no sled, no rocksdb in v1.0.</strong> Audit is JSONL on disk; supervisor state is in-memory + re-derived from config on startup. <a href="./agent-systems-veteran.html#design">systems-veteran disagrees</a>; this is one we'll relitigate at v2.</li>
+      <li><strong>No custom OOM kernel module.</strong> <a href="./agent-kernel-hacker.html#design">kernel-hacker proposes one</a>; for our scale it's overkill.</li>
+      <li><strong>No raw <code>fork/exec</code>.</strong> <code>tokio::process::Command</code> all the way.</li>
+    </ul>
+
+    <h3>Cross-references to other facets</h3>
+    <p>
+      The wire-format discussion belongs in the <a href="../security/overview.html">security facet</a> (peer-cred + framing) and the <a href="../ux/overview.html">UX facet</a> (latency budget). The projector's editor adapters are heavily UX-dependent — see the <a href="../frontend/overview.html">frontend facet</a> for the TUI-side error rendering when a managed-block write conflicts with a hand-edited section. DevOps owns the daily rotation + JSONL retention policies (<a href="../devops/overview.html">devops facet</a>).
+    </p>
+
+    <h3>Summary in one sentence</h3>
+    <p>
+      Use the runtime <code>rmcp</code> chose, layer <code>tower</code> middleware over a sans-I/O <code>mcpm-protocol</code>, structure the supervisor as a <code>JoinSet</code> driven by a <code>CancellationToken</code> tree, and let <code>tracing</code> + <code>broadcast</code> + <code>thiserror</code> earn their keep across every crate.
+    </p>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+    <ol>
+      <li id="cite-rmcp">[1] rmcp — Official Rust SDK for MCP — <a href="https://github.com/modelcontextprotocol/rust-sdk">https://github.com/modelcontextprotocol/rust-sdk</a></li>
+      <li id="cite-axum">[2] axum — ergonomic web framework built on tower — <a href="https://docs.rs/axum/latest/axum/">https://docs.rs/axum/latest/axum/</a></li>
+      <li id="cite-tonic">[3] tonic — gRPC-over-HTTP/2 built on tower — <a href="https://docs.rs/tonic/latest/tonic/">https://docs.rs/tonic/latest/tonic/</a></li>
+      <li id="cite-tokio-process">[4] <code>tokio::process</code> docs — <a href="https://docs.rs/tokio/latest/tokio/process/index.html">https://docs.rs/tokio/latest/tokio/process/index.html</a></li>
+      <li id="cite-tokio-signal">[5] <code>tokio::signal::unix</code> — <a href="https://docs.rs/tokio/latest/tokio/signal/unix/index.html">https://docs.rs/tokio/latest/tokio/signal/unix/index.html</a></li>
+      <li id="cite-tracing">[6] tracing — application-level structured diagnostics — <a href="https://docs.rs/tracing/latest/tracing/">https://docs.rs/tracing/latest/tracing/</a></li>
+      <li id="cite-tokio-sync">[7] <code>tokio::sync::broadcast</code> — <a href="https://docs.rs/tokio/latest/tokio/sync/broadcast/index.html">https://docs.rs/tokio/latest/tokio/sync/broadcast/index.html</a></li>
+      <li id="cite-tokio-util">[8] <code>tokio_util::sync::CancellationToken</code> — <a href="https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html">https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html</a></li>
+      <li id="cite-thiserror">[9] <code>thiserror</code> — derive macro for std::error::Error — <a href="https://docs.rs/thiserror/latest/thiserror/">https://docs.rs/thiserror/latest/thiserror/</a></li>
+      <li id="cite-tokio-time">[10] <code>tokio::time::pause</code> + virtual-time testing — <a href="https://docs.rs/tokio/latest/tokio/time/fn.pause.html">https://docs.rs/tokio/latest/tokio/time/fn.pause.html</a></li>
+      <li id="cite-serde">[11] serde forward-compat patterns — <a href="https://serde.rs/field-attrs.html">https://serde.rs/field-attrs.html</a></li>
+      <li id="cite-cgroups-rs">[12] cgroups-rs — Rust crate for cgroupv1/v2 — <a href="https://docs.rs/cgroups-rs/latest/cgroups_rs/">https://docs.rs/cgroups-rs/latest/cgroups_rs/</a></li>
+      <li id="cite-tower">[13] tower — async middleware abstractions — <a href="https://docs.rs/tower/latest/tower/">https://docs.rs/tower/latest/tower/</a></li>
+      <li id="cite-tokio-codec">[14] <code>tokio_util::codec::LengthDelimitedCodec</code> — <a href="https://docs.rs/tokio-util/latest/tokio_util/codec/length_delimited/index.html">https://docs.rs/tokio-util/latest/tokio_util/codec/length_delimited/index.html</a></li>
+      <li id="cite-tracing-appender">[15] <code>tracing-appender</code> daily-rotated file appender — <a href="https://docs.rs/tracing-appender/latest/tracing_appender/">https://docs.rs/tracing-appender/latest/tracing_appender/</a></li>
+      <li id="cite-cgroupv2-memory">[16] Linux kernel cgroup-v2 memory controller — <a href="https://docs.kernel.org/admin-guide/cgroup-v2.html#memory">https://docs.kernel.org/admin-guide/cgroup-v2.html#memory</a></li>
+      <li id="cite-jsonrpsee">[17] jsonrpsee — Rust JSON-RPC 2.0 framework — <a href="https://docs.rs/jsonrpsee/latest/jsonrpsee/">https://docs.rs/jsonrpsee/latest/jsonrpsee/</a></li>
+      <li id="cite-keyring">[18] keyring-rs — cross-platform secret store — <a href="https://docs.rs/keyring/latest/keyring/">https://docs.rs/keyring/latest/keyring/</a></li>
+      <li id="cite-secrecy">[19] secrecy — wrapper types for sensitive data — <a href="https://docs.rs/secrecy/latest/secrecy/">https://docs.rs/secrecy/latest/secrecy/</a></li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

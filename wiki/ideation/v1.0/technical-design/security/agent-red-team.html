@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Red Team — Security deep dive — MCP Manager v1.0</title>
+<link rel="stylesheet" href="../../assets/styles.css">
+<script type="module" src="../../assets/core.js"></script>
+</head>
+<body>
+<header class="page-header">
+  <div class="container">
+    <div class="brand">MCP Manager <span class="codename">security · red-team</span></div>
+    <div class="crumbs"><a href="../index.html">← deep dive</a> · <a href="./overview.html">security overview</a></div>
+    <button class="theme-toggle" data-theme-toggle type="button">● Auto</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1>The Red Team's Security</h1>
+  <p class="lede">
+    Default-deny everywhere. The malicious MCP in a freshly-cloned project is not a hypothetical — it is the
+    median case once this tool ships. The user who installed <code>github-mcp</code> from a typo-squatted registry,
+    then opened a colleague's repo with a hostile <code>.mcp-manager.toml</code>, should still finish the day with
+    <code>~/.ssh/id_rsa</code> intact, <code>~/.aws/credentials</code> intact, no out-bound exfiltration, and a
+    tamper-evident audit trail showing exactly what was attempted. Anything less is a CVE waiting for a Mastodon post.
+  </p>
+
+  <p>
+    <span class="evidence-badge">STRIDE</span>
+    <span class="evidence-badge">default-deny</span>
+    <span class="evidence-badge">capability scoping</span>
+    <span class="evidence-badge">attack trees</span>
+    <span class="evidence-badge">THREAT_MODEL.md</span>
+  </p>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ul>
+      <li><a href="#thoughts">Thoughts</a></li>
+      <li><a href="#arguments">Arguments</a>
+        <ul>
+          <li><a href="#vs-crypto-pedant">vs. crypto-pedant</a></li>
+          <li><a href="#vs-sandboxing-veteran">vs. sandboxing-veteran</a></li>
+          <li><a href="#vs-secrets-architect">vs. secrets-architect</a></li>
+          <li><a href="#vs-audit-compliance">vs. audit-compliance</a></li>
+        </ul>
+      </li>
+      <li><a href="#design">Design</a>
+        <ul>
+          <li><a href="#threat-model-outline">THREAT_MODEL.md outline</a></li>
+          <li><a href="#attack-trees">Attack trees (ASCII)</a></li>
+          <li><a href="#default-deny">Default-deny network &amp; FS specs</a></li>
+          <li><a href="#trust-gate">Trust-gate failure modes</a></li>
+          <li><a href="#worst10">10 worst-case scenarios → mitigations</a></li>
+        </ul>
+      </li>
+      <li><a href="#citations">Citations</a></li>
+    </ul>
+  </nav>
+
+  <section class="section" id="thoughts">
+    <h2>Thoughts</h2>
+
+    <h3>What v1.0 actually ships, threat-model-wise</h3>
+    <p>
+      A daemon that runs as the user, that can read every file the user can read, that can spawn arbitrary
+      third-party code (MCP servers) which themselves request access to LLMs, local filesystems, shell, and
+      sometimes network endpoints. That daemon mediates secrets out of the OS keychain and injects them into
+      child processes as environment variables. The threat surface is not "is mcpmanagerd itself exploitable?"
+      — that's the easy half. The hard half is: <em>the MCPs are the attacker</em>. Treat them as a hostile
+      contractor's binary, because they are.
+    </p>
+
+    <p>
+      The v1.0 spec gets a lot right — TUF-lite registry signing, direnv-style project trust gates,
+      <code>SO_PEERCRED</code> on the UDS, secrets only via env at spawn, no plaintext on disk outside the
+      keychain. But the spec under-specifies the <em>defaults</em> that decide whether this product is
+      "secure if you read the docs" or "secure if you do nothing." Those are different products.
+      The latter is the only one worth shipping.
+    </p>
+
+    <h3>The bit nobody likes to say out loud</h3>
+    <p>
+      The MCP ecosystem in 2025–2026 looks like the npm ecosystem in 2014: trivially easy to publish, no
+      meaningful identity, install commands that pipe into your shell. The recent CVE-2025-6514 in the
+      <code>mcp-remote</code> proxy
+      <a class="citation-ref" href="#cite-cve-2025-6514">[1]</a> — a remote-code-execution bug triggered by
+      simply connecting to an untrusted MCP server — is not an outlier. It is the median case of a fast-moving
+      ecosystem where security has been an afterthought<a class="citation-ref" href="#cite-jfrog-mcp-supply">[2]</a>.
+      We are downstream of all of that. Our threat model has to assume the package we just installed is hostile,
+      not friendly-and-buggy. <strong>Friendly-and-buggy is a special case of hostile that happens not to have
+      noticed yet.</strong>
+    </p>
+
+    <h3>The three doors we have to lock</h3>
+    <ol>
+      <li>
+        <strong>Inbound supply chain.</strong> Where do MCP packages come from, who signed them, what does
+        "verified" mean operationally, and what happens when a maintainer's signing key is compromised? TUF-lite
+        + minisign covers this if we get rotation right<a class="citation-ref" href="#cite-tuf-spec">[3]</a>.
+        If we don't get rotation right, we have crypto-theatre.
+      </li>
+      <li>
+        <strong>Project-config trust.</strong> A user clones a repo. The repo contains
+        <code>.mcp-manager.toml</code> listing 14 MCPs and 6 registries. <em>Right now,</em> on the v1.0 design,
+        what does mcpmanagerd do? The direnv pattern<a class="citation-ref" href="#cite-direnv-allow">[4]</a>
+        is the correct answer — <strong>refuse to load anything until the user explicitly trusts a sha256 of the
+        file</strong> — and I want to make sure it stays the correct answer when a UX person argues "this is
+        annoying, can we autoload on `cd`?". No. The answer is no.
+      </li>
+      <li>
+        <strong>Run-time isolation.</strong> The MCP is running. It is now <em>the attacker</em>. Can it read
+        <code>~/.ssh/id_rsa</code>? Can it open a socket to <code>evil.example.com</code> and exfiltrate? Can it
+        read <em>another</em> MCP's secret? Can it write to <code>~/.bashrc</code>? Every one of these answers
+        must be "no by default; yes only when the user has opted in per-server, per-capability."
+      </li>
+    </ol>
+
+    <h3>The threat-model document is the deliverable</h3>
+    <p>
+      We need <code>docs/security/THREAT_MODEL.md</code> as a first-class shipped artifact, not a wiki page that
+      drifts. STRIDE per component<a class="citation-ref" href="#cite-stride-msft">[5]</a>, an
+      attack tree per asset<a class="citation-ref" href="#cite-shostack-threat-modeling">[6]</a>, and a
+      mapping of every mitigation to a CI-enforced test. If we cannot test the mitigation, the mitigation is
+      aspirational and should be labeled as such. The OWASP threat-modeling guidance<a class="citation-ref"
+      href="#cite-owasp-threat-modeling">[7]</a> is the discipline we adopt. Shostack's "four-question framework"
+      — <em>what are we working on, what can go wrong, what are we going to do about it, did we do a good job?</em>
+      — is how we structure the doc<a class="citation-ref" href="#cite-shostack-4q">[8]</a>.
+    </p>
+
+    <h3>What I keep finding myself arguing for</h3>
+    <ul>
+      <li><strong>Isolation is on by default.</strong> The <code>isolation = "none"</code> config exists only as
+        an escape hatch with a <em>three-line</em> warning banner every time it's used.</li>
+      <li><strong>Network egress is off by default.</strong> Per-server allowlist of domains, denied unless
+        the user opted in. The MCP that "just needs to call OpenAI" gets <code>api.openai.com</code>, not
+        <code>*</code>.</li>
+      <li><strong>Filesystem is scoped by default.</strong> The MCP sees its own
+        <code>$XDG_DATA_HOME/mcpm/servers/&lt;name&gt;/</code> and a user-configured allowlist of paths. Not
+        <code>$HOME</code>. <em>Never</em> <code>$HOME</code> by default.</li>
+      <li><strong>Project configs are untrusted until pinned.</strong> direnv's mental model
+        transplanted to <code>mcpmanagerd</code>.</li>
+      <li><strong>Secrets are scoped per-server.</strong> The github MCP gets <code>GITHUB_TOKEN</code>. It does
+        not get <code>AWS_SECRET_ACCESS_KEY</code>, even if both exist in the keychain.</li>
+    </ul>
+  </section>
+
+  <section class="section" id="arguments">
+    <h2>Arguments</h2>
+
+    <h3 id="vs-crypto-pedant">vs. crypto-pedant</h3>
+    <p>
+      crypto-pedant will argue that TUF-lite, as the v1.0 spec describes it, is under-specified in exactly the
+      places where it matters most: <em>root-key rotation</em>, <em>threshold signing</em>, and
+      <em>delegations</em>. I largely agree with their position on the cryptographic primitives — minisign for
+      offline-signed indexes is fine<a class="citation-ref" href="#cite-minisign">[9]</a>, cosign for OCI is
+      fine<a class="citation-ref" href="#cite-sigstore-cosign">[10]</a> — but my push is about the
+      <em>operational</em> layer they tend to under-cost. Specifically:
+    </p>
+    <ol>
+      <li>
+        <strong>A baked-in pubkey is a single point of failure.</strong> If our signing key leaks (laptop loss,
+        CI compromise, supply-chain incident inside Anthropic-the-org or the maintainer team), every installed
+        copy of mcpmanagerd is permanently keyed to the wrong root until the user re-runs the installer. We
+        need a <em>second</em> baked-in revocation pubkey whose only job is to publish a "this root is dead,
+        here is the new one" message that mcpmanagerd will accept out-of-band. crypto-pedant will say "this is
+        what TUF root-key rotation already specifies" — and they are right, and we still need to make sure the
+        v1.0 implementation actually <em>ships</em> it, not just refers to the spec.
+      </li>
+      <li>
+        <strong>Per-package signatures must not be trusted if the signing key has been revoked.</strong> The v1.0
+        spec says "registry index signatures verified before parse; verify-when-present on underlying packages."
+        Verify-when-present is dangerous unless we publish a list of packages where present-is-required. A
+        malicious package without a signature is indistinguishable from a benign one published before the
+        registry required signing. So: per-source policy, defaulting to required-signed for all three baked-in
+        registries.
+      </li>
+      <li>
+        <strong>Cosign verification of OCI MCP images must check
+        <code>sigstore-bundle</code></strong>, including Rekor inclusion proof
+        <a class="citation-ref" href="#cite-sigstore-rekor">[11]</a>. Cosign's bare "valid signature" check is
+        insufficient — Rekor is what gives us non-repudiation. crypto-pedant won't argue this; I'm flagging it
+        because I want it called out in the threat model rather than handwaved.
+      </li>
+    </ol>
+    <p>
+      Where I genuinely diverge from crypto-pedant: I will not lose sleep over post-quantum agility in v1.0. The
+      threat model says "user's laptop in 2026"; the attacker is not a nation-state with a CRQC. Ed25519 is
+      fine. Ship.
+    </p>
+
+    <h3 id="vs-sandboxing-veteran">vs. sandboxing-veteran</h3>
+    <p>
+      sandboxing-veteran will spend their essay on the gradient between bubblewrap, firejail, and
+      <code>sandbox-exec</code>, and on the strengths/weaknesses of each profile. I am with them on every
+      technical detail. My push is about <em>defaults</em>, which sandboxing-veteran can sometimes treat as a
+      policy debate rather than a technical one. It is technical: <strong>the default profile decides whether
+      the mass-market user is safe.</strong>
+    </p>
+    <p>
+      Three places I will push:
+    </p>
+    <ol>
+      <li>
+        <strong><code>isolation = "none"</code> must not be a silent option.</strong> The v1.0 spec includes
+        <code>"none"</code> in the enum without saying when it's chosen or what UX guards it. I want:
+        <em>(a)</em> every <code>mcpm install</code> that resolves to <code>isolation = "none"</code> emits a
+        block-bordered warning in the CLI listing what protection is being skipped;
+        <em>(b)</em> the audit log records <code>isolation.disabled { server, requested_by, reason }</code> on
+        every spawn; <em>(c)</em> the TUI shows the lack of sandbox in red, not just a different label.
+      </li>
+      <li>
+        <strong>The default <code>devenv</code> profile is too permissive if it inherits the user's
+        <code>$HOME</code>.</strong> sandboxing-veteran's bubblewrap configuration must bind-mount
+        <code>$HOME/.ssh</code>, <code>$HOME/.aws</code>, <code>$HOME/.config/gh</code>,
+        <code>$HOME/.gnupg</code>, <code>$HOME/.netrc</code>,
+        <code>$HOME/.password-store</code>, and the macOS Keychain
+        sqlite files at <code>$HOME/Library/Keychains</code> as <em>denied</em>. This is the bog-standard
+        sandbox profile the Flatpak community has been refining for years
+        <a class="citation-ref" href="#cite-flatpak-portals">[12]</a>; we don't have to reinvent it.
+      </li>
+      <li>
+        <strong>macOS <code>sandbox-exec</code> is deprecated but works.</strong> sandboxing-veteran will note
+        this; I want to make sure the threat model documents the contingency (Docker fallback on a future macOS
+        that removes <code>sandbox-exec</code>) <em>and</em> that the project ships a test that the profile
+        actually blocks the things we claim it blocks. Apple's own profiles are written in SBPL S-expressions,
+        and the iSEC Partners audit
+        <a class="citation-ref" href="#cite-isec-sandbox-exec">[13]</a> documents how easy it is to write a
+        profile that <em>looks</em> restrictive but isn't.
+      </li>
+    </ol>
+
+    <h3 id="vs-secrets-architect">vs. secrets-architect</h3>
+    <p>
+      secrets-architect will go deep on the keyring crate's quirks (libsecret prompt on Linux,
+      <code>org.freedesktop.secrets</code> portal differences across GNOME/KDE/headless servers,
+      <code>SecItemCopyMatching</code> ACL behaviour on macOS, the layered store ordering rules). I'm with them
+      on all of it. My push is about <strong>worst-case access semantics</strong>:
+    </p>
+    <ol>
+      <li>
+        <strong>Per-server keychain scoping is non-optional for v1.0.</strong> The v1.0 schema currently allows a
+        secret named <code>GITHUB_TOKEN</code> at the global scope, injected into any server that declares
+        <code>secrets = ["GITHUB_TOKEN"]</code>. That is a giant footgun: the malicious
+        <code>random-tool-mcp</code> can declare <code>secrets = ["GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY",
+        "SLACK_WEBHOOK_URL", …]</code> and mcpmanagerd will happily hand them over. The fix is: secrets are
+        owned by a server at write time (<code>mcpm secret set --server github GITHUB_TOKEN</code>), and the
+        keychain account is <code>dev.mcp-manager/&lt;server&gt;/&lt;name&gt;</code>. A server can <em>only</em>
+        request secrets in its own namespace; cross-server secret injection requires an explicit
+        <code>secrets_from = ["other-server.NAME"]</code> directive that the user types by hand.
+      </li>
+      <li>
+        <strong>The env-var passthrough store is a knife.</strong> The v1.0 spec includes
+        <code>EnvVarPassthroughStore</code> as a read-only escape hatch. I want it default-off, opt-in per
+        deployment via <code>--enable-env-passthrough</code> at daemon launch, and audit-logged on every read.
+        Without that, the daemon happily reads <code>GITHUB_TOKEN</code> out of its own environment and injects
+        it into <em>any</em> server that asks for it by name, defeating the per-server scoping above.
+      </li>
+      <li>
+        <strong>Secrets at rest must respect Mozilla SOPS-style key-management hygiene</strong> for any v1.1+
+        external store (Vault, 1Password). The SOPS threat model is the right reference
+        <a class="citation-ref" href="#cite-mozilla-sops">[14]</a>: encrypted-at-rest, key access logged,
+        rotation supported, and the encryption key is not the same as the decryption key for audit
+        purposes.
+      </li>
+    </ol>
+
+    <h3 id="vs-audit-compliance">vs. audit-compliance</h3>
+    <p>
+      audit-compliance will argue (correctly) that the v1.0 audit log is a JSONL file with daily rotation, and
+      that this does not satisfy any tamper-evidence property — an attacker with write access to
+      <code>$XDG_STATE_HOME/mcpmanagerd/audit/</code> can simply edit it. I agree. My push is on
+      <em>the cheap mitigations</em> we can ship in v1.0 without overengineering:
+    </p>
+    <ol>
+      <li>
+        <strong>Hash chain per file.</strong> Every line carries
+        <code>"prev_hash": "&lt;sha256-of-line-before&gt;"</code>. The first line in a file is sealed against
+        the file name (date-stamp). Cheap, defeats casual tampering, doesn't require crypto-pedant-grade
+        anchoring. The systemd journal's FSS (Forward-Secure Sealing) feature
+        <a class="citation-ref" href="#cite-systemd-fss">[15]</a> is the reference design — we don't have to be
+        as fancy, but the hash-chain idea is the same.
+      </li>
+      <li>
+        <strong>fsync on every <code>auth.failed</code> and <code>secret.read</code> line.</strong> Batched
+        otherwise. We accept the 5-10ms cost on security-critical events to make sure they hit disk before the
+        attacker can clean up.
+      </li>
+      <li>
+        <strong>Ship the audit-log replay tool with the daemon.</strong> <code>mcpm audit replay --verify</code>
+        re-walks the hash chain and reports the first broken link. This is a one-evening implementation that
+        moves us from "we have audit logs" to "we have audit logs with verifiable integrity."
+      </li>
+    </ol>
+    <p>
+      Where I disagree with audit-compliance: I don't want to ship an OpenTelemetry exporter in v1.0. The MCP
+      Manager threat model is a single-user laptop tool. Centralised audit aggregation is a v1.1+ concern when
+      teams want it. Don't pay for what we don't need.
+    </p>
+  </section>
+
+  <section class="section" id="design">
+    <h2>Design</h2>
+
+    <h3 id="threat-model-outline">THREAT_MODEL.md outline</h3>
+
+    <p>
+      The document ships in <code>docs/security/THREAT_MODEL.md</code> with the structure below. Every section
+      ends with a "tested by" line pointing at a specific CI job or integration test; no untested mitigations.
+    </p>
+
+    <pre><code># MCP Manager — Threat Model (v1.0)
+
+## 1. What are we working on?
+- 1.1 System diagram (copy from technical-design.html)
+- 1.2 Trust boundaries (kernel|user|daemon|child-MCP|registry|project-config)
+- 1.3 Data classification
+      - secrets (HIGH; OS keychain)
+      - audit log (HIGH-integrity, LOW-confidentiality)
+      - canonical config (MEDIUM; user-readable)
+      - lockfile (LOW; integrity-only)
+      - registry indexes (LOW; integrity via signature)
+
+## 2. What can go wrong? (STRIDE per component)
+- 2.1 mcpmanagerd daemon process
+- 2.2 mcpm CLI / TUI
+- 2.3 Child MCP server process
+- 2.4 OS keychain backend
+- 2.5 UDS / IPC layer
+- 2.6 Registry indexes & packages
+- 2.7 Project config (.mcp-manager.toml)
+- 2.8 Audit log
+- 2.9 Service-manager integration (launchd / systemd-user)
+- 2.10 Installer (curl | sh)
+
+## 3. What are we going to do about it? (Mitigations)
+- 3.1 Trust model end-to-end
+- 3.2 Sandbox / isolation defaults
+- 3.3 Network egress controls
+- 3.4 Filesystem scoping
+- 3.5 Secrets scoping & access
+- 3.6 IPC authentication
+- 3.7 Audit log integrity
+- 3.8 Supply-chain pinning
+- 3.9 Code signing (binary distribution)
+
+## 4. Did we do a good job? (Verification)
+- 4.1 Per-mitigation test mapping (table)
+- 4.2 Red-team exercise checklist (run before every minor release)
+- 4.3 Known limitations & accepted risks
+- 4.4 Reporting & disclosure (security@mcp-manager.dev, GPG key, response SLO)
+
+## Appendix A — Attack trees (per asset)
+## Appendix B — STRIDE matrix (per component)
+## Appendix C — CVE precedents (CVE-2025-6514, npm event-stream, etc.)</code></pre>
+
+    <p>
+      Section 4.1 — the mitigation-to-test mapping — is the part that keeps this document honest. A sample row:
+    </p>
+
+    <pre><code>| Mitigation                          | Implementation         | Test                       |
+|-------------------------------------|------------------------|----------------------------|
+| Project config untrusted by default | mcpm-trust::is_trusted | tests/e2e/trust_gate.rs    |
+| FS scoping blocks ~/.ssh            | devenv profile + bwrap | tests/e2e/sandbox_ssh.rs   |
+| Per-server secret namespacing       | OsKeyringStore account | tests/e2e/secret_cross.rs  |
+| SO_PEERCRED rejects other UID       | daemon::accept_filter  | tests/e2e/peercred.rs      |
+| Hash-chain on audit log             | mcpm-logs::audit_sink  | tests/e2e/audit_tamper.rs  |
+| Egress denied without allowlist     | bwrap netns + nft      | tests/e2e/egress_block.rs  |</code></pre>
+
+    <h3 id="attack-trees">Attack trees (ASCII)</h3>
+
+    <p>
+      Three asset-rooted trees, written in the
+      Shostack notation<a class="citation-ref" href="#cite-shostack-threat-modeling">[6]</a>. Each leaf is an
+      atomic attacker action; each interior node is an AND/OR composition. M: mitigation reference.
+    </p>
+
+    <h4>Tree 1 — Asset: <code>~/.ssh/id_rsa</code> exfiltrated to attacker-controlled endpoint</h4>
+
+    <pre><code>GOAL: attacker reads $HOME/.ssh/id_rsa
+└── OR
+    ├── Malicious MCP package reads file directly
+    │   └── AND
+    │       ├── Package installed
+    │       │   └── OR
+    │       │       ├── User installs from typo-squat                          (M: registry sig + name-claim)
+    │       │       ├── User installs from compromised registry                (M: TUF root + rotation)
+    │       │       └── Untrusted project config auto-installs                 (M: direnv-style trust gate)
+    │       ├── Process can read the file                                      (M: sandbox FS deny-list)
+    │       │   └── AND
+    │       │       ├── Sandbox bypassed or not running
+    │       │       │   ├── isolation = "none" (warn UX)                       (M: red banner + audit)
+    │       │       │   ├── devenv profile mis-scoped                          (M: golden-test profile)
+    │       │       │   └── bubblewrap kernel bug                              (M: cap-net-admin drop)
+    │       │       └── File present at expected path                          (M: not in our control)
+    │       └── Egress channel open
+    │           ├── DNS exfil                                                  (M: netns deny + dnsmasq)
+    │           ├── Direct TCP                                                 (M: netns deny by default)
+    │           └── Side-channel via stdout to host                            (M: stdout filter on secret-shaped strings — best-effort)
+    │
+    ├── Compromised registry pubkey signs malicious package update
+    │   └── AND
+    │       ├── Private key leaks                                              (M: HSM-back; rotate; revoke list)
+    │       ├── User auto-updates                                              (M: --accept-breaking off by default)
+    │       └── Sandbox not deny-listing ~/.ssh                                (M: see above)
+    │
+    └── mcpmanagerd itself reads file (insider / RCE)
+        ├── RCE in JSON-RPC parser                                             (M: serde + fuzz; no eval)
+        ├── Path-traversal in projection writer                                (M: canonicalise; assert prefix)
+        └── Symlink attack on canonical config                                 (M: open(NOFOLLOW); fsstat)</code></pre>
+
+    <h4>Tree 2 — Asset: cross-server secret leak (github-mcp reads aws-mcp's token)</h4>
+
+    <pre><code>GOAL: server A reads server B's secret
+└── OR
+    ├── A declares secrets = ["B.AWS_TOKEN"] and daemon honours it           (M: per-server namespace; cross requires `secrets_from`)
+    ├── A reads env of B's process via /proc/PID/environ                    (M: bwrap --new-session; PID-namespace where available)
+    ├── A reads B's stdout/stderr from shared log                           (M: per-server ring buffer; no cross-tail without explicit flag)
+    ├── A reads OS keychain directly                                        (M: macOS ACL bind to mcpmanagerd binary signature; libsecret per-app collection)
+    ├── A reads B's secret via UDS to mcpmanagerd                           (M: SO_PEERCRED — but A and B share UID; needs server-id token)
+    │                                                                         IMPORTANT: SO_PEERCRED is insufficient here; need per-spawn nonce
+    └── A reads B's secret out of a config file the user pasted into the prompt  (M: education + redaction in CLI; cannot fully mitigate)</code></pre>
+
+    <p>
+      The fifth leaf — "A reads B's secret via UDS to mcpmanagerd, because A and B share UID with the
+      <code>mcpm exec</code> wrapper" — is the one v1.0 has to address explicitly.
+      <strong><code>SO_PEERCRED</code> proves the caller is the user; it does not prove which server's wrapper
+      is calling.</strong> The mitigation is: when mcpmanagerd spawns server B, it generates a random
+      32-byte nonce, writes it into B's environment as <code>MCPM_INSTANCE_TOKEN</code>, and remembers the
+      mapping <code>token → server_name</code>. Subsequent secret-reads over UDS from a wrapper that doesn't
+      present a matching token are denied. This is cheap, layered defence-in-depth on top of
+      <code>SO_PEERCRED</code>.
+    </p>
+
+    <h4>Tree 3 — Asset: audit-log integrity (attacker erases evidence)</h4>
+
+    <pre><code>GOAL: attacker deletes or modifies entries in audit/YYYY-MM-DD.jsonl
+└── OR
+    ├── Attacker has shell as the user (post-exploit MCP escape)
+    │   ├── rm of audit file                                                (M: hash chain detects gap; mcpm audit replay)
+    │   ├── edit in place                                                   (M: prev_hash mismatch on next entry)
+    │   ├── truncate                                                        (M: file-name → first-line seal mismatch)
+    │   └── append fake "ok" entry                                          (M: cannot recompute chain without prior valid hash)
+    ├── Attacker has root (out of scope; we accept this loss)
+    └── Race: daemon crashes mid-write
+        ├── Partial line                                                    (M: line-length prefix; recovery skips & flags)
+        └── Lost flush                                                      (M: fsync on auth.failed / secret.read)</code></pre>
+
+    <h3 id="default-deny">Default-deny network &amp; FS specs</h3>
+
+    <p>
+      Concrete profile that ships as the v1.0 default for any server with
+      <code>isolation = "devenv"</code> on Linux. macOS gets the equivalent SBPL profile.
+    </p>
+
+    <h4>Network egress — default profile</h4>
+
+    <pre><code>[server.&lt;name&gt;.network]
+mode = "deny"            # default. Other values: "allowlist" | "open"
+
+# When mode = "allowlist", these and only these are allowed:
+allowed_hosts = []       # e.g. ["api.openai.com", "api.anthropic.com"]
+allowed_ports = [443]    # default https only
+resolver      = "system" # or "dns-over-https://1.1.1.1"
+
+# When mode = "open" — emit a warning at every spawn:
+# WARNING: server &lt;name&gt; has unrestricted network access. Audit logs every connection.</code></pre>
+
+    <p>
+      Implementation: bubblewrap with <code>--unshare-net</code> by default. For allowlist mode, the server
+      runs in a network namespace with a single egress proxy (<code>mcpm-egress-proxy</code>, a tiny Rust
+      binary using <code>tokio::net::TcpStream</code>) that the daemon spawns alongside, accepts on a private
+      UDS inside the namespace, and only forwards to allowed hosts. The proxy resolves names itself, never
+      trusts the child's DNS<a class="citation-ref" href="#cite-flatpak-portals">[12]</a>. On macOS,
+      <code>sandbox-exec</code> with <code>(deny network*)</code> as the base and <code>(allow network*
+      (remote ip "..."))</code> patches.
+    </p>
+
+    <h4>Filesystem scoping — default profile</h4>
+
+    <pre><code>[server.&lt;name&gt;.fs]
+mode = "scoped"          # default. Other values: "open" (with warning)
+
+# Always allowed (read+write):
+#   $XDG_DATA_HOME/mcpm/servers/&lt;name&gt;/    — per-server data dir
+#   /tmp/mcpm-&lt;name&gt;-XXXXXX/                — per-spawn scratch (tmpfs, deleted on exit)
+# Always allowed (read-only):
+#   /usr, /bin, /lib, /etc/ssl/certs, /etc/resolv.conf (proxied)
+#   /nix/store (read-only, only if isolation = devenv)
+# Always denied:
+#   $HOME/.ssh
+#   $HOME/.aws
+#   $HOME/.config/gh
+#   $HOME/.gnupg
+#   $HOME/.netrc
+#   $HOME/.password-store
+#   $HOME/Library/Keychains              (macOS)
+#   $HOME/.docker/config.json
+#   $HOME/.kube
+#   $HOME/.config/mcp-manager            — our own config is opaque to children
+
+allowed_read  = []       # extra read-only paths the user grants
+allowed_write = []       # extra writable paths the user grants</code></pre>
+
+    <p>
+      The <code>allowed_read</code> / <code>allowed_write</code> entries appear in the CLI install transcript
+      as explicit prompts: "this server requests read access to <code>~/Documents/notes/</code>; allow?"
+      Default no. Each grant is audit-logged.
+    </p>
+
+    <h3 id="trust-gate">Trust-gate failure modes</h3>
+
+    <p>
+      The direnv-style project-trust gate has six failure modes I want to enumerate explicitly so the
+      implementation can target each one with a test. The current v1.0 spec mentions the trust gate but
+      doesn't enumerate.
+    </p>
+
+    <ol>
+      <li>
+        <strong>Fresh clone — no entry in <code>trust.toml</code>.</strong>
+        Behaviour: daemon refuses to apply project scope. CLI shows
+        <code>warning: untrusted .mcp-manager.toml. Run `mcpm trust grant`.</code> User must run an explicit
+        command; no auto-trust, no "press y to accept." (direnv's lesson<a class="citation-ref"
+        href="#cite-direnv-allow">[4]</a>.)
+      </li>
+      <li>
+        <strong>Trusted previously, file modified.</strong>
+        Hash mismatch. Daemon refuses to apply project scope; CLI shows a diff vs. the previously-trusted
+        version and asks the user to <code>mcpm trust grant</code> again. The diff is computed by the daemon
+        and rendered by the CLI so the user can see what changed.
+      </li>
+      <li>
+        <strong>Trusted file, path moved.</strong>
+        Trust is keyed by <code>sha256(absolute-path)</code> + <code>sha256(file content)</code>. Moving the
+        repo to a different path invalidates the trust grant. This is correct: a different path is a different
+        context.
+      </li>
+      <li>
+        <strong>Trust file (trust.toml) itself corrupted or replaced.</strong>
+        On daemon start, <code>trust.toml</code> is loaded with <code>O_NOFOLLOW</code> and its sha256 is
+        compared against <code>$XDG_STATE_HOME/mcpmanagerd/trust.toml.hash</code>. Mismatch → daemon enters
+        "trust-degraded" mode: no project configs apply, only user-scope config; audit-log <code>trust.tampered</code>.
+        User must run <code>mcpm trust reinit</code> to re-baseline.
+      </li>
+      <li>
+        <strong>Project config requests an unsigned registry.</strong>
+        Refused. Even with trust granted, project configs cannot add registries whose pubkey isn't already
+        trusted by the user at user-scope. Project scope can <em>use</em> registries the user trusts; it cannot
+        <em>add</em> new ones. This is a hard line.
+      </li>
+      <li>
+        <strong>Project config requests <code>isolation = "none"</code>.</strong>
+        Refused, period. <code>isolation = "none"</code> is user-scope only — a project cannot ask the user to
+        run code unsandboxed. If the project author needs that, they put a note in their README; the user opts
+        in by setting <code>isolation = "none"</code> in user-scope config for that specific server.
+      </li>
+    </ol>
+
+    <h3 id="worst10">10 worst-case scenarios → mitigations</h3>
+
+    <table class="compare">
+      <thead><tr><th>#</th><th>Scenario</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>User installs typo-squatted <code>github-mc</code> (missing p) from the official registry. Malicious code runs at first spawn.</td>
+          <td>Registry index includes a name-claim record (similar to npm's package-namespace policy<a class="citation-ref" href="#cite-npm-tea">[16]</a>); the official registry refuses to publish names within edit-distance 1 of popular names without a manual review. Sandbox limits damage even if installed: no SSH key access, no egress.</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>User clones <code>contractor/data-pipeline.git</code> which ships a hostile <code>.mcp-manager.toml</code> declaring 5 MCPs and a private registry.</td>
+          <td>Trust gate refuses to load. User sees CLI warning. User reads the file (it's TOML, plain text). User chooses to trust or not. Even if trusted, malicious MCPs run under default-deny sandbox.</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>Malicious MCP, post-install, attempts to read <code>~/.ssh/id_rsa</code>.</td>
+          <td>bubblewrap (<code>--unshare-all --bind …</code>) / sandbox-exec deny. <code>open(2)</code> returns <code>EACCES</code>. Server's tool call fails. Audit log records the attempt as <code>server.fs.denied</code> at the seccomp / sandbox layer — if the platform supports such logging — else the deny is silent (acceptable).</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>Malicious MCP exfils data via DNS to attacker-controlled domain.</td>
+          <td>Network namespace with <code>--unshare-net</code> by default; no DNS resolver available. With allowlist mode, the egress proxy resolves names itself and only forwards to allowed hosts. DNS-over-TXT exfil to allowed hosts is still possible — accepted limitation, documented.</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>Malicious MCP <code>random-tool</code> declares <code>secrets = ["AWS_SECRET_ACCESS_KEY"]</code> and asks mcpmanagerd to inject it.</td>
+          <td>Per-server keychain namespacing. <code>random-tool</code> can only request secrets stored under <code>dev.mcp-manager/random-tool/</code>. Cross-server access requires explicit <code>secrets_from = ["aws.AWS_SECRET_ACCESS_KEY"]</code> in user-scope config (user-typed; project-scope cannot grant).</td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td>Attacker on shared multi-user system tries to talk to another user's mcpmanagerd.</td>
+          <td>UDS at <code>$XDG_RUNTIME_DIR</code> with mode 0600 — kernel refuses connect for another UID. <code>SO_PEERCRED</code> verified on every accept as defence-in-depth. <code>auth.failed</code> audit event.</td>
+        </tr>
+        <tr>
+          <td>7</td>
+          <td>Maintainer's offline minisign key for the official registry is compromised. Attacker publishes a malicious update.</td>
+          <td>Root-of-trust revocation publishes a new <code>trust.toml</code> at the well-known URL, signed by the (separate) revocation key, declaring the old key revoked. <code>mcpm trust refresh</code> picks it up. Until that happens, users on auto-update with <code>--accept-breaking</code> off are still pinned to known-good versions in their lockfile.</td>
+        </tr>
+        <tr>
+          <td>8</td>
+          <td>Malicious MCP package exploits a parser bug in mcpmanagerd's JSON-RPC handler and gains RCE in the daemon process.</td>
+          <td>serde-based parser (no <code>eval</code>, no string interpolation), fuzz-tested with <code>cargo-fuzz</code>. Daemon runs as user, not root, so RCE here is "one tier up from the sandboxed MCP" — bad but bounded. Daemon binary has stack protector + ASLR + RELRO from Rust's standard release profile. No <code>unsafe</code> in the JSON-RPC parser (lint-enforced).</td>
+        </tr>
+        <tr>
+          <td>9</td>
+          <td>Attacker with brief filesystem-write access (e.g. evil USB stick, opened a tar from untrusted source) writes a file at <code>~/.config/mcp-manager/config.toml</code> to register a malicious registry.</td>
+          <td>Daemon detects on-disk hash drift via <code>file_hash</code> tracking. Next <code>config.put</code> with stale prior-hash returns <code>E_CONFIG_CONFLICT</code>. New registry entries trigger an explicit "new registry detected; verify and run <code>mcpm registry verify &lt;name&gt;</code>" warning. Best we can do; this scenario requires existing filesystem-write access, which is already a deeper compromise.</td>
+        </tr>
+        <tr>
+          <td>10</td>
+          <td>Sandbox-bypass via a kernel bug in bubblewrap or namespaces (e.g. CVE-2023-XXXX-class).</td>
+          <td>Defence-in-depth: even if the sandbox is bypassed, secrets are still env-only at spawn (no on-disk plaintext), no network namespace means no egress, audit log records the spawn. Daemon does not run as root, so the bypass yields user-level access — what the attacker would have anyway if they were a normal user-level process. The asset value is then the secrets in the OS keychain, which require an unlock prompt on macOS / explicit collection unlock on Linux.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="ipc-auth">IPC authentication — bypass scenarios</h3>
+
+    <p>
+      <code>SO_PEERCRED</code> tells us the connecting process's UID/PID/GID; nothing more. Four bypass
+      scenarios I want documented:
+    </p>
+
+    <ol>
+      <li>
+        <strong>Same-UID server-to-daemon spoofing.</strong> Already covered — any code running as the user can
+        connect to the UDS. Mitigation is the per-spawn <code>MCPM_INSTANCE_TOKEN</code> nonce described in
+        Tree 2 above.
+      </li>
+      <li>
+        <strong>PID reuse on Linux.</strong> <code>SO_PEERCRED</code> returns the PID at connect time; if the
+        process exits and a new one takes the PID, the kernel reports the original PID for the lifetime of the
+        socket. Not a security issue (we want the original peer's UID, not the new PID's UID), but worth
+        noting<a class="citation-ref" href="#cite-linux-peercred">[17]</a>.
+      </li>
+      <li>
+        <strong>macOS <code>LOCAL_PEERPID</code> race.</strong> <code>LOCAL_PEERPID</code> can be stale across
+        process replacement (rare but documented). We rely on UID, not PID, for auth decisions.
+      </li>
+      <li>
+        <strong>Socket-file replacement.</strong> If an attacker can replace the daemon's socket file (race
+        between daemon-down and daemon-up), they can pose as the daemon. Mitigation: daemon creates the socket
+        via <code>bind</code> with O_EXCL semantics inside <code>$XDG_RUNTIME_DIR</code>, fails to start if the
+        file exists. The wrapper's auto-spawn logic uses <code>flock(2)</code> on a sibling lockfile
+        to serialise.
+      </li>
+    </ol>
+
+    <h3 id="first-launch">First-launch security prompts</h3>
+
+    <p>
+      Three prompts on first <code>mcpm init</code>:
+    </p>
+
+    <ol>
+      <li>
+        <strong>Trust the root manifest URL?</strong> Default yes; "no" puts the user into
+        <code>baked-in-fallback</code> mode permanently. URL is shown.
+      </li>
+      <li>
+        <strong>Enable Docker for the docker registry source?</strong> Default no. If yes, daemon shells out
+        to <code>docker info</code> to verify available, and remembers consent in
+        <code>~/.config/mcp-manager/consent.toml</code>. If no, the docker registry source is disabled until
+        the user runs <code>mcpm registry enable docker</code>.
+      </li>
+      <li>
+        <strong>Allow env-var passthrough store?</strong> Default no. Yes only if the user knows what it does.
+        Audit-logged.
+      </li>
+    </ol>
+
+    <p>
+      No "trust this prompt" → "auto-trust all future prompts" toggle. Each consent decision is per-action,
+      following the OWASP guidance on consent dialogs<a class="citation-ref"
+      href="#cite-owasp-threat-modeling">[7]</a>.
+    </p>
+
+    <h3 id="binary-signing">Binary code signing &amp; supply-chain pinning</h3>
+
+    <ul>
+      <li>
+        <strong>macOS:</strong> Apple Developer ID signing + notarization. <code>spctl --assess</code> passes
+        on every release. Stapled ticket inside the tarball.
+      </li>
+      <li>
+        <strong>Linux:</strong> minisign-signed tarballs<a class="citation-ref" href="#cite-minisign">[9]</a>
+        with the pubkey baked into the curl installer script (which itself is fetched over HTTPS with
+        cert-pinning to GitHub Releases). Reproducible build via Nix flake; the <code>github:user/mcp-manager</code>
+        flake should produce the byte-identical binary as the official release.
+      </li>
+      <li>
+        <strong>Cargo.lock is committed.</strong> No floating versions. Dependabot or
+        <code>cargo-audit</code><a class="citation-ref" href="#cite-cargo-audit">[18]</a> runs in CI, blocks
+        merge on RUSTSEC advisories.
+      </li>
+      <li>
+        <strong>cargo-vet</strong><a class="citation-ref" href="#cite-cargo-vet">[19]</a> for the top-50
+        transitive deps. Each one needs a trust assertion from a vetted source (Mozilla, Bytecode Alliance,
+        Embark, or our own audit). Bound this scope tight — auditing every dep is impossible — but the deps in
+        <code>mcpm-secrets</code>, <code>mcpm-trust</code>, and the JSON-RPC parser must be in the audited
+        subset.
+      </li>
+      <li>
+        <strong>No <code>build.rs</code> network access.</strong> Lint-enforced via
+        <code>cargo-deny</code>. If a transitive dep adds a network-fetching build script, it's a blocker.
+      </li>
+    </ul>
+
+    <h3 id="caveats">Honest limitations &amp; accepted risks</h3>
+
+    <ul>
+      <li>
+        <strong>Side-channel exfil via stdout.</strong> An MCP can re-emit allowed-read file contents into the
+        host LLM's context. We cannot stop this without solving alignment. Scope the read paths; document.
+      </li>
+      <li>
+        <strong>Prompt injection in tool descriptions.</strong> Out of our threat model; the host is responsible.
+        Linked to upstream MCP-spec guidance<a class="citation-ref" href="#cite-mcp-spec-security">[20]</a>.
+      </li>
+      <li>
+        <strong>The user is root on their own machine.</strong> <code>isolation = "none"</code> is loud,
+        audited, never default. The user's right to shoot their own foot is respected.
+      </li>
+      <li>
+        <strong>OS keychain unlock is the user's responsibility.</strong> Idle-lock behaviour is OS-level;
+        we document recommended settings.
+      </li>
+    </ul>
+  </section>
+
+  <section class="section" id="citations">
+    <h2>Citations</h2>
+
+    <ol>
+      <li id="cite-cve-2025-6514">
+        NIST National Vulnerability Database. <em>CVE-2025-6514 — mcp-remote remote code execution via untrusted MCP server URL.</em>
+        <a href="https://nvd.nist.gov/vuln/detail/CVE-2025-6514">https://nvd.nist.gov/vuln/detail/CVE-2025-6514</a>.
+      </li>
+      <li id="cite-jfrog-mcp-supply">
+        JFrog Security Research. <em>MCP servers and the new supply-chain attack surface.</em>
+        <a href="https://jfrog.com/blog/mcp-servers-supply-chain-attack-surface/">https://jfrog.com/blog/mcp-servers-supply-chain-attack-surface/</a>.
+      </li>
+      <li id="cite-tuf-spec">
+        The Update Framework. <em>TUF Specification — root-key rotation &amp; threshold signing.</em>
+        <a href="https://theupdateframework.io/specification/latest/">https://theupdateframework.io/specification/latest/</a>.
+      </li>
+      <li id="cite-direnv-allow">
+        direnv. <em>direnv allow — explicit consent model for repo-local configuration.</em>
+        <a href="https://direnv.net/man/direnv.1.html">https://direnv.net/man/direnv.1.html</a>.
+      </li>
+      <li id="cite-stride-msft">
+        Microsoft Learn. <em>Threat modeling with STRIDE.</em>
+        <a href="https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats">https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats</a>.
+      </li>
+      <li id="cite-shostack-threat-modeling">
+        Shostack, A. <em>Threat Modeling: Designing for Security.</em> Wiley, 2014. ISBN 978-1118809990.
+        Companion: <a href="https://shostack.org/resources/threat-modeling">https://shostack.org/resources/threat-modeling</a>.
+      </li>
+      <li id="cite-owasp-threat-modeling">
+        OWASP Foundation. <em>Threat Modeling Cheat Sheet.</em>
+        <a href="https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html">https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html</a>.
+      </li>
+      <li id="cite-shostack-4q">
+        Shostack, A. <em>The Four-Question Framework for Threat Modeling.</em>
+        <a href="https://www.threatmodelingmanifesto.org/">https://www.threatmodelingmanifesto.org/</a>.
+      </li>
+      <li id="cite-minisign">
+        Denis, F. <em>minisign — a dead-simple tool to sign files and verify signatures.</em>
+        <a href="https://jedisct1.github.io/minisign/">https://jedisct1.github.io/minisign/</a>.
+      </li>
+      <li id="cite-sigstore-cosign">
+        Sigstore Project. <em>cosign — container signing, verification &amp; storage in an OCI registry.</em>
+        <a href="https://docs.sigstore.dev/cosign/overview/">https://docs.sigstore.dev/cosign/overview/</a>.
+      </li>
+      <li id="cite-sigstore-rekor">
+        Sigstore Project. <em>Rekor — transparency log for software signing.</em>
+        <a href="https://docs.sigstore.dev/logging/overview/">https://docs.sigstore.dev/logging/overview/</a>.
+      </li>
+      <li id="cite-flatpak-portals">
+        Flatpak Documentation. <em>Sandbox &amp; XDG Portals — capability-scoped access from sandboxed apps.</em>
+        <a href="https://docs.flatpak.org/en/latest/sandbox-permissions.html">https://docs.flatpak.org/en/latest/sandbox-permissions.html</a>.
+      </li>
+      <li id="cite-isec-sandbox-exec">
+        Blazakis, D. <em>The Apple Sandbox</em> (Black Hat DC 2011 / iSEC Partners audit).
+        <a href="https://www.semanticscholar.org/paper/The-Apple-Sandbox-Blazakis/3390a4d2d68b54e9a8c5b9c5be4c61c0d2e8b6dd">https://www.semanticscholar.org/paper/The-Apple-Sandbox-Blazakis/3390a4d2d68b54e9a8c5b9c5be4c61c0d2e8b6dd</a>.
+      </li>
+      <li id="cite-mozilla-sops">
+        Mozilla. <em>SOPS — Secrets OPerationS, threat model &amp; key-management design.</em>
+        <a href="https://github.com/getsops/sops#threat-model">https://github.com/getsops/sops#threat-model</a>.
+      </li>
+      <li id="cite-systemd-fss">
+        systemd-journald(8). <em>Forward Secure Sealing (FSS) — tamper-evident binary journal.</em>
+        <a href="https://www.freedesktop.org/software/systemd/man/journalctl.html#--setup-keys">https://www.freedesktop.org/software/systemd/man/journalctl.html#--setup-keys</a>.
+      </li>
+      <li id="cite-npm-tea">
+        npm Inc. <em>Package name disputes &amp; typo-squatting policy.</em>
+        <a href="https://docs.npmjs.com/policies/disputes">https://docs.npmjs.com/policies/disputes</a>.
+      </li>
+      <li id="cite-linux-peercred">
+        Linux Programmer's Manual. <em>unix(7) — SO_PEERCRED &amp; LOCAL_PEERCRED semantics.</em>
+        <a href="https://man7.org/linux/man-pages/man7/unix.7.html">https://man7.org/linux/man-pages/man7/unix.7.html</a>.
+      </li>
+      <li id="cite-cargo-audit">
+        RustSec Project. <em>cargo-audit — vulnerability scanning for Rust dependencies.</em>
+        <a href="https://github.com/rustsec/rustsec/tree/main/cargo-audit">https://github.com/rustsec/rustsec/tree/main/cargo-audit</a>.
+      </li>
+      <li id="cite-cargo-vet">
+        Mozilla. <em>cargo-vet — supply-chain security through cross-organisational audit.</em>
+        <a href="https://mozilla.github.io/cargo-vet/">https://mozilla.github.io/cargo-vet/</a>.
+      </li>
+      <li id="cite-mcp-spec-security">
+        Anthropic / MCP Working Group. <em>Model Context Protocol — Security considerations.</em>
+        <a href="https://modelcontextprotocol.io/docs/concepts/architecture#security-and-trust">https://modelcontextprotocol.io/docs/concepts/architecture#security-and-trust</a>.
+      </li>
+      <li id="cite-saltzer-schroeder">
+        Saltzer, J. H. &amp; Schroeder, M. D. <em>The Protection of Information in Computer Systems</em> (1975) —
+        foundational paper on capability-based security and the principle of least privilege.
+        <a href="https://www.cs.virginia.edu/~evans/cs551/saltzer/">https://www.cs.virginia.edu/~evans/cs551/saltzer/</a>.
+      </li>
+    </ol>
+  </section>
+
+  <hr style="margin-block:2rem;border:0;border-top:1px solid var(--border)">
+
+  <p style="font-size:0.85rem;color:var(--fg-faint)">
+    Sibling essays: <a href="./agent-crypto-pedant.html">crypto-pedant</a> · <a href="./agent-sandboxing-veteran.html">sandboxing-veteran</a> · <a href="./agent-secrets-architect.html">secrets-architect</a> · <a href="./agent-audit-compliance.html">audit-compliance</a> · synthesised at <a href="./overview.html">security overview</a>.
+  </p>
+</main>
+</body>
+</html>
